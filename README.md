@@ -1,0 +1,52 @@
+# 轻量级 HR 管理系统
+
+覆盖岗位全生命周期、人员信息、组织架构图（汇报线树）三大能力的轻量 HR 工具。
+数据权威为 `Position.csv`（见 [docs/PRD.md](docs/PRD.md)）。
+
+## 启动
+
+```bash
+# 1. 安装依赖（Python 3.14）
+.venv/bin/pip install -r requirements.txt
+
+# 2. 启动（自动建表，首次需导入数据）
+.venv/bin/uvicorn main:app --reload
+```
+
+打开 http://127.0.0.1:8000
+
+## 数据导入
+
+```bash
+# 命令行导入（幂等；--reset 先清空全部数据）
+.venv/bin/python -m scripts.import_csv testingdata/Position.csv --reset
+
+# 或网页「数据导入」页面上传 Position.csv
+```
+
+仓库内的 `data/db/hr.db` 已含导入好的 91 个岗位，直接启动即可查看。
+
+## 功能
+
+- **岗位管理**：16 字段岗位档案、岗位编号规则校验/自动生成、生命周期 7 态流转
+  （Planned→Open→Offered→Filled→Vacant→Frozen/Closed）、生命周期时间线、直线/虚线经理维护、环检测。
+- **员工管理**：档案、必须挂岗、入职/调岗/离职自动联动岗位状态（Filled↔Vacant）。
+- **组织架构图**：SVG 汇报线树，实线=直线汇报、虚线=虚线汇报，虚拟根「家族自然人」、
+  含已关闭岗位开关、公司/范围/状态筛选、折叠、缩放平移、悬浮详情。
+- **数据导入**：`Position.csv` 全字段校验导入，幂等 upsert，返回错误/警告明细。
+
+## 文档
+
+- [docs/PRD.md](docs/PRD.md) — 产品需求文档（术语、规则、状态机、数据权威决策）
+- [docs/DESIGN.md](docs/DESIGN.md) — 技术设计文档（数据库、API、前端、实施步骤）
+
+## 项目结构
+
+```
+main.py                  FastAPI 入口（建表、路由、静态托管）
+app/                    后端：models / lifecycle 状态机 / orgchart / import_csv / routers
+static/                 前端：原生 JS 单页（岗位/员工/组织图/导入）
+scripts/import_csv.py    CLI 导入脚本
+testingdata/            源数据：Position.csv / Position.md / Org-Chart.md
+data/db/hr.db            SQLite 数据库
+```

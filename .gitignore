@@ -1,0 +1,41 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# ===== 虚拟环境 =====
+.venv/
+venv/
+env/
+ENV/
+
+# ===== 运行时数据 =====
+# data/ 整个目录（含 SQLite 数据库，可由 testingdata/Position.csv 导入重建）
+data/
+
+# ===== 源数据 / 参考文档 =====
+testingdata/
+
+# ===== IDE / 编辑器 =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*.iml
+
+# ===== 操作系统 =====
+.DS_Store
+Thumbs.db
+
+# ===== 环境与密钥 =====
+.env
+.env.local
+*.pem
+
+# ===== 工具/会话状态 =====
+.claude/
+.mcp.json
+
+# ===== 本地开发文档（不纳入版本管理） =====
+CLAUDE.md

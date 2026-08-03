@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>轻量级 HR 管理系统</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+  <header>
+    <h1>🏢 HR 管理系统</h1>
+    <nav>
+      <button data-tab="positions" class="active">岗位管理</button>
+      <button data-tab="employees">员工管理</button>
+      <button data-tab="orgchart">组织架构</button>
+      <button data-tab="import">数据导入</button>
+    </nav>
+    <div id="stats" class="stats"></div>
+  </header>
+  <main>
+    <section id="tab-positions" class="tab active"></section>
+    <section id="tab-employees" class="tab"></section>
+    <section id="tab-orgchart" class="tab"></section>
+    <section id="tab-import" class="tab"></section>
+  </main>
+  <div id="modal-root"></div>
+
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/app.js"></script>
+  <script src="/static/js/positions.js"></script>
+  <script src="/static/js/employees.js"></script>
+  <script src="/static/js/import.js"></script>
+  <script src="/static/js/orgchart.js"></script>
+</body>
+</html>
