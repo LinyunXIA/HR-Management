@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>轻量级 HR 管理系统 · UI 原型图（v0.4）</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --panel:#fff; --border:#e3e6ea; --text:#1f2733; --muted:#6b7480;
+    --primary:#2f6fed; --primary-weak:#e8effc; --danger:#d64545; --ok:#2e9e5b; --warn:#d98a1f;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;
+       background:var(--bg);color:var(--text);font-size:13px;line-height:1.5}
+  .wrap{max-width:1200px;margin:0 auto;padding:24px 20px 80px}
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:var(--muted);margin:0 0 20px;font-size:12px}
+
+  /* 顶部导航（示意当前 app 结构，可点击切换页面） */
+  .app-nav{display:flex;gap:4px;background:var(--panel);border:1px solid var(--border);
+           border-radius:10px;padding:8px;margin-bottom:20px;flex-wrap:wrap}
+  .app-nav button{border:none;background:transparent;padding:8px 16px;border-radius:8px;cursor:pointer;
+                  font-size:13px;color:var(--muted);font-weight:500}
+  .app-nav button.active{background:var(--primary);color:#fff}
+  .app-nav .badge{background:var(--warn);color:#fff;border-radius:10px;font-size:10px;padding:1px 6px;margin-left:4px}
+
+  /* 线框基础 */
+  .page{display:none;animation:fade .2s}
+  .page.active{display:block}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+
+  .wf{background:var(--panel);border:1px solid var(--border);border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(16,24,40,.06)}
+  .wf-head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border);background:#fafbfc}
+  .wf-head .title{font-weight:600}
+  .wf-head .note{color:var(--muted);font-size:11px}
+  .wf-body{padding:14px}
+
+  .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px 14px;border-bottom:1px solid var(--border)}
+  .box{border:1px dashed #c3cad4;border-radius:6px;padding:5px 10px;color:var(--muted);font-size:12px;background:#fafbfc;white-space:nowrap}
+  .box.sel{border-color:var(--primary);color:var(--primary);background:var(--primary-weak)}
+  .box.btn{border-style:solid;border-color:var(--border);cursor:default}
+  .box.btn.primary{background:var(--primary);border-color:var(--primary);color:#fff}
+  .box.grow{flex:1;border:none;background:none}
+  .box input[type=text]{border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:12px;width:160px}
+
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--border);font-size:12px}
+  th{color:var(--muted);background:#fafbfc;font-weight:600}
+  td .num{font-family:ui-monospace,Menlo,monospace;font-weight:600}
+  .pill{display:inline-block;padding:1px 8px;border-radius:12px;font-size:11px}
+  .pill.open{background:#e8f1ff;color:#1f6fd0}.pill.filled{background:#e5f6ec;color:#1f8a4c}
+  .pill.closed{background:#ececec;color:#8a8a8a}.pill.planned{background:#eef0f3;color:#5a6472}
+  .pill.vacant{background:#fdf0f0;color:#c0392b}.pill.offered{background:#fff3e0;color:#b26a00}
+  .pill.frozen{background:#eceaf7;color:#5b4bb6}
+  .pill.mgmt{background:#f1effb;color:#5b4bb6}
+
+  .grid2{display:grid;grid-template-columns:220px 1fr;gap:16px}
+  .side{display:flex;flex-direction:column;gap:4px}
+  .side .item{padding:8px 12px;border-radius:8px;color:var(--muted);cursor:default;font-size:12px}
+  .side .item.active{background:var(--primary-weak);color:var(--primary);font-weight:600}
+
+  .cost-toggle{display:flex;gap:10px;align-items:center}
+  .cost-mode{display:flex;gap:14px;border:1px solid var(--border);border-radius:8px;padding:6px 12px;align-items:center}
+  .cost-mode input{margin-right:4px}
+  .cost-field{display:flex;flex-direction:column;gap:4px}
+  .cost-field label{font-size:11px;color:var(--muted)}
+  .cost-field input{border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:13px}
+  .cost-field input.disabled{background:#f2f2f2;color:#b0b0b0}
+  .cost-field .tag{font-size:10px;color:var(--ok)}
+  .cost-field .tag.off{color:#b0b0b0}
+
+  .orgbox{height:300px;border:1px solid var(--border);border-radius:8px;background:
+          linear-gradient(#fafbfc,#fafbfc) padding-box, var(--border) border-box;
+          display:flex;align-items:center;justify-content:center;color:var(--muted);position:relative;overflow:hidden}
+  .orgbox .tree{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--text);line-height:1.7;text-align:left}
+  .orgbox .tree .c{color:#c0392b}
+  .orgbox .tree .d{color:var(--muted)}
+
+  .note-box{background:#fff8e6;border:1px solid #f0e2b8;border-radius:8px;padding:8px 12px;color:#8a6d1f;font-size:12px;margin-top:12px}
+  .legend{display:flex;gap:16px;margin-top:8px;color:var(--muted);font-size:11px}
+  .legend .solid{color:#5a6472}.legend .dotted{color:var(--warn)}
+  .legend .bar{display:inline-block;width:20px;height:0;border-top:2px solid currentColor;margin-right:4px;vertical-align:middle}
+  .legend .bar.dotted{border-top-style:dashed}
+  .mt12{margin-top:12px}
+  .dim{opacity:.4}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>轻量级 HR 管理系统 · UI 原型</h1>
+  <p class="sub">PRD v0.4 / DESIGN v1.1 — 线框示意图（顶部导航含新增「主数据配置」，点击切换页面）</p>
+
+  <div class="app-nav">
+    <button data-page="master" class="active">主数据配置 <span class="badge">NEW</span></button>
+    <button data-page="positions">岗位管理</button>
+    <button data-page="employees">员工管理</button>
+    <button data-page="orgchart">组织架构</button>
+    <button data-page="import">数据导入</button>
+  </div>
+
+  <!-- ================= 主数据配置 ================= -->
+  <section class="page active" id="page-master">
+    <div class="wf">
+      <div class="wf-head"><span class="title">主数据配置管理</span><span class="note">公司 / 级别 / 工作地点 / 工作范围 / 国家 / 法律强制 / 员工用工税额</span></div>
+      <div class="wf-body">
+        <div class="grid2">
+          <div class="side">
+            <div class="item active">隶属公司 Company</div>
+            <div class="item">级别 Level</div>
+            <div class="item">工作地点 Work Location</div>
+            <div class="item">工作范围 Scope</div>
+            <div class="item">国家/地区 Country（Country 二级）</div>
+            <div class="item">法律强制/可选</div>
+            <div class="item">员工用工税额（按国家）</div>
+          </div>
+          <div>
+            <div class="toolbar">
+              <span class="box">🔍 搜索</span>
+              <span class="box grow"></span>
+              <span class="box btn primary">＋ 新增公司</span>
+            </div>
+            <table>
+              <thead><tr><th>名称</th><th>状态</th><th>岗位数</th><th></th></tr></thead>
+              <tbody>
+                <tr><td>Peeters Capital Holding SPRL</td><td><span class="pill planned">启用</span></td><td class="num">15</td><td><span class="box btn">编辑</span></td></tr>
+                <tr><td>Soparfi S.à r.l.</td><td><span class="pill planned">启用</span></td><td class="num">3</td><td><span class="box btn">编辑</span></td></tr>
+                <tr><td>Peeters Global Shared Services SPRL</td><td><span class="pill planned">启用</span></td><td class="num">8</td><td><span class="box btn">编辑</span></td></tr>
+                <tr class="dim"><td>Family Asset Management SPRL（历史）</td><td><span class="pill closed">停用</span></td><td class="num">0</td><td><span class="box btn">编辑</span></td></tr>
+              </tbody>
+            </table>
+            <div class="note-box">初始化：隶属公司 = 当前 91 岗位中的 18 家公司；级别 = Position.md 级别对照 19 项（B6~B10b / M7~M12b）；工作地点 = 12 个；国家/地区 = 9 个；法律强制 = 3 类。</div>
+          </div>
+        </div>
+
+        <div class="mt12">
+          <div class="wf-head"><span class="title">员工用工税额（按国家）</span><span class="note">自动计算公司份额的数据来源：公司份额 = 税前薪资 × Σ(科目税率)</span></div>
+          <div style="padding:10px 14px">
+            <div class="toolbar" style="border:none;padding:0 0 8px">
+              <span class="box sel">国家：比利时</span><span class="box sel">卢森堡</span><span class="box">英国</span><span class="box">美国</span><span class="box">中国上海</span>
+              <span class="box grow"></span><span class="box btn primary">＋ 新增科目</span>
+            </div>
+            <table>
+              <thead><tr><th>科目</th><th>税率 %</th><th>启用</th><th></th></tr></thead>
+              <tbody>
+                <tr><td>Social Security（社保）</td><td class="num">13.07</td><td>✔</td><td><span class="box btn">编辑</span> <span class="box btn">删除</span></td></tr>
+                <tr><td>Pension（养老金）</td><td class="num">8.86</td><td>✔</td><td><span class="box btn">编辑</span> <span class="box btn">删除</span></td></tr>
+                <tr><td>Industrial Accident（工伤）</td><td class="num">0.35</td><td>✔</td><td><span class="box btn">编辑</span> <span class="box btn">删除</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 岗位管理 ================= -->
+  <section class="page" id="page-positions">
+    <div class="wf">
+      <div class="wf-head"><span class="title">岗位管理</span><span class="note">直线/虚线经理下拉仅显示管理岗（级别 M 开头）</span></div>
+      <div class="toolbar">
+        <span class="box sel">公司：全部</span><span class="box">范围：全部</span><span class="box">状态：全部</span>
+        <span class="box">🔍 搜索</span><span class="box grow"></span>
+        <span class="box btn">重置</span><span class="box btn primary">＋ 新建岗位</span>
+      </div>
+      <table>
+        <thead><tr><th>岗位编号</th><th>职位</th><th>隶属公司</th><th>级别</th><th>范围</th><th>状态</th><th>占用员工</th><th>税前薪资</th><th>公司份额</th><th>用工成本</th><th></th></tr></thead>
+        <tbody>
+          <tr><td class="num">P063-4-5</td><td>Soparfi Managing Director</td><td>Soparfi S.à r.l.</td><td><span class="pill mgmt">M11a</span></td><td>Country·卢森堡</td><td><span class="pill open">招聘中</span></td><td>—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td><span class="box btn">详情</span></td></tr>
+          <tr><td class="num">P004-1</td><td>Chief Executive Officer</td><td>Peeters Capital Holding SPRL</td><td><span class="pill mgmt">M12b</span></td><td>Global</td><td><span class="pill open">招聘中</span></td><td>—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td><span class="box btn">详情</span></td></tr>
+          <tr><td class="num">P013-4-1</td><td>Statutory MLRO Manager</td><td>Peeters Global Shared Services SPRL</td><td><span class="pill mgmt">M8a</span></td><td>Country·比利时</td><td><span class="pill filled">在职</span></td><td>张三</td><td class="num">120,000</td><td class="num">26,736</td><td class="num">146,736</td><td><span class="box btn">详情</span></td></tr>
+          <tr><td class="num">P017-4-1</td><td>Multi-Entity Receivable &amp; Payable Acct</td><td>Peeters Global Shared Services SPRL</td><td><span class="pill planned">B7a</span></td><td>Country·比利时</td><td><span class="pill open">招聘中</span></td><td>—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td><span class="box btn">详情</span></td></tr>
+        </tbody>
+      </table>
+
+      <div class="wf-head mt12"><span class="title">岗位详情（成本字段区）</span><span class="note">两种模式互斥，未启用置灰</span></div>
+      <div class="wf-body">
+        <div class="cost-toggle">
+          <div class="cost-mode"><input type="radio" name="costmode" id="auto"><label for="auto">自动计算（按国家用工税额）</label></div>
+          <div class="cost-mode"><input type="radio" name="costmode" id="manual" checked><label for="manual">手动输入</label></div>
+          <span class="box grow"></span>
+          <span class="box btn primary" id="calc-btn">重算</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:12px">
+          <div class="cost-field"><label>税前薪资（人工）</label><input type="text" value="120,000"><span class="tag">手动模式 · 可编辑</span></div>
+          <div class="cost-field"><label>公司份额（人工）</label><input type="text" value="26,736"><span class="tag">手动模式 · 可编辑</span></div>
+          <div class="cost-field"><label>用工成本（人工）</label><input type="text" value="146,736"><span class="tag">手动模式 · 可编辑</span></div>
+        </div>
+        <div class="mt12" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+          <div class="cost-field"><label>税前薪资（人工）</label><input type="text" value="120,000"><span class="tag off">自动模式 · 只读</span></div>
+          <div class="cost-field"><label>公司份额（人工）＝ 税前薪资 × Σ税率</label><input type="text" value="26,736" class="disabled"><span class="tag">自动 · 26,736</span></div>
+          <div class="cost-field"><label>用工成本（人工）＝ 税前 + 份额</label><input type="text" value="146,736" class="disabled"><span class="tag">自动 · 146,736</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 员工管理 ================= -->
+  <section class="page" id="page-employees">
+    <div class="wf">
+      <div class="wf-head"><span class="title">员工管理</span><span class="note">必须挂岗；入职/调岗/离职自动联动岗位状态</span></div>
+      <div class="toolbar">
+        <span class="box sel">公司：全部</span><span class="box">类型：全部</span><span class="box">在职状态：全部</span>
+        <span class="box">🔍 搜索</span><span class="box grow"></span><span class="box btn primary">＋ 新增员工</span>
+      </div>
+      <table>
+        <thead><tr><th>工号</th><th>姓名</th><th>类型</th><th>在职状态</th><th>当前岗位</th><th>隶属公司</th><th>直线经理</th><th></th></tr></thead>
+        <tbody>
+          <tr><td>E9001</td><td>张三</td><td>正式</td><td><span class="pill filled">在职</span></td><td class="num">P013-4-1 SSC Statutory MLRO</td><td>Peeters Global Shared Services SPRL</td><td class="num">P015-4-1</td><td><span class="box btn">详情</span></td></tr>
+          <tr><td>E9002</td><td>李四</td><td>正式</td><td><span class="pill offered">试用期</span></td><td class="num">P063-4-5 Soparfi Managing Director</td><td>Soparfi S.à r.l.</td><td class="num">—</td><td><span class="box btn">详情</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ================= 组织架构 ================= -->
+  <section class="page" id="page-orgchart">
+    <div class="wf">
+      <div class="wf-head"><span class="title">组织架构图（汇报线树）</span><span class="note">公司聚焦视图 · 导出 MD</span></div>
+      <div class="toolbar">
+        <span class="box"><input type="checkbox" checked> 虚拟根「家族自然人」</span>
+        <span class="box"><input type="checkbox"> 含已关闭岗位</span>
+        <span class="box sel">公司：全部 ▾</span>
+        <span class="box">范围：全部</span>
+        <span class="box">状态：全部</span>
+        <span class="box btn" id="focus-btn">🎯 聚焦选中公司</span>
+        <span class="box grow"></span>
+        <span class="box btn">适应窗口</span>
+        <span class="box btn primary" id="export-btn">⬇ 导出 MD ▾</span>
+      </div>
+      <div class="wf-body">
+        <div class="orgbox">
+          <div class="tree">
+            └─ <b>家族自然人股东</b><br>
+            &nbsp;&nbsp;&nbsp;&nbsp;├─ Soparfi S.à r.l.<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;│&nbsp;&nbsp;├─ P063-4-5 Soparfi Managing Director（M11a）<span class="d">【直报家族自然人】</span><br>
+            &nbsp;&nbsp;&nbsp;&nbsp;│&nbsp;&nbsp;│&nbsp;&nbsp;├─ P004-1 Group Chief Executive（M12b）<span class="d">← 实线=直线</span><br>
+            &nbsp;&nbsp;&nbsp;&nbsp;│&nbsp;&nbsp;│&nbsp;&nbsp;│&nbsp;&nbsp;├─ P005-2 Group Global AML Compliance Officer（M10）<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;│&nbsp;&nbsp;│&nbsp;&nbsp;│&nbsp;&nbsp;│&nbsp;&nbsp;└─ P006-2 Global MLRO Governance Supervisor（M7）<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;│&nbsp;&nbsp;│&nbsp;&nbsp;│&nbsp;&nbsp;├─ P007-2 Global Investment Governance Manager（M10）<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;│&nbsp;&nbsp;│&nbsp;&nbsp;│&nbsp;&nbsp;└─ …（P008/P009/P003/P015/P023/P051/P072…）<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;│&nbsp;&nbsp;└─ …<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;└─ 卢森堡SPF<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└─ P066-1 SPF Asset Compliance Manager（M8a）<br>
+            <span class="c">┄┄ P028-4-6 UK Statutory MLRO → P005-2（虚线汇报）</span>
+          </div>
+        </div>
+        <div class="legend">
+          <span><span class="bar solid"></span>直线汇报（实线）</span>
+          <span><span class="bar dotted"></span>虚线汇报（虚线）</span>
+          <span>滚轮缩放 · 拖拽平移 · 点击折叠</span>
+        </div>
+        <div class="note-box mt12"><b>导出 MD（3 种格式）：</b>
+          ① <b>Org-chart</b>＝公司+岗位（无汇报线，按公司分组）；② <b>直线汇报线</b>＝按直线经理层级树；
+          ③ <b>虚线汇报线</b>＝岗位 → 虚线经理。生成 .md 下载。
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 数据导入 ================= -->
+  <section class="page" id="page-import">
+    <div class="wf">
+      <div class="wf-head"><span class="title">数据导入</span><span class="note">Position.csv · 幂等 upsert</span></div>
+      <div class="wf-body">
+        <div style="border:2px dashed var(--border);border-radius:10px;padding:36px;text-align:center;color:var(--muted)">
+          📄 点击选择或拖入 Position.csv
+          <div style="font-size:11px;margin-top:6px">或 CLI：python -m scripts.import_csv testingdata/Position.csv --reset</div>
+        </div>
+        <div class="mt12" style="display:flex;gap:12px">
+          <div style="flex:1;background:#fafbfc;border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center"><div style="font-size:22px;font-weight:700;color:var(--ok)">91</div><div style="font-size:11px;color:var(--muted)">共解析</div></div>
+          <div style="flex:1;background:#fafbfc;border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center"><div style="font-size:22px;font-weight:700;color:var(--ok)">91</div><div style="font-size:11px;color:var(--muted)">新增</div></div>
+          <div style="flex:1;background:#fafbfc;border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center"><div style="font-size:22px;font-weight:700">0</div><div style="font-size:11px;color:var(--muted)">更新</div></div>
+          <div style="flex:1;background:#fafbfc;border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center"><div style="font-size:22px;font-weight:700;color:var(--ok)">0</div><div style="font-size:11px;color:var(--muted)">错误</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <p class="sub mt12">此文件为 UI 线框示意图（docs/UI_MOCKUP.html），用于评审界面结构与交互；实际以运行的系统为准。</p>
+</div>
+
+<script>
+  document.querySelectorAll('.app-nav button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.app-nav button').forEach(b => b.classList.toggle('active', b === btn));
+      document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === 'page-' + btn.dataset.page));
+    });
+  });
+  // 成本模式互斥示意：切换 radio 高亮对应的重算按钮
+  document.querySelectorAll('input[name=costmode]').forEach(r => {
+    r.addEventListener('change', () => {
+      const btn = document.getElementById('calc-btn');
+      btn.style.opacity = r.value && r.id === 'auto' ? '1' : '.4';
+    });
+  });
+</script>
+</body>
+</html>
