@@ -29,6 +29,9 @@ const MasterData = {
       fields: [
         { k: 'name', label: '名称', type: 'text', req: true },
         { k: 'code', label: '编号（如 4-5）', type: 'text', req: true }] },
+    { key: 'legalcategories', label: '法律强制/可选', endpoint: '/legal-categories',
+      columns: [{ k: 'name', label: '名称' }, { k: 'sort_order', label: '排序' }],
+      fields: [{ k: 'name', label: '名称', type: 'text', req: true }, { k: 'sort_order', label: '排序', type: 'number' }] },
   ],
 
   async render() {
@@ -36,7 +39,7 @@ const MasterData = {
     el.innerHTML = `
       <div class="panel">
         <div class="toolbar"><b>主数据配置管理</b>
-          <span class="hint">公司 / 级别 / 工作地点 / 工作范围 / 国家 / 员工用工税额</span>
+          <span class="hint">公司 / 级别 / 工作地点 / 工作范围 / 国家 / 法律强制 / 员工用工税额</span>
         </div>
         <div style="display:flex;gap:16px;padding:14px">
           <div class="side" style="width:210px">

@@ -133,6 +133,9 @@ const Positions = {
           <div class="field"><label>虚线经理（仅管理岗，可多选）</label>
             <select id="pc-dotted" multiple size="3">${this.mgrOptions()}</select>
           </div>
+          <div class="field"><label>法律强制/可选（可留空）</label>
+            <select id="pc-legal"><option value="">—</option>${App.legalCategories.map((l) => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join('')}</select>
+          </div>
           <div class="field full"><label>工作职责描述（可留空）</label><textarea id="pc-desc" rows="2"></textarea></div>
           <div class="field full"><label>Org-Chart 显示名</label><input type="text" id="pc-display"></div>
           <div class="field full"><label>备注（可留空）</label><textarea id="pc-remark" rows="2"></textarea></div>
@@ -167,6 +170,7 @@ const Positions = {
         closing_date: val('#pc-closing') || null,
         work_location: val('#pc-wloc') || null,
         job_responsibility: val('#pc-desc') || null,
+        legal_category: val('#pc-legal') || null,
         solid_line_manager_id: val('#pc-solid') ? +val('#pc-solid') : null,
         dotted_manager_ids: [...modal.querySelector('#pc-dotted').selectedOptions].map((o) => +o.value),
         org_chart_display: val('#pc-display') || null,
@@ -218,6 +222,7 @@ const Positions = {
           ${ditem('工作地点', p.work_location)} ${ditem('占用员工', p.incumbent_name || '—')}
           ${ditem('直线经理', p.solid_line_number ? `${p.solid_line_number} ${p.solid_line_manager_name || ''}` : '—')}
           ${ditem('虚线经理', (p.dotted_manager_numbers || []).join('、') || '—')}
+          ${ditem('法律强制/可选', p.legal_category || '—')}
           ${ditem('Org-Chart显示', p.org_chart_display)}
           ${ditem('之前的职位', p.prev_position_number || '—')}
           ${ditem('之前的公司', p.prev_company_name || '—')}
@@ -294,6 +299,9 @@ const Positions = {
           <div class="field"><label>工作地点</label>
             <select id="pe-wloc"><option value="">—</option>${App.workLocations.map((w) => `<option value="${esc(w.name)}" ${w.name === p.work_location ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>
           </div>
+          <div class="field"><label>法律强制/可选（可留空）</label>
+            <select id="pe-legal"><option value="">—</option>${App.legalCategories.map((l) => `<option value="${esc(l.name)}" ${l.name === p.legal_category ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}</select>
+          </div>
           <div class="field"><label>直线经理（仅管理岗）</label>
             <select id="pe-solid"><option value="">无</option>${this._managers.map((m) => `<option value="${m.id}" ${m.id === p.solid_line_manager_id ? 'selected' : ''}>${esc(m.number)} ${esc(m.position_name || '')}（${esc(m.level || '')}）</option>`).join('')}</select>
           </div>
@@ -351,6 +359,7 @@ const Positions = {
         closing_date: val('#pe-closing') || null,
         work_location: val('#pe-wloc') || null,
         job_responsibility: val('#pe-desc') || null,
+        legal_category: val('#pe-legal') || null,
         solid_line_manager_id: val('#pe-solid') ? +val('#pe-solid') : null,
         dotted_manager_ids: [...modal.querySelector('#pe-dotted').selectedOptions].map((o) => +o.value),
         org_chart_display: val('#pe-display') || null,

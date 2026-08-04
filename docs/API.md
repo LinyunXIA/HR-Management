@@ -317,7 +317,7 @@
 
 | 方法 | 路径 | 模块 |
 | --- | --- | --- |
-| GET/POST, PATCH/DELETE | /companies、/countries、/levels、/work-locations、/scopes | master_data |
+| GET/POST, PATCH/DELETE | /companies、/countries、/levels、/work-locations、/scopes、/legal-categories | master_data |
 | GET/POST, PATCH/DELETE | /employment-tax-items、/employment-tax-items/{id} | master_data |
 | GET | /public/companies | master_data |
 | GET/POST | /position-functions | positions |
@@ -330,4 +330,4 @@
 | POST | /import/csv | import_routes |
 | GET | /health | main |
 
-> 注：`/legal-categories` 端点后端仍存在，但「法律强制/可选」字段已从当前数据源移除、系统不再维护，故不纳入上文（建议后续从代码中移除）。
+> 注：以上为系统当前活跃端点全集。
