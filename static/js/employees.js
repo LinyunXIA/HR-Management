@@ -153,7 +153,7 @@ const Employees = {
       modal.querySelector('#ed-offboard').onclick = async () => {
         if (!confirm(`确认员工 ${e.name} 离职？岗位将转空缺。`)) return;
         try {
-          await post(`/employees/${id}/offboard`, {});
+          await patch(`/employees/${id}`, { employment_status: '离职' });
           closeModal(); toast('已办理离职，岗位转空缺', 'ok'); this.render(); App.loadStats();
         } catch (err) { toast(err.message); }
       };
@@ -173,7 +173,7 @@ const Employees = {
     modal.querySelector('#tr-save').onclick = async () => {
       if (!val('#tr-pos')) { toast('请选择目标岗位'); return; }
       try {
-        const emp = await post(`/employees/${e.id}/transfer`, { to_position_id: +val('#tr-pos') });
+        const emp = await post(`/employees/${e.id}/transfers`, { to_position_id: +val('#tr-pos') });
         closeModal(); toast(`已调岗至 ${emp.position_number}`, 'ok'); this.render(); App.loadStats();
       } catch (err) { toast(err.message); }
     };

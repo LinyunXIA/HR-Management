@@ -129,22 +129,22 @@ class PositionNumber(Base):        # 岗位编号（管理主体）
     number        unique          # P{seq}-{scope}，如 P063-4-5
     position_id   FK positions
     company_id    FK companies
-    level_id      FK levels
-    scope_id      FK scopes
+    level         String(代码)     # 级别代码（如 M8a），对 levels 字典校验；M 开头=管理岗
+    scope         Enum(family|global|regional|country)   # scopes 字典驱动下拉与编号
     country_id    FK countries, nullable    # scope=country 时必填
     opening_date  Date, nullable
     closing_date  Date, nullable
-    work_location_id  FK work_locations, nullable
+    work_location String(名称)     # 来自 work_locations 字典
     job_responsibility
-    legal_category_id  FK legal_categories, nullable
+    legal_category String(名称)    # 来自 legal_categories 字典
     solid_line_manager_id  FK self, nullable   # 直线经理（仅管理岗可选）
     org_chart_display, prev_position_id, prev_company_id, remark
     status        Enum(planned|open|offered|filled|vacant|frozen|closed)
     # ---- v1.1 成本字段 ----
     cost_mode     Enum(auto|manual), default manual   # 两种模式互斥
-    salary_before_tax  Numeric(12,2), nullable   # 税前薪资（人工）
-    company_share      Numeric(12,2), nullable   # 公司份额（人工）
-    labor_cost         Numeric(12,2), nullable   # 用工成本（人工）
+    salary_before_tax  Numeric(14,2), nullable   # 税前薪资（人工）
+    company_share      Numeric(14,2), nullable   # 公司份额（人工）
+    labor_cost         Numeric(14,2), nullable   # 用工成本（人工）
     created_at, updated_at
 
 class PositionNumberDottedLine(Base):  # 虚线经理（多对多，仅管理岗可选）
@@ -166,7 +166,7 @@ class Employee(Base):              # 人员档案
     remark, created_at, updated_at
 ```
 
-> 迁移说明：`level / scope / work_location / legal_category` 由枚举/自由文本改为字典表外键；CSV 导入按名称/代码映射到字典 id。成本字段为新增列，导入时置空（人工模式默认）。
+> 实现说明：`level / work_location / legal_category` 在 `position_numbers` 上保留**字符串**（与 CSV 一致），由字典表（levels/work_locations/legal_categories）提供下拉选项并在创建/更新时校验；`scope` 保留枚举，由 `scopes` 字典驱动下拉展示与编号。成本字段为新增列，导入时置空（人工模式默认）。
 >
 > 创建校验：`PositionNumberCreate` **不接收 `number`**（新建只能自动生成，编辑不改编号）；`EmployeeCreate` 中 `birth_date / phone / email / remark` 可空。
 
@@ -201,36 +201,39 @@ ALLOWED = {
 
 ## 6. REST API 设计（前缀 /api）
 
+REST 规范：名词复数资源、HTTP 方法映射 CRUD（GET 查 / POST 建 / PATCH 部分更新 / DELETE 删）、创建返回 201 + `Location` 头、动作建模为子资源或查询参数。
+
 ### 6.0 主数据（F0，`routers/master_data.py`）
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET/POST | /companies, /countries, /levels, /work-locations, /scopes, /legal-categories | 主数据列表/新建 |
-| PUT/DELETE | /companies/{id}, /countries/{id}, /levels/{id}, /work-locations/{id}, /scopes/{id}, /legal-categories/{id} | 主数据编辑/删除（被引用禁止删） |
-| GET/POST | /employment-tax-items | 用工税额列表（?country_id= 过滤）/ 新增 |
-| PUT/DELETE | /employment-tax-items/{id} | 用工税额编辑/删除 |
-| GET | /positions/manager-options | 直线/虚线经理下拉数据：仅 `is_management=True` 的岗位 |
+| GET/POST | /companies, /countries, /levels, /work-locations, /scopes | 主数据列表 / 新建（201） |
+| PATCH/DELETE | /companies/{id}, /countries/{id}, /levels/{id}, /work-locations/{id}, /scopes/{id} | 主数据部分更新 / 删除（被引用禁止删） |
+| GET/POST | /employment-tax-items | 用工税额列表（?country_id= 过滤）/ 新增（201） |
+| PATCH/DELETE | /employment-tax-items/{id} | 用工税额部分更新 / 删除 |
+| GET | /public/companies | 对外接口：所有隶属公司（id + name） |
+
+> 经理下拉数据：`GET /positions?role=manager`（见 6.1），不再有独立 manager-options 端点。
 
 ### 6.1 业务接口
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | /positions | 岗位列表：filter company_id/scope_id/status/search，分页 |
-| POST | /positions | 创建（**编号自动生成**，不可手工；描述/成本字段/备注可空） |
+| GET | /positions | 岗位列表：filter company_id/scope/status/search/**role=manager**/，分页 |
+| POST | /positions | 创建（201，**编号自动生成**，不可手工；描述/成本字段/备注可空） |
 | GET | /positions/{id} | 详情：字段 + 占用员工 + 直线/虚线 + 事件时间线 + 成本字段 |
-| PUT | /positions/{id} | 更新（含直线/虚线、成本字段；直线变更做环检测） |
-| POST | /positions/{id}/transition | 状态流转 {to_status, note} |
-| POST | /positions/{id}/calc-cost | 按国家用工税额重算 公司份额/用工成本（自动模式） |
+| PATCH | /positions/{id} | 部分更新（含直线/虚线、成本字段；直线变更做环检测） |
+| POST | /positions/{id}/events | 创建一条生命周期流转事件（201，同步变更岗位状态） |
+| GET | /positions/{id}/cost | 按国家用工税额计算公司份额/用工成本（只读；保存用 PATCH） |
 | DELETE | /positions/{id} | 仅无占用员工且无事件时允许 |
 | GET | /employees | 员工列表：filter company_id/employee_type/employment_status/search，分页 |
-| POST | /employees | 创建（必须挂岗 → 岗位自动 Filled） |
+| POST | /employees | 创建（201，必须挂岗 → 岗位自动 Filled） |
 | GET | /employees/{id} | 详情（含岗位、直线/虚线经理解析） |
-| PUT | /employees/{id} | 更新 |
-| POST | /employees/{id}/transfer | 调岗 {to_position_id}（旧岗→Vacant，新岗→Filled） |
-| POST | /employees/{id}/offboard | 离职（岗位→Vacant，解绑） |
-| DELETE | /employees/{id} | 删除员工 |
+| PATCH | /employees/{id} | 部分更新；`employment_status=离职` 触发解绑→岗位 Vacant |
+| POST | /employees/{id}/transfers | 创建一条调岗记录（201，旧岗→Vacant，新岗→Filled） |
+| DELETE | /employees/{id} | 删除员工（仅已离职且已解绑） |
 | GET | /orgchart | 组织树数据：{nodes, solid_edges, dotted_edges, roots} |
-| GET | /orgchart/export/{format} | 导出 MD（format=org\|solid\|dotted），返回 text/markdown |
+| GET | /orgchart?format=md&report=org\|solid\|dotted | 导出 Markdown（同资源不同表示） |
 | POST | /import/csv | 上传 Position.csv → 校验/幂等入库，返回报告 |
 
 ### 6.2 /orgchart 返回结构（供 SVG 渲染）
@@ -255,7 +258,7 @@ ALLOWED = {
 
 ### 6.4 导出 MD（app/export_md.py，3 格式）
 
-`GET /orgchart/export/{format}` 返回 `text/markdown` 文本（前端也可本地生成下载）。
+`GET /orgchart?format=md&report={org|solid|dotted}` 返回 `text/markdown`（前端一键下载）。
 
 - **`org`（公司 + 岗位，无汇报线）**：按公司分组，岗位列在所属公司下（含显示名、编号、级别、状态）：
   ```markdown

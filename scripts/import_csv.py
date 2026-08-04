@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.db import Base, SessionLocal, engine
 from app.import_csv import import_csv
+from app.seed import seed_master_data
 
 
 def main():
@@ -29,6 +30,8 @@ def main():
         print("[reset] 清空数据表…", file=sys.stderr)
         Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+    with SessionLocal() as db:
+        seed_master_data(db)
 
     db = SessionLocal()
     try:

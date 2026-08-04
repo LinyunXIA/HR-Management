@@ -100,9 +100,11 @@
 ### 3.7 数据源与权威（决策记录）
 | 文件 | 角色 | 权威性 |
 | --- | --- | --- |
-| `Position.csv` | 岗位数据源（16 列 91 行） | **数据权威**：岗位字段、编号、汇报关系、开启/关闭日均以 CSV 为准 |
+| `Position.csv` | 岗位数据源（当前 **15 列 63 行**，用户编辑版） | **数据权威**：岗位字段、编号、汇报关系、开启/关闭日均以 CSV 为准 |
 | `Position.md` | 规则说明 + 岗位清单（与 CSV 同步） | 规则权威 |
 | `Org-Chart.md` | 组织树展示口径（含公司实体层级、外包岗、合规规则） | 展示参考：V1 系统**不直接读取**，仅用于人工比对 |
+
+> **2026-08-04 决策**：数据源已由用户改写为 **63 行 15 列**（删除 28 个岗位与「法律强制/可选」列）。系统**不再维护「法律强制/可选」字段**（已从岗位表单/列表/主数据移除，数据库列保留但不再使用）。所有「91 岗位」「16 列」的历史表述以当前数据源为准。
 
 ### 3.8 已知数据不一致（已决策：以 CSV 为准，记录备查）
 系统导入与组织图构建以 `Position.csv` 为准；以下与 `Org-Chart.md` 的不一致将**以 CSV 覆盖**，不在 V1 系统内提示冲突：
@@ -298,7 +300,7 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 | `legal_categories` | id, name(唯一), sort_order | 法律强制/可选字典 |
 | `employment_tax_items` | id, country_id, item_name(科目), tax_rate(税率), is_active | 员工用工税额配置（按国家） |
 | `positions` | id, name | 职位（职能） |
-| `position_numbers` | id, position_id, number(唯一), company_id, level_id(字典), scope_id(字典), country_id, opening_date, closing_date, work_location_id(字典), job_responsibility, legal_category_id(字典), solid_line_manager_id(自引用), org_chart_display, prev_position_id, prev_company_id, remark, status, **cost_mode(auto/manual), salary_before_tax, company_share, labor_cost** | 岗位编号（管理主体） |
+| `position_numbers` | id, position_id, number(唯一), company_id, level(字典代码), scope(枚举+字典), country_id, opening_date, closing_date, work_location(字典), job_responsibility, legal_category(字典), solid_line_manager_id(自引用), org_chart_display, prev_position_id, prev_company_id, remark, status, **cost_mode(auto/manual), salary_before_tax, company_share, labor_cost** | 岗位编号（管理主体） |
 | `position_number_dotted_lines` | position_number_id, dotted_manager_id | 虚线经理多对多 |
 | `position_events` | id, position_number_id, from_status, to_status, changed_at, note, employee_id | 生命周期事件 |
 | `employees` | id, employee_no(唯一), name, gender, birth_date, phone, email, hire_date, employee_type, employment_status, position_number_id(**NOT NULL**), remark | 人员档案 |
@@ -370,6 +372,8 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 - **岗位成本字段**：税前薪资/公司份额/用工成本；自动（按国家税务科目）与手动两种模式互斥、未启用置灰（§4 F1.6）。
 - **组织图导出 MD**：3 种格式——公司+岗位（无汇报线）/ 直线汇报线 / 虚线汇报线（§4 F3.5）。
 - **组织图可读性**：缩放/平移改进、公司聚焦视图（选中公司只看其子树）（§4 F3.3）。
+- **法律强制/可选移除**：当前数据源已删除该列，系统不再维护该字段（已从表单/列表/主数据移除）（§3.7）。
+- **数据源为 63 行**：Position.csv 现为 15 列 63 行（用户编辑版），以此为准（§3.7）。
 
 ### 待确认 / 开放问题
 - [ ] **Org-Chart.md 同步修订**（非系统功能，需人工处理）：P086~P088 及上海汇报关系与 CSV 不一致，建议以 CSV 为准后回写 Org-Chart.md。

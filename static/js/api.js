@@ -14,6 +14,7 @@ async function api(path, options = {}) {
 const get = (p) => api(p);
 const post = (p, b) => api(p, { method: 'POST', body: b });
 const put = (p, b) => api(p, { method: 'PUT', body: b });
+const patch = (p, b) => api(p, { method: 'PATCH', body: b });
 const del = (p) => api(p, { method: 'DELETE' });
 
 function esc(s) {

@@ -1,5 +1,5 @@
 """岗位/职位/公司/国家 路由。"""
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app import lifecycle
@@ -16,8 +16,10 @@ from app.helpers import (
 )
 from app.models import (
     Company,
+    CostMode,
     Country,
     Employee,
+    EmploymentTaxItem,
     Position,
     PositionEvent,
     PositionNumber,
@@ -37,6 +39,14 @@ from app.schemas import (
 router = APIRouter(prefix="/api", tags=["positions"])
 
 
+def _assert_management(db: Session, mgr: PositionNumber, role: str):
+    """直线/虚线经理必须是管理岗（级别 M 开头）。"""
+    if not mgr.level or not mgr.level.upper().startswith("M"):
+        raise HTTPException(
+            400, f"{role}必须是管理岗（级别以 M 开头），岗位 {mgr.number}（级别 {mgr.level or '未设置'}）不可作为经理"
+        )
+
+
 # ---------------------------------------------------------------- 基础字典
 @router.get("/companies", response_model=list[CompanyOut])
 def list_companies(db: Session = Depends(get_db)):
@@ -53,8 +63,8 @@ def list_functions(db: Session = Depends(get_db)):
     return db.query(Position).order_by(Position.name).all()
 
 
-@router.post("/position-functions", response_model=PositionFunctionOut)
-def create_function(payload: PositionFunctionCreate, db: Session = Depends(get_db)):
+@router.post("/position-functions", response_model=PositionFunctionOut, status_code=201)
+def create_function(payload: PositionFunctionCreate, response: Response, db: Session = Depends(get_db)):
     name = payload.name.strip()
     if not name:
         raise HTTPException(400, "职位名称不能为空")
@@ -63,6 +73,7 @@ def create_function(payload: PositionFunctionCreate, db: Session = Depends(get_d
     pos = Position(name=name)
     db.add(pos)
     db.commit()
+    response.headers["Location"] = f"/api/position-functions/{pos.id}"
     return pos
 
 
@@ -73,6 +84,7 @@ def list_positions(
     scope: Scope | None = None,
     status: PositionStatus | None = None,
     search: str | None = None,
+    role: str | None = None,
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
@@ -84,6 +96,8 @@ def list_positions(
         q = q.filter(PositionNumber.scope == scope)
     if status:
         q = q.filter(PositionNumber.status == status)
+    if role == "manager":
+        q = q.filter(PositionNumber.level.like("M%"))
     if search:
         like = f"%{search.strip()}%"
         q = q.join(Position).filter(
@@ -102,8 +116,8 @@ def list_positions(
             "items": [serialize_position(db, pn) for pn in items]}
 
 
-@router.post("/positions")
-def create_position(payload: PositionNumberCreate, db: Session = Depends(get_db)):
+@router.post("/positions", status_code=201)
+def create_position(payload: PositionNumberCreate, response: Response, db: Session = Depends(get_db)):
     position = resolve_position(db, payload.position_id, payload.position_name)
     company = get_or_404(db, Company, payload.company_id, "隶属公司不存在")
     country = None
@@ -112,17 +126,17 @@ def create_position(payload: PositionNumberCreate, db: Session = Depends(get_db)
             raise HTTPException(400, "Country 范围必须选择国家/地区")
         country = get_or_404(db, Country, payload.country_id, "国家/地区不存在")
 
-    number = payload.number.strip() if payload.number else generate_number(
-        db, payload.scope, country.code if country else None
-    )
+    number = generate_number(db, payload.scope, country.code if country else None)
     validate_number_format(number, payload.scope, country.code if country else None)
     if db.query(PositionNumber).filter(PositionNumber.number == number).first():
         raise HTTPException(400, f"岗位编号已存在: {number}")
 
     if payload.solid_line_manager_id:
-        get_or_404(db, PositionNumber, payload.solid_line_manager_id, "直线经理岗位不存在")
+        mgr = get_or_404(db, PositionNumber, payload.solid_line_manager_id, "直线经理岗位不存在")
+        _assert_management(db, mgr, "直线经理")
     for mid in dict.fromkeys(payload.dotted_manager_ids):
-        get_or_404(db, PositionNumber, mid, f"虚线经理岗位不存在 (id={mid})")
+        mgr = get_or_404(db, PositionNumber, mid, f"虚线经理岗位不存在 (id={mid})")
+        _assert_management(db, mgr, "虚线经理")
 
     pn = PositionNumber(
         number=number,
@@ -142,6 +156,10 @@ def create_position(payload: PositionNumberCreate, db: Session = Depends(get_db)
         prev_company_id=payload.prev_company_id,
         remark=payload.remark,
         status=PositionStatus.PLANNED,
+        cost_mode=payload.cost_mode or CostMode.MANUAL,
+        salary_before_tax=payload.salary_before_tax,
+        company_share=payload.company_share,
+        labor_cost=payload.labor_cost,
     )
     db.add(pn)
     db.flush()
@@ -151,6 +169,7 @@ def create_position(payload: PositionNumberCreate, db: Session = Depends(get_db)
     db.add(PositionEvent(position_number_id=pn.id, from_status=None,
                          to_status=PositionStatus.PLANNED.value, note="岗位建档"))
     db.commit()
+    response.headers["Location"] = f"/api/positions/{pn.id}"
     return serialize_position(db, pn)
 
 
@@ -174,7 +193,7 @@ def get_position(pid: int, db: Session = Depends(get_db)):
     return data
 
 
-@router.put("/positions/{pid}")
+@router.patch("/positions/{pid}")
 def update_position(pid: int, payload: PositionNumberUpdate, db: Session = Depends(get_db)):
     pn = get_or_404(db, PositionNumber, pid, "岗位不存在")
     if payload.position_id is not None:
@@ -202,28 +221,68 @@ def update_position(pid: int, payload: PositionNumberUpdate, db: Session = Depen
         if val is not None:
             setattr(pn, field, val)
 
+    for field in ("cost_mode", "salary_before_tax", "company_share", "labor_cost"):
+        val = getattr(payload, field)
+        if val is not None:
+            setattr(pn, field, val)
+
     if payload.solid_line_manager_id is not None:
         if payload.solid_line_manager_id:
-            get_or_404(db, PositionNumber, payload.solid_line_manager_id, "直线经理岗位不存在")
+            mgr = get_or_404(db, PositionNumber, payload.solid_line_manager_id, "直线经理岗位不存在")
+            _assert_management(db, mgr, "直线经理")
             check_cycle(db, pn.id, payload.solid_line_manager_id)
         pn.solid_line_manager_id = payload.solid_line_manager_id
 
     if payload.dotted_manager_ids is not None:
+        for mid in payload.dotted_manager_ids:
+            if mid:
+                _assert_management(db, get_or_404(db, PositionNumber, mid, f"虚线经理岗位不存在 (id={mid})"), "虚线经理")
         set_dotted_lines(db, pn.id, payload.dotted_manager_ids)
 
     db.commit()
     return serialize_position(db, pn)
 
 
-@router.post("/positions/{pid}/transition")
-def transition_position(pid: int, payload: TransitionRequest, db: Session = Depends(get_db)):
+@router.post("/positions/{pid}/events", status_code=201)
+def transition_position(pid: int, payload: TransitionRequest, response: Response, db: Session = Depends(get_db)):
+    """创建一条生命周期流转事件（会同步变更岗位状态）。"""
     pn = get_or_404(db, PositionNumber, pid, "岗位不存在")
     try:
-        lifecycle.transition(db, pn, payload.to_status, note=payload.note)
+        event = lifecycle.transition(db, pn, payload.to_status, note=payload.note)
         db.commit()
     except lifecycle.LifecycleError as e:
         raise HTTPException(422, str(e))
-    return serialize_position(db, pn)
+    response.headers["Location"] = f"/api/positions/{pid}/events/{event.id}"
+    return {"id": event.id, "position_number_id": pid, "from_status": event.from_status,
+            "to_status": event.to_status, "changed_at": event.changed_at, "note": event.note}
+
+
+@router.get("/positions/{pid}/cost")
+def get_position_cost(pid: int, db: Session = Depends(get_db)):
+    """按国家用工税额计算公司份额/用工成本（只读，不落库）。
+
+    公司份额 = 税前薪资 × Σ(有效科目税率)；用工成本 = 税前薪资 + 公司份额。
+    """
+    pn = get_or_404(db, PositionNumber, pid, "岗位不存在")
+    if pn.cost_mode != CostMode.AUTO:
+        raise HTTPException(400, "仅「自动计算」模式可重算（当前为手动输入）")
+    if pn.salary_before_tax is None:
+        raise HTTPException(400, "请先填写税前薪资（人工）")
+    if not pn.country_id:
+        raise HTTPException(400, "该岗位无国家/地区，无法按国家税率计算（请切换为手动输入）")
+    items = db.query(EmploymentTaxItem).filter(
+        EmploymentTaxItem.country_id == pn.country_id, EmploymentTaxItem.is_active.is_(True)
+    ).all()
+    rate = sum(float(it.tax_rate or 0) for it in items) / 100.0
+    share = round(float(pn.salary_before_tax) * rate, 2)
+    return {
+        "position_id": pn.id,
+        "salary_before_tax": float(pn.salary_before_tax),
+        "tax_rate_total": round(rate * 100, 2),
+        "tax_items": [{"item_name": it.item_name, "tax_rate": float(it.tax_rate or 0)} for it in items],
+        "company_share": share,
+        "labor_cost": round(float(pn.salary_before_tax) + share, 2),
+    }
 
 
 @router.delete("/positions/{pid}")

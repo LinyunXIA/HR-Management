@@ -81,6 +81,7 @@ def import_csv(db, rows):
     existing = {pn.number: pn for pn in db.query(PositionNumber).all()}
 
     parsed = []  # (number, data, solid_numbers, dotted_numbers, prev_number, prev_company_name)
+    seen_numbers = set()
 
     # ---- 第 1 趟：读取并构建基础数据 ----
     for raw in rows:
@@ -94,6 +95,10 @@ def import_csv(db, rows):
         if not NUMBER_RE.fullmatch(number):
             report["errors"].append(f"{number}: 岗位编号格式非法")
             continue
+        if number in seen_numbers:
+            report["errors"].append(f"{number}: 岗位编号在文件中重复，该行不导入")
+            continue
+        seen_numbers.add(number)
 
         scope, cname, ccode = parse_scope_country(raw.get("国家或地区"))
         country = None

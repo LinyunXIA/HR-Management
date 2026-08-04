@@ -1,9 +1,11 @@
-/* 岗位管理：列表 / 新建 / 详情 / 生命周期流转 */
+/* 岗位管理：列表 / 新建 / 详情 / 生命周期流转 / 成本字段 */
 const Positions = {
   filters: { company_id: '', scope: '', status: '', search: '' },
   page: 1,
   pageSize: 20,
   result: null,
+  _managers: [],       // 管理岗（直线/虚线经理下拉，仅管理岗）
+  _all: [],
 
   /* 手动流转白名单（与后端 ALLOWED_MANUAL 一致；filled/vacant 由员工动作触发） */
   TRANSITIONS: {
@@ -29,7 +31,7 @@ const Positions = {
           </select>
           <select id="pf-scope">
             <option value="">全部范围</option>
-            ${Object.entries(SCOPE_LABEL).map(([k, v]) => `<option value="${k}" ${this.filters.scope === k ? 'selected' : ''}>${v}</option>`).join('')}
+            ${App.scopes.map((s) => `<option value="${s.code}" ${this.filters.scope === s.code ? 'selected' : ''}>${esc(shortScope(s.label))}</option>`).join('')}
           </select>
           <select id="pf-status">
             <option value="">全部状态</option>
@@ -41,7 +43,7 @@ const Positions = {
           <button class="btn primary" id="pf-new">＋ 新建岗位</button>
         </div>
         <table>
-          <thead><tr><th>岗位编号</th><th>职位</th><th>隶属公司</th><th>级别</th><th>范围</th><th>状态</th><th>占用员工</th><th>法律强制</th><th></th></tr></thead>
+          <thead><tr><th>岗位编号</th><th>职位</th><th>隶属公司</th><th>级别</th><th>范围</th><th>状态</th><th>占用员工</th><th>税前薪资</th><th>公司份额</th><th>用工成本</th><th></th></tr></thead>
           <tbody>${this.rows()}</tbody>
         </table>
         ${this.pager()}
@@ -58,17 +60,19 @@ const Positions = {
   },
 
   rows() {
-    if (!this.result.items.length) return '<tr><td colspan="9" class="empty">暂无岗位</td></tr>';
+    if (!this.result.items.length) return '<tr><td colspan="11" class="empty">暂无岗位</td></tr>';
     return this.result.items.map((p) => `
       <tr>
         <td class="num">${esc(p.number)}</td>
         <td>${esc(p.position_name)}</td>
         <td>${esc(p.company_name)}</td>
         <td>${esc(p.level || '—')}</td>
-        <td>${esc(SCOPE_LABEL[p.scope] || p.scope)}${p.country_name ? '·' + esc(p.country_name) : ''}</td>
+        <td>${esc(scopeDisplay(p))}</td>
         <td>${statusBadge(p.status)}</td>
         <td>${esc(p.incumbent_name || '—')}</td>
-        <td>${legalBadge(p.legal_category)}</td>
+        <td class="num">${fmtMoney(p.salary_before_tax)}</td>
+        <td class="num">${fmtMoney(p.company_share)}</td>
+        <td class="num">${fmtMoney(p.labor_cost)}</td>
         <td><button class="btn small" data-open="${p.id}">详情</button></td>
       </tr>`).join('');
   },
@@ -82,49 +86,77 @@ const Positions = {
     </div>`;
   },
 
+  async managerOptions() {
+    if (!this._managers.length) {
+      const r = await get('/positions?role=manager&page_size=500');
+      this._managers = r.items.map((p) => ({ id: p.id, number: p.number, position_name: p.position_name, level: p.level }));
+    }
+    return this._managers;
+  },
+
+  mgrOptions() {
+    return this._managers.length
+      ? this._managers.map((m) => `<option value="${m.id}">${esc(m.number)} ${esc(m.position_name || '')}（${esc(m.level || '')}）</option>`).join('')
+      : '';
+  },
+
   async openCreate() {
-    this._all = await this.allPositions();
+    this._managers = await this.managerOptions();
     const modal = openModal(`
-      <header><h2>新建岗位</h2><button class="btn small" onclick="closeModal()">✕</button></header>
+      <header><h2>新建岗位（编号自动生成）</h2><button class="btn small" onclick="closeModal()">✕</button></header>
       <div class="body">
         <div class="form-grid">
-          <div class="field"><label>职位（职能）</label>
+          <div class="field"><label>职位（职能）*</label>
             <input type="text" id="pc-posname" list="posfn-list" placeholder="输入或选择职位名">
             <datalist id="posfn-list">${App.functions.map((f) => `<option value="${esc(f.name)}">`).join('')}</datalist>
           </div>
-          <div class="field"><label>隶属公司</label>
+          <div class="field"><label>隶属公司 *</label>
             <select id="pc-company">${App.companies.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
           </div>
-          <div class="field"><label>级别</label><input type="text" id="pc-level" placeholder="如 M8a / B7b"></div>
-          <div class="field"><label>工作范围</label>
-            <select id="pc-scope">${Object.entries(SCOPE_LABEL).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+          <div class="field"><label>级别</label>
+            <select id="pc-level"><option value="">—</option>${App.levels.map((l) => `<option value="${esc(l.code)}">${esc(l.code)}${l.label ? ' · ' + esc(l.label) : ''}${l.is_management ? '（管理岗）' : ''}</option>`).join('')}</select>
+          </div>
+          <div class="field"><label>工作范围 *</label>
+            <select id="pc-scope">${App.scopes.map((s) => `<option value="${s.code}">${esc(s.label)}</option>`).join('')}</select>
           </div>
           <div class="field" id="pc-country-wrap" style="display:none"><label>国家/地区</label>
             <select id="pc-country">${App.countries.map((c) => `<option value="${c.id}">${esc(c.name)} (${esc(c.code)})</option>`).join('')}</select>
           </div>
           <div class="field"><label>职位开启日</label><input type="date" id="pc-opening"></div>
           <div class="field"><label>职位关闭日（关闭时填）</label><input type="date" id="pc-closing"></div>
-          <div class="field"><label>工作地点</label><input type="text" id="pc-wloc" placeholder="如 比利时布鲁塞尔"></div>
-          <div class="field full"><label>工作职责描述</label><textarea id="pc-desc" rows="2"></textarea></div>
-          <div class="field"><label>法律强制/可选</label>
-            <select id="pc-legal"><option value="">—</option><option>法律强制·内部全职不可外包</option><option>可选（集团内控推荐）</option><option>纯后勤可选</option></select>
+          <div class="field"><label>工作地点</label>
+            <select id="pc-wloc"><option value="">—</option>${App.workLocations.map((w) => `<option value="${esc(w.name)}">${esc(w.name)}</option>`).join('')}</select>
           </div>
-          <div class="field"><label>直线经理</label>
-            <select id="pc-solid"><option value="">无</option>${this.managerOptions()}</select>
+          <div class="field"><label>直线经理（仅管理岗）</label>
+            <select id="pc-solid"><option value="">无</option>${this.mgrOptions()}</select>
           </div>
-          <div class="field"><label>虚线经理（可多选）</label>
-            <select id="pc-dotted" multiple size="3">${this.managerOptions()}</select>
+          <div class="field"><label>虚线经理（仅管理岗，可多选）</label>
+            <select id="pc-dotted" multiple size="3">${this.mgrOptions()}</select>
           </div>
-          <div class="field"><label>Org-Chart 显示名</label><input type="text" id="pc-display"></div>
-          <div class="field"><label>岗位编号（留空自动生成）</label><input type="text" id="pc-number" placeholder="P###-{范围}"></div>
-          <div class="field full"><label>备注</label><textarea id="pc-remark" rows="2"></textarea></div>
+          <div class="field full"><label>工作职责描述（可留空）</label><textarea id="pc-desc" rows="2"></textarea></div>
+          <div class="field full"><label>Org-Chart 显示名</label><input type="text" id="pc-display"></div>
+          <div class="field full"><label>备注（可留空）</label><textarea id="pc-remark" rows="2"></textarea></div>
         </div>
+
+        <div class="section-title">人工成本（可留空）</div>
+        <div class="cost-toggle">
+          <label class="cost-mode"><input type="radio" name="pc-costmode" value="manual" checked> 手动输入</label>
+          <label class="cost-mode"><input type="radio" name="pc-costmode" value="auto"> 自动计算（按国家用工税额）</label>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:10px" id="pc-costfields">
+          <div class="cost-field"><label>税前薪资（人工）</label><input type="number" step="0.01" id="pc-salary"></div>
+          <div class="cost-field"><label>公司份额（人工）</label><input type="number" step="0.01" id="pc-share"></div>
+          <div class="cost-field"><label>用工成本（人工）</label><input type="number" step="0.01" id="pc-labor"></div>
+        </div>
+        <div class="hint" id="pc-costhint"></div>
       </div>
       <footer><button class="btn" onclick="closeModal()">取消</button><button class="btn primary" id="pc-save">保存</button></footer>`);
-    modal.querySelector('#pc-scope').onchange = (e) => {
-      modal.querySelector('#pc-country-wrap').style.display = e.target.value === 'country' ? '' : 'none';
-    };
+
+    this.bindScopeToggle(modal, 'pc');
+    modal.querySelectorAll('input[name="pc-costmode"]').forEach((r) => r.onchange = () => this.applyCostMode(modal, 'pc'));
     modal.querySelector('#pc-save').onclick = async () => {
+      if (!val('#pc-posname')) { toast('请填写职位'); return; }
+      const mode = modal.querySelector('input[name="pc-costmode"]:checked').value;
       const body = {
         position_name: val('#pc-posname'),
         company_id: +val('#pc-company'),
@@ -135,30 +167,41 @@ const Positions = {
         closing_date: val('#pc-closing') || null,
         work_location: val('#pc-wloc') || null,
         job_responsibility: val('#pc-desc') || null,
-        legal_category: val('#pc-legal') || null,
         solid_line_manager_id: val('#pc-solid') ? +val('#pc-solid') : null,
         dotted_manager_ids: [...modal.querySelector('#pc-dotted').selectedOptions].map((o) => +o.value),
         org_chart_display: val('#pc-display') || null,
         remark: val('#pc-remark') || null,
-        number: val('#pc-number') || null,
+        cost_mode: mode,
+        salary_before_tax: val('#pc-salary') ? +val('#pc-salary') : null,
+        company_share: val('#pc-share') ? +val('#pc-share') : null,
+        labor_cost: val('#pc-labor') ? +val('#pc-labor') : null,
       };
       try {
         await post('/positions', body);
-        closeModal(); toast('岗位已创建', 'ok'); this.page = 1; this.render(); App.loadStats();
+        closeModal(); toast('岗位已创建，编号自动生成', 'ok'); this.page = 1; this.render(); App.loadStats();
       } catch (e) { toast(e.message); }
     };
   },
 
-  async allPositions() {
-    if (!this._all) { const r = await get('/positions?page_size=500'); this._all = r.items; }
-    return this._all;
+  applyCostMode(modal, prefix) {
+    const mode = modal.querySelector(`input[name="${prefix}-costmode"]:checked`).value;
+    const salary = modal.querySelector(`#${prefix}-salary`);
+    const share = modal.querySelector(`#${prefix}-share`);
+    const labor = modal.querySelector(`#${prefix}-labor`);
+    const hint = modal.querySelector(`#${prefix}-costhint`);
+    if (mode === 'auto') {
+      salary.disabled = false; share.disabled = true; labor.disabled = true;
+      hint.textContent = '自动模式：公司份额 = 税前薪资 × Σ(国家科目税率)，用工成本 = 税前 + 份额；保存后可在详情「重算」。';
+    } else {
+      salary.disabled = false; share.disabled = false; labor.disabled = false;
+      hint.textContent = '手动模式：三个字段均可填写。';
+    }
   },
 
-  managerOptions() {
-    const list = this._all || (this.result && this.result.items) || [];
-    return list.length
-      ? list.map((p) => `<option value="${p.id}">${esc(p.number)} ${esc(p.position_name)}</option>`).join('')
-      : '';
+  bindScopeToggle(modal, prefix) {
+    modal.querySelector(`#${prefix}-scope`).onchange = (e) => {
+      modal.querySelector(`#${prefix}-country-wrap`).style.display = e.target.value === 'country' ? '' : 'none';
+    };
   },
 
   async openDetail(id) {
@@ -170,17 +213,21 @@ const Positions = {
         <div class="detail-grid">
           ${ditem('岗位编号', p.number)} ${ditem('状态', statusBadge(p.status))}
           ${ditem('职位', p.position_name)} ${ditem('隶属公司', p.company_name)}
-          ${ditem('级别', p.level)} ${ditem('工作范围', SCOPE_LABEL[p.scope] + (p.country_name ? '·' + p.country_name : ''))}
+          ${ditem('级别', p.level)} ${ditem('工作范围', scopeDisplay(p))}
           ${ditem('开启日', fmtDate(p.opening_date))} ${ditem('关闭日', fmtDate(p.closing_date))}
           ${ditem('工作地点', p.work_location)} ${ditem('占用员工', p.incumbent_name || '—')}
           ${ditem('直线经理', p.solid_line_number ? `${p.solid_line_number} ${p.solid_line_manager_name || ''}` : '—')}
           ${ditem('虚线经理', (p.dotted_manager_numbers || []).join('、') || '—')}
-          ${ditem('法律强制', p.legal_category ? legalBadge(p.legal_category) : '—')}
           ${ditem('Org-Chart显示', p.org_chart_display)}
           ${ditem('之前的职位', p.prev_position_number || '—')}
           ${ditem('之前的公司', p.prev_company_name || '—')}
+          ${ditem('成本模式', p.cost_mode === 'auto' ? '自动计算' : '手动输入')}
+          ${ditem('税前薪资', fmtMoney(p.salary_before_tax))}
+          ${ditem('公司份额', fmtMoney(p.company_share))}
+          ${ditem('用工成本', fmtMoney(p.labor_cost))}
         </div>
         ${p.remark ? `<div class="section-title">备注</div><div style="font-size:13px">${esc(p.remark)}</div>` : ''}
+        ${p.cost_mode === 'auto' && p.salary_before_tax != null ? `<div class="transition-bar"><button class="btn" id="pd-calccost">重算用工成本</button></div>` : ''}
 
         <div class="section-title">生命周期流转</div>
         <div class="transition-bar" id="pd-trans"></div>
@@ -195,6 +242,16 @@ const Positions = {
         </div>
       </div>`);
 
+    const calcBtn = modal.querySelector('#pd-calccost');
+    if (calcBtn) calcBtn.onclick = async () => {
+      try {
+        const c = await get(`/positions/${id}/cost`);
+        await patch(`/positions/${id}`, { company_share: c.company_share, labor_cost: c.labor_cost });
+        toast(`已重算并保存：公司份额 ${fmtMoney(c.company_share)} · 用工成本 ${fmtMoney(c.labor_cost)}`, 'ok');
+        this.openDetail(id);
+      } catch (e) { toast(e.message); }
+    };
+
     const trans = Positions.TRANSITIONS[p.status] || [];
     modal.querySelector('#pd-trans').innerHTML =
       trans.length
@@ -203,7 +260,7 @@ const Positions = {
     modal.querySelectorAll('[data-to]').forEach((b) => b.onclick = async () => {
       if (!confirm(`确认将岗位流转为「${STATUS_LABEL[b.dataset.to]}」？`)) return;
       try {
-        await post(`/positions/${id}/transition`, { to_status: b.dataset.to, note: '手动流转' });
+        await post(`/positions/${id}/events`, { to_status: b.dataset.to, note: '手动流转' });
         closeModal(); toast('流转成功', 'ok'); this.render(); App.loadStats();
       } catch (e) { toast(e.message); }
     });
@@ -211,7 +268,7 @@ const Positions = {
   },
 
   async openEdit(p) {
-    this._all = await this.allPositions();
+    this._managers = await this.managerOptions();
     const modal = openModal(`
       <header><h2>编辑岗位 ${esc(p.number)}</h2><button class="btn small" onclick="closeModal()">✕</button></header>
       <div class="body">
@@ -223,35 +280,66 @@ const Positions = {
           <div class="field"><label>隶属公司</label>
             <select id="pe-company">${App.companies.map((c) => `<option value="${c.id}" ${c.id === p.company_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
           </div>
-          <div class="field"><label>级别</label><input type="text" id="pe-level" value="${esc(p.level || '')}"></div>
+          <div class="field"><label>级别</label>
+            <select id="pe-level"><option value="">—</option>${App.levels.map((l) => `<option value="${esc(l.code)}" ${l.code === p.level ? 'selected' : ''}>${esc(l.code)}${l.label ? ' · ' + esc(l.label) : ''}</option>`).join('')}</select>
+          </div>
           <div class="field"><label>工作范围</label>
-            <select id="pe-scope">${Object.entries(SCOPE_LABEL).map(([k, v]) => `<option value="${k}" ${k === p.scope ? 'selected' : ''}>${v}</option>`).join('')}</select>
+            <select id="pe-scope">${App.scopes.map((s) => `<option value="${s.code}" ${s.code === p.scope ? 'selected' : ''}>${esc(s.label)}</option>`).join('')}</select>
           </div>
           <div class="field" id="pe-country-wrap" style="display:${p.scope === 'country' ? '' : 'none'}"><label>国家/地区</label>
             <select id="pe-country">${App.countries.map((c) => `<option value="${c.id}" ${c.id === p.country_id ? 'selected' : ''}>${esc(c.name)} (${esc(c.code)})</option>`).join('')}</select>
           </div>
           <div class="field"><label>开启日</label><input type="date" id="pe-opening" value="${fmtDate(p.opening_date)}"></div>
           <div class="field"><label>关闭日</label><input type="date" id="pe-closing" value="${fmtDate(p.closing_date)}"></div>
-          <div class="field"><label>工作地点</label><input type="text" id="pe-wloc" value="${esc(p.work_location || '')}"></div>
-          <div class="field full"><label>职责描述</label><textarea id="pe-desc" rows="2">${esc(p.job_responsibility || '')}</textarea></div>
-          <div class="field"><label>法律强制/可选</label>
-            <select id="pe-legal"><option value="">—</option>${['法律强制·内部全职不可外包', '可选（集团内控推荐）', '纯后勤可选'].map((o) => `<option ${o === p.legal_category ? 'selected' : ''}>${o}</option>`).join('')}</select>
+          <div class="field"><label>工作地点</label>
+            <select id="pe-wloc"><option value="">—</option>${App.workLocations.map((w) => `<option value="${esc(w.name)}" ${w.name === p.work_location ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>
           </div>
-          <div class="field"><label>直线经理</label>
-            <select id="pe-solid"><option value="">无</option>${(this._all || []).map((o) => `<option value="${o.id}" ${o.id === p.solid_line_manager_id ? 'selected' : ''}>${esc(o.number)} ${esc(o.position_name)}</option>`).join('')}</select>
+          <div class="field"><label>直线经理（仅管理岗）</label>
+            <select id="pe-solid"><option value="">无</option>${this._managers.map((m) => `<option value="${m.id}" ${m.id === p.solid_line_manager_id ? 'selected' : ''}>${esc(m.number)} ${esc(m.position_name || '')}（${esc(m.level || '')}）</option>`).join('')}</select>
           </div>
-          <div class="field"><label>虚线经理（可多选）</label>
-            <select id="pe-dotted" multiple size="3">${(this._all || []).map((o) => `<option value="${o.id}" ${(p.dotted_manager_ids || []).includes(o.id) ? 'selected' : ''}>${esc(o.number)} ${esc(o.position_name)}</option>`).join('')}</select>
+          <div class="field"><label>虚线经理（仅管理岗，可多选）</label>
+            <select id="pe-dotted" multiple size="3">${this.mgrOptions()}</select>
           </div>
-          <div class="field"><label>Org-Chart 显示名</label><input type="text" id="pe-display" value="${esc(p.org_chart_display || '')}"></div>
+          <div class="field full"><label>工作职责描述</label><textarea id="pe-desc" rows="2">${esc(p.job_responsibility || '')}</textarea></div>
+          <div class="field full"><label>Org-Chart 显示名</label><input type="text" id="pe-display" value="${esc(p.org_chart_display || '')}"></div>
           <div class="field full"><label>备注</label><textarea id="pe-remark" rows="2">${esc(p.remark || '')}</textarea></div>
         </div>
+
+        <div class="section-title">人工成本</div>
+        <div class="cost-toggle">
+          <label class="cost-mode"><input type="radio" name="pe-costmode" value="manual" ${p.cost_mode !== 'auto' ? 'checked' : ''}> 手动输入</label>
+          <label class="cost-mode"><input type="radio" name="pe-costmode" value="auto" ${p.cost_mode === 'auto' ? 'checked' : ''}> 自动计算（按国家用工税额）</label>
+          <button class="btn" id="pe-calccost" style="${p.cost_mode === 'auto' ? '' : 'display:none'}">重算</button>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:10px" id="pe-costfields">
+          <div class="cost-field"><label>税前薪资（人工）</label><input type="number" step="0.01" id="pe-salary" value="${p.salary_before_tax ?? ''}"></div>
+          <div class="cost-field"><label>公司份额（人工）</label><input type="number" step="0.01" id="pe-share" value="${p.company_share ?? ''}"></div>
+          <div class="cost-field"><label>用工成本（人工）</label><input type="number" step="0.01" id="pe-labor" value="${p.labor_cost ?? ''}"></div>
+        </div>
+        <div class="hint" id="pe-costhint"></div>
       </div>
       <footer><button class="btn" onclick="closeModal()">取消</button><button class="btn primary" id="pe-save">保存</button></footer>`);
-    modal.querySelector('#pe-scope').onchange = (e) => {
-      modal.querySelector('#pe-country-wrap').style.display = e.target.value === 'country' ? '' : 'none';
+
+    this.bindScopeToggle(modal, 'pe');
+    const applyEditCost = () => {
+      this.applyCostMode(modal, 'pe');
+      modal.querySelector('#pe-calccost').style.display = modal.querySelector('input[name="pe-costmode"]:checked').value === 'auto' ? '' : 'none';
+    };
+    modal.querySelectorAll('input[name="pe-costmode"]').forEach((r) => r.onchange = applyEditCost);
+    applyEditCost();
+    modal.querySelector('#pe-calccost').onclick = async () => {
+      try {
+        await patch(`/positions/${p.id}`, { cost_mode: 'auto', salary_before_tax: val('#pe-salary') ? +val('#pe-salary') : null });
+        const c = await get(`/positions/${p.id}/cost`);
+        await patch(`/positions/${p.id}`, { company_share: c.company_share, labor_cost: c.labor_cost });
+        modal.querySelector('#pe-salary').value = c.salary_before_tax ?? '';
+        modal.querySelector('#pe-share').value = c.company_share ?? '';
+        modal.querySelector('#pe-labor').value = c.labor_cost ?? '';
+        toast(`已重算并保存：公司份额 ${fmtMoney(c.company_share)} · 用工成本 ${fmtMoney(c.labor_cost)}`, 'ok');
+      } catch (e) { toast(e.message); }
     };
     modal.querySelector('#pe-save').onclick = async () => {
+      const mode = modal.querySelector('input[name="pe-costmode"]:checked').value;
       const body = {
         position_id: App.functions.find((f) => f.name === val('#pe-posname'))?.id || null,
         position_name: val('#pe-posname'),
@@ -263,14 +351,17 @@ const Positions = {
         closing_date: val('#pe-closing') || null,
         work_location: val('#pe-wloc') || null,
         job_responsibility: val('#pe-desc') || null,
-        legal_category: val('#pe-legal') || null,
         solid_line_manager_id: val('#pe-solid') ? +val('#pe-solid') : null,
         dotted_manager_ids: [...modal.querySelector('#pe-dotted').selectedOptions].map((o) => +o.value),
         org_chart_display: val('#pe-display') || null,
         remark: val('#pe-remark') || null,
+        cost_mode: mode,
+        salary_before_tax: val('#pe-salary') ? +val('#pe-salary') : null,
+        company_share: val('#pe-share') ? +val('#pe-share') : null,
+        labor_cost: val('#pe-labor') ? +val('#pe-labor') : null,
       };
       try {
-        await put('/positions/' + p.id, body);
+        await patch('/positions/' + p.id, body);
         closeModal(); toast('已保存', 'ok'); this.render();
       } catch (e) { toast(e.message); }
     };
@@ -280,4 +371,12 @@ const Positions = {
 function val(id) { return document.getElementById(id).value.trim(); }
 function ditem(k, v) {
   return `<div class="detail-item"><div class="k">${k}</div><div class="v">${v === undefined || v === null || v === '' ? '—' : v}</div></div>`;
+}
+function shortScope(label) { return String(label || '').split('（')[0]; }
+function scopeDisplay(p) {
+  const base = shortScope((App.scopes.find((s) => s.code === p.scope) || {}).label || SCOPE_LABEL[p.scope] || p.scope);
+  return p.country_name ? base + '·' + p.country_name : base;
+}
+function fmtMoney(v) {
+  return v == null ? '—' : Number(v).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }

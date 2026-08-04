@@ -4,6 +4,7 @@ from datetime import date, datetime
 from pydantic import BaseModel, ConfigDict
 
 from app.models import (
+    CostMode,
     EmployeeType,
     EmploymentStatus,
     Gender,
@@ -56,7 +57,12 @@ class PositionNumberCreate(BaseModel):
     prev_position_id: int | None = None
     prev_company_id: int | None = None
     remark: str | None = None
-    number: str | None = None  # 缺省自动生成
+    # 成本字段（新建时可留空）
+    cost_mode: CostMode | None = None
+    salary_before_tax: float | None = None
+    company_share: float | None = None
+    labor_cost: float | None = None
+    # 岗位编号仅自动生成，不接受手工输入
 
 
 class PositionNumberUpdate(BaseModel):
@@ -76,6 +82,11 @@ class PositionNumberUpdate(BaseModel):
     prev_position_id: int | None = None
     prev_company_id: int | None = None
     remark: str | None = None
+    # 成本字段
+    cost_mode: CostMode | None = None
+    salary_before_tax: float | None = None
+    company_share: float | None = None
+    labor_cost: float | None = None
 
 
 class TransitionRequest(BaseModel):
@@ -122,3 +133,129 @@ class EmployeeUpdate(BaseModel):
 
 class TransferRequest(BaseModel):
     to_position_id: int
+
+
+# ---------------------------------------------------------------- 主数据（F0）
+class CompanyCreate(BaseModel):
+    name: str
+
+
+class CompanyUpdate(BaseModel):
+    name: str | None = None
+
+
+class CountryCreate(BaseModel):
+    name: str
+    code: str
+
+
+class CountryUpdate(BaseModel):
+    name: str | None = None
+    code: str | None = None
+
+
+class LevelOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    code: str
+    label: str | None
+    is_management: bool
+    sort_order: int
+
+
+class LevelCreate(BaseModel):
+    code: str
+    label: str | None = None
+    is_management: bool = False
+    sort_order: int = 0
+
+
+class LevelUpdate(BaseModel):
+    label: str | None = None
+    is_management: bool | None = None
+    sort_order: int | None = None
+
+
+class WorkLocationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    sort_order: int
+
+
+class WorkLocationCreate(BaseModel):
+    name: str
+    sort_order: int = 0
+
+
+class WorkLocationUpdate(BaseModel):
+    name: str | None = None
+    sort_order: int | None = None
+
+
+class ScopeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    code: str
+    label: str
+    suffix_code: str
+    sort_order: int
+
+
+class ScopeCreate(BaseModel):
+    code: str
+    label: str
+    suffix_code: str
+    sort_order: int = 0
+
+
+class ScopeUpdate(BaseModel):
+    label: str | None = None
+    suffix_code: str | None = None
+    sort_order: int | None = None
+
+
+class LegalCategoryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    sort_order: int
+
+
+class LegalCategoryCreate(BaseModel):
+    name: str
+    sort_order: int = 0
+
+
+class LegalCategoryUpdate(BaseModel):
+    name: str | None = None
+    sort_order: int | None = None
+
+
+class EmploymentTaxItemOut(BaseModel):
+    id: int
+    country_id: int
+    country_name: str | None = None
+    item_name: str
+    tax_rate: float
+    is_active: bool
+
+
+class EmploymentTaxItemCreate(BaseModel):
+    country_id: int
+    item_name: str
+    tax_rate: float = 0.0
+    is_active: bool = True
+
+
+class EmploymentTaxItemUpdate(BaseModel):
+    item_name: str | None = None
+    tax_rate: float | None = None
+    is_active: bool | None = None
+
+
+class ManagerOption(BaseModel):
+    id: int
+    number: str
+    position_name: str | None
+    level: str | None

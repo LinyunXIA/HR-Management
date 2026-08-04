@@ -1,5 +1,5 @@
 """员工路由：CRUD + 入职/调岗/离职（联动岗位状态 Filled↔Vacant）。"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app import lifecycle
@@ -86,8 +86,8 @@ def list_employees(
             "items": [serialize_employee(db, e) for e in items]}
 
 
-@router.post("/employees")
-def create_employee(payload: EmployeeCreate, db: Session = Depends(get_db)):
+@router.post("/employees", status_code=201)
+def create_employee(payload: EmployeeCreate, response: Response, db: Session = Depends(get_db)):
     if db.query(Employee).filter(Employee.employee_no == payload.employee_no).first():
         raise HTTPException(400, f"工号已存在: {payload.employee_no}")
     pn = get_or_404(db, PositionNumber, payload.position_number_id, "岗位不存在")
@@ -110,6 +110,7 @@ def create_employee(payload: EmployeeCreate, db: Session = Depends(get_db)):
     lifecycle.transition(db, pn, PositionStatus.FILLED, note=f"员工 {payload.name} 入职挂编",
                          employee_id=emp.id, system=True)
     db.commit()
+    response.headers["Location"] = f"/api/employees/{emp.id}"
     return serialize_employee(db, emp)
 
 
@@ -119,7 +120,7 @@ def get_employee(eid: int, db: Session = Depends(get_db)):
     return serialize_employee(db, emp)
 
 
-@router.put("/employees/{eid}")
+@router.patch("/employees/{eid}")
 def update_employee(eid: int, payload: EmployeeUpdate, db: Session = Depends(get_db)):
     emp = get_or_404(db, Employee, eid, "员工不存在")
     for field in ("name", "gender", "birth_date", "phone", "email",
@@ -136,8 +137,9 @@ def update_employee(eid: int, payload: EmployeeUpdate, db: Session = Depends(get
     return serialize_employee(db, emp)
 
 
-@router.post("/employees/{eid}/transfer")
-def transfer_employee(eid: int, payload: TransferRequest, db: Session = Depends(get_db)):
+@router.post("/employees/{eid}/transfers", status_code=201)
+def transfer_employee(eid: int, payload: TransferRequest, response: Response, db: Session = Depends(get_db)):
+    """创建一条调岗记录（旧岗→Vacant，新岗→Filled）。"""
     emp = get_or_404(db, Employee, eid, "员工不存在")
     if emp.employment_status == EmploymentStatus.TERMINATED:
         raise HTTPException(400, "离职员工不可调岗")
@@ -152,17 +154,7 @@ def transfer_employee(eid: int, payload: TransferRequest, db: Session = Depends(
         lifecycle.transition(db, new_pn, PositionStatus.FILLED, note=f"员工 {emp.name} 入职挂编",
                              employee_id=emp.id, system=True)
     db.commit()
-    return serialize_employee(db, emp)
-
-
-@router.post("/employees/{eid}/offboard")
-def offboard_employee(eid: int, db: Session = Depends(get_db)):
-    emp = get_or_404(db, Employee, eid, "员工不存在")
-    if emp.employment_status == EmploymentStatus.TERMINATED:
-        raise HTTPException(400, "员工已离职")
-    _vacate(db, emp, f"员工 {emp.name} 离职")
-    emp.employment_status = EmploymentStatus.TERMINATED
-    db.commit()
+    response.headers["Location"] = f"/api/employees/{eid}"
     return serialize_employee(db, emp)
 
 

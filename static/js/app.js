@@ -3,14 +3,24 @@ const App = {
   companies: [],
   countries: [],
   functions: [],
+  levels: [],
+  workLocations: [],
+  scopes: [],
+  legalCategories: [],
 
   async loadDicts() {
-    const [companies, countries, functions] = await Promise.all([
-      get('/companies'), get('/countries'), get('/position-functions'),
-    ]);
+    const [companies, countries, functions, levels, workLocations, scopes, legalCategories] =
+      await Promise.all([
+        get('/companies'), get('/countries'), get('/position-functions'),
+        get('/levels'), get('/work-locations'), get('/scopes'), get('/legal-categories'),
+      ]);
     this.companies = companies;
     this.countries = countries;
     this.functions = functions;
+    this.levels = levels;
+    this.workLocations = workLocations;
+    this.scopes = scopes;
+    this.legalCategories = legalCategories;
   },
 
   async loadStats() {
@@ -40,7 +50,8 @@ const App = {
       s.classList.toggle('active', s.id === `tab-${tab}`));
     this.loadStats();
     try {
-      if (tab === 'positions') await Positions.render();
+      if (tab === 'master') await MasterData.render();
+      else if (tab === 'positions') await Positions.render();
       else if (tab === 'employees') await Employees.render();
       else if (tab === 'orgchart') await OrgChart.render();
       else if (tab === 'import') Import.render();

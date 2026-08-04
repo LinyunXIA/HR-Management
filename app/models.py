@@ -3,12 +3,14 @@ import enum
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    Boolean,
     Column,
     Date,
     DateTime,
     Enum as SAEnum,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -69,6 +71,12 @@ class EmploymentStatus(str, enum.Enum):
     TERMINATED = "离职"
 
 
+class CostMode(str, enum.Enum):
+    """岗位成本输入模式（自动计算 / 手动输入，互斥）。"""
+    AUTO = "auto"
+    MANUAL = "manual"
+
+
 # ---------------------------------------------------------------- 表
 class Company(Base):
     """隶属公司（法人实体）。"""
@@ -85,6 +93,58 @@ class Country(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(100), unique=True, nullable=False)
     code = Column(String(10), unique=True, nullable=False)  # 如 '4-1'
+
+
+class Level(Base):
+    """级别字典（按 Position.md 级别对照初始化；M 开头=管理岗）。"""
+    __tablename__ = "levels"
+
+    id = Column(Integer, primary_key=True)
+    code = Column(String(10), unique=True, nullable=False)  # B6 / M8a …
+    label = Column(String(100), nullable=True)
+    is_management = Column(Boolean, nullable=False, default=False)
+    sort_order = Column(Integer, nullable=False, default=0)
+
+
+class WorkLocation(Base):
+    """工作地点字典。"""
+    __tablename__ = "work_locations"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), unique=True, nullable=False)
+    sort_order = Column(Integer, nullable=False, default=0)
+
+
+class ScopeDef(Base):
+    """工作范围字典（Family/Global/Regional/Country；suffix_code 驱动编号）。"""
+    __tablename__ = "scopes"
+
+    id = Column(Integer, primary_key=True)
+    code = Column(String(20), unique=True, nullable=False)      # family/global/regional/country
+    label = Column(String(50), nullable=False)
+    suffix_code = Column(String(5), nullable=False)              # 1/2/3/4
+    sort_order = Column(Integer, nullable=False, default=0)
+
+
+class LegalCategoryDef(Base):
+    """法律强制/可选字典。"""
+    __tablename__ = "legal_categories"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(50), unique=True, nullable=False)
+    sort_order = Column(Integer, nullable=False, default=0)
+
+
+class EmploymentTaxItem(Base):
+    """员工用工税额（按国家；科目 + 税率）。"""
+    __tablename__ = "employment_tax_items"
+
+    id = Column(Integer, primary_key=True)
+    country_id = Column(Integer, ForeignKey("countries.id"), nullable=False)
+    item_name = Column(String(100), nullable=False)
+    tax_rate = Column(Numeric(6, 2), nullable=False, default=0)  # 百分比 %
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=_now)
 
 
 class Position(Base):
@@ -130,6 +190,12 @@ class PositionNumber(Base):
         nullable=False,
         default=PositionStatus.PLANNED,
     )
+    # ---- 成本字段（人工成本口径）----
+    cost_mode = Column(SAEnum(CostMode, native_enum=False, length=10),
+                       nullable=False, default=CostMode.MANUAL)
+    salary_before_tax = Column(Numeric(14, 2), nullable=True)   # 税前薪资
+    company_share = Column(Numeric(14, 2), nullable=True)       # 公司份额
+    labor_cost = Column(Numeric(14, 2), nullable=True)          # 用工成本
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
