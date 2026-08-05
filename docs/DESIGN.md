@@ -33,7 +33,8 @@
 | Web 框架 | FastAPI（同步端点） | REST API + 托管静态文件 |
 | ORM | SQLAlchemy 2.x（同步） | 单用户本地工具，无需异步 |
 | 校验 | Pydantic v2 | 与 FastAPI 集成 |
-| 数据库 | SQLite（单文件 `hr.db`） | 备份=拷贝文件 |
+| 数据库 | **PostgreSQL** | 持久化关系型数据库，全部新建（无历史迁移） |
+| 驱动 | psycopg2-binary | Python PostgreSQL 适配器 |
 | 前端 | 原生 JS + 自定义 SVG 树渲染 | **零依赖、无 npm、无构建** |
 | 启动 | `uvicorn main:app --reload` | 一条命令 |
 
@@ -45,10 +46,9 @@
 
 ```
 HR_Management/
-├── main.py                 # FastAPI 入口：注册路由 + 挂载静态
+├── main.py                 # FastAPI 入口：建表（PostgreSQL）、注册路由
 ├── requirements.txt
-├── data/db/hr.db           # SQLite（自动建目录）
-├── app/
+├── app/                    # 数据库连接由环境变量驱动
 │   ├── __init__.py
 │   ├── db.py               # engine / SessionLocal / Base
 │   ├── models.py           # SQLAlchemy 模型
@@ -374,7 +374,7 @@ CLI：`python -m scripts.import_csv data/Position.csv`；Web：上传接口。
 5. **UI 走查**：数据清洗 → 导入 → 主数据配置 → 岗位详情 → 成本字段 → 员工管理 → 组织图 → 导出 MD。
 6. **组织图**：实线/虚线正确渲染；虚拟根开关生效；公司聚焦视图正确；缩放/平移可用；导出 MD 3 种格式内容正确；关闭岗置灰可隐藏。
 7. **数据清洗验证**：原始 Org-Chart.md（5 岗）+ Org-Chart2.md（68 岗）均可正确解析；8 个关键字段（职位/类型/公司/级别/国家范围/开启日/工作地点/法律强制）全部读取。
-8. 数据备份：复制 `data/db/hr.db` 后重开可用。
+8. 数据备份：PostgreSQL `pg_dump` 定期备份；无需历史迁移，全新建库。
 
 ## 11. 风险与注意点
 
@@ -383,6 +383,6 @@ CLI：`python -m scripts.import_csv data/Position.csv`；Web：上传接口。
 - **Org-Chart.md 不一致项**：以 CSV 为准，系统内不提示冲突（PRD §3.8）。
 - **虚线解析**：虚线列多为单值，按 `;`/`、` 分割支持多值（模型为 0~N）。
 - **组织图性能**：91 节点量级自定义 SVG 足够；节点折叠控制渲染量。
-- **字典外键迁移**：`level/scope/work_location/legal_category` 改外键后，需同步改 `import_csv` 按名称/代码映射；旧 `hr.db` 需重新导入（`--reset`）。
+- **PostgreSQL 部署**：需确保 PostgreSQL 服务可用；数据库**全部新建**，无需从 SQLite 迁移；连接信息通过环境变量 `DATABASE_URL` 配置。
 - **成本计算精度/口径**：税率按百分比存 Numeric；自动计算保留两位小数；币种/年度月度口径待确认（PRD §10）。
 - **管理岗过滤**：直线/虚线经理下拉用 `levels.is_management` 过滤；导入历史数据若含 B 级经理引用需兼容（跳过或告警）。
