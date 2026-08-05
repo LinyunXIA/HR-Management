@@ -14,8 +14,9 @@ from typing import Dict, List, Optional, Tuple
 
 # ─── Org-Chart.md 解析 ─────────────────────────────────────────────
 
-# 岗位编号正则：P001-1, P051-4-7 等
-P_NUM_RE = re.compile(r"\b(P\d{3,}(?:-\d+)*)\b")
+# 岗位编号格式：P{seq}-{1,2,3} 或 P{seq}-4-{country}（1~2位数字）
+P_NUM_PATTERN = r"P\d{3,}-(?:[123]|4-\d{1,2})"
+P_NUM_RE = re.compile(rf"\b({P_NUM_PATTERN})\b")
 
 # 行类型：🧑‍💼 In-house Full-time / 👨‍👩‍👧 Family Volunteer Unpaid / 📋 Outsourced External
 TYPE_MAP = {
@@ -24,11 +25,12 @@ TYPE_MAP = {
 }
 SKIP_TYPES = {"📋"}
 
-# 岗位行正则：提取 P 编号、英文职位名、中文职位名、法律强制、Opening 年份、备注
-# 例：P051-4-7 - Regional General Manager - 美国公司总裁 【可选（集团内控推荐）】(Opening: 1989) 【备注】
-POS_LINE_RE = re.compile(
-    r"(P\d{3,}(?:-\d+)*)\s*-\s*(.+?)\s*-\s*(.+?)(?:\s*【(.+?)】)*\s*\(Opening:\s*(\d{4})\)\s*(?:【(.*)】)?"
-)
+# 岗位行正则（两步匹配，兼容两种格式）：
+# 格式1: P001-1 - Family Chairman & General Manager - 家族主席兼总经理 【可选...】(Opening: 1982) 【备注】
+# 格式2: P063-4-5 Soparfi Managing Director - 卢森堡控股总经理 (Opening:2007)【法律强制...】
+POS_BASE_RE = re.compile(rf"({P_NUM_PATTERN})\s*(?:-\s*|\s+)(.+?)\(Opening:\s*(\d{{4}})")
+POS_MID_RE = re.compile(r"(.+?)\s*-\s*(.+?)(?:\s*【(.+?)】)?")
+POS_TRAIL_RE = re.compile(r"【(.+)】")
 
 # 公司行正则：提取公司名、地点、年份
 # 例：Family Asset Management SPRL（比利时布鲁塞尔 | 1982｜开户行...）
@@ -51,8 +53,26 @@ def parse_orgchart(md_text: str) -> Tuple[List[Dict], Dict]:
     depth_first_pos: Dict[int, str] = {}  # depth -> 第一个出现的岗位编号
 
     current_type: Optional[str] = None  # 从类型标记行继承
+    in_tree = False  # 只处理树结构区域内的行
 
     for line in lines:
+        # 检测代码块边界（兼容 ````tree` 和无标记格式）
+        stripped_line = line.strip()
+        if stripped_line.startswith("```"):
+            if "tree" in stripped_line.lower() or stripped_line == "```tree":
+                in_tree = True
+                continue
+            elif stripped_line == "```":
+                in_tree = False
+                continue
+        # 也支持：标题行后直接跟随树内容（无 ```tree 标记）
+        if stripped_line.startswith("# 完整组织架构树") or stripped_line == "完整组织架构树":
+            in_tree = True
+            continue
+
+        if not in_tree:
+            continue  # 跳过代码块外的行
+
         if not line.strip():
             continue
 
@@ -66,9 +86,7 @@ def parse_orgchart(md_text: str) -> Tuple[List[Dict], Dict]:
             depth = 0
 
         # ── 2. 去除树字符前缀，获取 clean 文本 ──
-        clean = stripped
-        for ch in "│├└─ ":
-            clean = clean.lstrip(ch)
+        clean = stripped.lstrip("│├└─ ")
         if not clean:
             continue
 
@@ -91,24 +109,39 @@ def parse_orgchart(md_text: str) -> Tuple[List[Dict], Dict]:
                 company_name = cm.group(1).strip()
                 detail = cm.group(2)
                 dm = COMPANY_DETAIL_RE.search(detail)
+                # 只取第一个地名（| 或｜之前的部分）
+                raw_location = dm.group(1).strip() if dm else detail.split("｜")[0].split("|")[0].strip()
                 company_map[company_name] = {
                     "name": company_name,
-                    "location": dm.group(1).strip() if dm else detail.strip(),
+                    "location": raw_location,
                     "year": dm.group(2) if dm else None,
                 }
             continue  # 公司行不做更多处理
 
-        # ── 5. 岗位节点（含 P 编号） ──
-        pm = POS_LINE_RE.search(clean)
-        if not pm or not current_type or current_type == "skip":
+        # ── 5. 岗位节点（含 P 编号） ── 两步匹配
+        if not current_type or current_type == "skip":
             continue
 
-        pos_number = pm.group(1)
-        pos_name_en = pm.group(2).strip()
-        pos_name_cn = pm.group(3).strip()
-        legal_cat = pm.group(4) if pm.group(4) else None
-        opening = pm.group(5)
-        remark = pm.group(6) if pm.group(6) else None
+        bm = POS_BASE_RE.search(clean)
+        if not bm:
+            continue
+
+        pos_number = bm.group(1)
+        mid_str = bm.group(2).strip()  # 英文名 - 中文名 【legal】
+        opening = bm.group(3)
+
+        mm = POS_MID_RE.search(mid_str)
+        if not mm:
+            continue
+
+        pos_name_en = mm.group(1).strip()
+        pos_name_cn = mm.group(2).strip()
+        legal_cat = mm.group(3).strip() if mm.group(3) else None
+
+        # 第三步：在 (Opening:YYYY) 之后提取可选的 【备注】
+        after_opening = clean[bm.end():]
+        tm = POS_TRAIL_RE.search(after_opening)
+        remark = tm.group(1).strip() if tm else None
 
         # 确定直线经理：
         # 同深度节点 → 报告给该深度首个节点（领袖）
@@ -160,22 +193,36 @@ def parse_orgchart(md_text: str) -> Tuple[List[Dict], Dict]:
 
 
 def _infer_companies_from_text(lines: List[str], positions: List[Dict], company_map: Dict):
-    """扫描原文，为每个岗位行找到最近的父公司。"""
+    """扫描原文的 tree 代码块，为每个岗位行找到最近的父公司。"""
     pos_numbers = {p["number"] for p in positions}
     current_company = None
+    in_tree = False
 
     for line in lines:
+        stripped_line = line.strip()
+        if stripped_line.startswith("```"):
+            if "tree" in stripped_line.lower() or stripped_line == "```tree":
+                in_tree = True
+                continue
+            elif stripped_line == "```":
+                in_tree = False
+                continue
+        if stripped_line.startswith("# 完整组织架构树") or stripped_line == "完整组织架构树":
+            in_tree = True
+            continue
+
+        if not in_tree:
+            continue
+
         if not line.strip():
             continue
 
         stripped = line.lstrip()
-        clean = stripped
-        for ch in "│├└─ ":
-            clean = clean.lstrip(ch)
+        clean = stripped.lstrip("│├└─ ")
         if not clean:
             continue
 
-        # 公司行
+        # 公司行（仅在 tree 块内）
         if not P_NUM_RE.search(clean):
             cm = COMPANY_RE.search(clean)
             if cm:
@@ -242,9 +289,10 @@ def parse_rules(md_text: str) -> Dict:
     return rules
 
 
-def clean_data(positions: List[Dict], rules: Dict) -> Tuple[List[Dict], List[str]]:
+def clean_data(positions: List[Dict], rules: Dict, company_map: Dict = None) -> Tuple[List[Dict], List[str]]:
     """清洗数据：验证字段、补全默认值、生成显示名。
 
+    工作地点从公司名字推断（company_map），不依赖岗位编号。
     返回 (cleaned_positions, warnings)。
     """
     warnings = []
@@ -286,7 +334,36 @@ def clean_data(positions: List[Dict], rules: Dict) -> Tuple[List[Dict], List[str
             warnings.append(f"⚠️ {row['number']}: 无法确定隶属公司")
             row["company"] = "未知"
 
-        # 5. 填充默认值
+        # 5. 推断法律强制（从 legal_cat 或 remark 提取，兼容两种格式）
+        if not row.get("legal_category") and not row.get("legal_cat"):
+            remark = row.get("remark", "") or ""
+            if "法律强制" in remark:
+                row["legal_category"] = "法律强制·内部全职不可外包"
+            elif "可选" in remark:
+                row["legal_category"] = "可选（集团内控推荐）"
+            elif "纯后勤" in remark:
+                row["legal_category"] = "纯后勤可选"
+        # 如果有 legal_cat（从解析器提取），复制到 legal_category
+        if row.get("legal_cat") and not row.get("legal_category"):
+            row["legal_category"] = row["legal_cat"]
+
+        # 6. 推断级别
+        if not row.get("level"):
+            row["level"] = _infer_level(row.get("name_en", ""))
+
+        # 6b. 推断国家/地区范围（用于推断工作地点）
+        if not row.get("country_scope"):
+            row["country_scope"] = _infer_country_scope(pos["number"])
+
+        # 7. 推断工作地点（从公司名字的地点信息推断，不依赖岗位编号）
+        if not row.get("work_location") or row["work_location"] == "未指定":
+            company = row.get("company", "")
+            if company_map and company in company_map:
+                loc = company_map[company].get("location", "")
+                if loc:
+                    row["work_location"] = loc
+
+        # 8. 填充默认值
         row.setdefault("closing_date", "N/A")
         row.setdefault("work_location", "未指定")
         row.setdefault("prev_position", "N/A")
@@ -361,35 +438,116 @@ def _format_manager(manager_number: str, positions_map: Dict) -> str:
 
 def _infer_country_scope(number: str) -> Optional[str]:
     """从岗位编号推断国家或地区。"""
-    # P001-1 → Family, P003-2 → Global, P051-4-7 → Country·美国
     parts = number.split("-")
-    if len(parts) >= 2:
-        suffix = parts[-1]
-        if suffix == "1":
-            return "Family"
-        elif suffix == "2":
-            return "Global"
-        elif suffix == "3":
-            return "Regional"
-        elif suffix == "4" and len(parts) >= 4:
-            country_map = {
-                "1": "Country·比利时", "2": "Country·丹麦", "3": "Country·瑞典",
-                "4": "Country·荷兰", "5": "Country·卢森堡", "6": "Country·英国",
-                "7": "Country·美国", "8": "Country·中国香港", "9": "Country·中国上海",
-            }
-            country_id = parts[2]
-            return country_map.get(country_id, f"Country·未知({country_id})")
+    if len(parts) < 2:
+        return None
+    # Country scope: Pxxx-4-{country}（parts[-2]=='4'）
+    if len(parts) >= 3 and parts[-2] == "4":
+        country_map = {
+            "1": "Country·比利时", "2": "Country·丹麦", "3": "Country·瑞典",
+            "4": "Country·荷兰", "5": "Country·卢森堡", "6": "Country·英国",
+            "7": "Country·美国", "8": "Country·中国香港", "9": "Country·中国上海",
+        }
+        country_id = parts[-1]
+        return country_map.get(country_id, f"Country·未知({country_id})")
+    suffix = parts[-1]
+    if suffix == "1":
+        return "Family"
+    elif suffix == "2":
+        return "Global"
+    elif suffix == "3":
+        return "Regional"
     return None
 
 
-def _infer_level(number: str, name: str) -> str:
-    """从岗位编号和职位名推断级别（简化逻辑，按 Position.md 规则）。"""
-    # 从编号范围和已知模式推断
-    if "M12b" in name or "CEO" in name.upper():
-        return "M12b"
-    if "Chairman" in name or "General Manager" in name:
-        return "M12b"  # Chairman & General Manager → M12b
-    # 默认不推断，留空
+# 工作地点映射（从国家或地区推断）
+SCOPE_TO_LOCATION = {
+    "Family": "卢森堡",
+    "Global": "比利时布鲁塞尔",
+    "Regional": "未指定",
+    "Country·比利时": "比利时布鲁塞尔",
+    "Country·丹麦": "丹麦",
+    "Country·瑞典": "瑞典",
+    "Country·荷兰": "荷兰",
+    "Country·卢森堡": "卢森堡",
+    "Country·英国": "英国伦敦",
+    "Country·美国": "美国特拉华",
+    "Country·中国香港": "中国香港",
+    "Country·中国上海": "中国上海",
+}
+
+# 常见职位→级别映射（用于 Org-Chart2 等无显式级别的数据）
+TITLE_LEVEL_MAP = {
+    "Managing Director": "M11a",
+    "Global AML Supervisor": "M10",
+    "Tax & TP Officer": "M7",
+    "Chief Consultant": "M9a",
+    "Group Chief Executive": "M12b",
+    "Chief Executive Officer": "M12b",
+    "Group Global AML Compliance Officer": "M10",
+    "MLRO Governance Supervisor": "M7",
+    "Investment Governance Manager": "M10",
+    "Contract Governance Manager": "M9a",
+    "Transfer Pricing Supervisor": "M7",
+    "Internal Audit Manager": "M8a",
+    "Senior Global Internal Audit Specialist": "B8a",
+    "Corporate President": "M11a",
+    "General Manager": "M11a",
+    "Executive Assistant": "B8a",
+    "Finance Manager": "M8a",
+    "Statutory MLRO": "M8a",
+    "AML Deputy Specialist": "B7a",
+    "Operation Coordinator": "M8b",
+    "SSC Finance Manager": "M8a",
+    "Receivable & Payable Accountant": "B7a",
+    "Consolidation Accountant": "B7b",
+    "Payroll Calculation Specialist": "B7a",
+    "HR Master Data Specialist": "B7a",
+    "System Support Specialist": "M8a",
+    "Vendor Governance Manager": "M8a",
+    "Real Estate General Manager": "M9a",
+    "Real Estate Compliance Manager": "B8a",
+    "Real Estate Compliance Director": "M9a",
+    "SSC Operation Coordinator": "M8b",
+    "SSC AML Deputy Backup": "B7b",
+    "SSC Statutory MLRO": "M8a",
+    "IT General Manager": "M11a",
+    "IT Delivery Supervisor": "M7",
+    "IT Compliance": "M8a",
+    "Finance Manager": "M8a",
+    "Payment Approving Supervisor": "M7",
+    "Chief Accountant": "B7b",
+    "Tax & Treasury Officer": "B7a",
+    "HR & Admin Manager": "M8a",
+    "Corporate Legal Officer": "B8a",
+    "Internal Audit Liaison": "M8a",
+    "Outsourcing Governance Coordinator": "M7",
+    "Senior Domestic HR Manager": "M8a",
+    "China SSC General Manager": "M11a",
+    "Finance Shared Service Supervisor": "M7",
+    "HR Shared Service Supervisor": "M7",
+    "IT Shared Service Supervisor": "M7",
+    "Admin Shared Supervisor": "M7",
+    "Admin & IT Shared Service Manager": "M8a",
+    "SPF Asset Compliance Manager": "M8a",
+    "SPF Real Estate Administrator": "B7a",
+    "Corporate Secretary": "M9a",
+    "Corporate Treasurer": "M9a",
+    "Corporate President": "M11a",
+    "Legal Representative": "M9a",
+    "Film Investment Manager": "M8a",
+}
+
+
+def _infer_level(pos_name_en: str) -> str:
+    """从职位名推断级别。"""
+    # 精确匹配
+    if pos_name_en in TITLE_LEVEL_MAP:
+        return TITLE_LEVEL_MAP[pos_name_en]
+    # 模糊匹配
+    for key, level in TITLE_LEVEL_MAP.items():
+        if key in pos_name_en:
+            return level
     return ""
 
 
@@ -442,13 +600,13 @@ def run_clean(orgchart_md: str, rules_md: str) -> Dict:
     # 2. 解析 Position.md 规则
     rules = parse_rules(rules_md)
 
-    # 3. 清洗数据
-    cleaned, warnings = clean_data(positions, rules)
+    # 3. 清洗数据（传入公司信息用于推断工作地点）
+    cleaned, warnings = clean_data(positions, rules, company_map=company_map)
 
     # 4. 补充推断字段（级别、国家范围）
     for pos in cleaned:
         if not pos.get("level"):
-            pos["level"] = _infer_level(pos["number"], pos.get("name_en", ""))
+            pos["level"] = _infer_level(pos.get("name_en", ""))
         if not pos.get("country_scope"):
             pos["country_scope"] = _infer_country_scope(pos["number"])
 
