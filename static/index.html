@@ -10,6 +10,7 @@
   <header>
     <h1>🏢 HR 管理系统</h1>
     <nav>
+      <button data-tab="data_clean">数据清洗</button>
       <button data-tab="master">主数据配置</button>
       <button data-tab="positions">岗位管理</button>
       <button data-tab="employees">员工管理</button>
@@ -19,6 +20,7 @@
     <div id="stats" class="stats"></div>
   </header>
   <main>
+    <section id="tab-data_clean" class="tab"></section>
     <section id="tab-master" class="tab"></section>
     <section id="tab-positions" class="tab active"></section>
     <section id="tab-employees" class="tab"></section>
@@ -29,6 +31,7 @@
 
   <script src="/static/js/api.js"></script>
   <script src="/static/js/app.js"></script>
+  <script src="/static/js/data_clean.js"></script>
   <script src="/static/js/master_data.js"></script>
   <script src="/static/js/positions.js"></script>
   <script src="/static/js/employees.js"></script>

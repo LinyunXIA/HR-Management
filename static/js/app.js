@@ -50,7 +50,8 @@ const App = {
       s.classList.toggle('active', s.id === `tab-${tab}`));
     this.loadStats();
     try {
-      if (tab === 'master') await MasterData.render();
+      if (tab === 'data_clean') await DataClean.render();
+      else if (tab === 'master') await MasterData.render();
       else if (tab === 'positions') await Positions.render();
       else if (tab === 'employees') await Employees.render();
       else if (tab === 'orgchart') await OrgChart.render();
