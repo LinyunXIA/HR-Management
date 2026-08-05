@@ -102,13 +102,18 @@ def import_cleaned_data():
 
 
 @router.post("/upload-parse")
-async def upload_and_parse(
-    orgchart: UploadFile = File(...),
-    rules: UploadFile = File(...),
-):
-    """上传原始文件并解析（不入库，仅返回预览+报告）。"""
+async def upload_orgchart(orgchart: UploadFile = File(...)):
+    """上传 Org-Chart.md 并解析（规则文件使用固定模版 Position.md）。
+
+    返回清洗后的 CSV 预览（格式与 Position.csv 模版对齐）。
+    """
     org_text = (await orgchart.read()).decode("utf-8")
-    rules_text = (await rules.read()).decode("utf-8")
+
+    # 规则文件使用固定的 Position.md
+    rules_path = RAW_DIR / "Position.md"
+    if not rules_path.exists():
+        raise HTTPException(500, "规则文件 Position.md 不存在")
+    rules_text = rules_path.read_text(encoding="utf-8")
 
     result = run_clean(org_text, rules_text)
 
@@ -117,4 +122,5 @@ async def upload_and_parse(
         "report": result["report"],
         "csv_text": result["csv_text"],
         "cleaned": result["cleaned"],
+        "template": "Position.csv",
     }
