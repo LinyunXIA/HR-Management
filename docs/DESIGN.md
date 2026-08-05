@@ -55,6 +55,7 @@ HR_Management/
 │   ├── schemas.py          # Pydantic 模型
 │   ├── lifecycle.py        # 状态机 + 流转校验 + 事件记录
 │   ├── orgchart.py         # 组织树构建 + 环检测
+│   ├── data_clean.py       # Org-Chart.md 解析 + 清洗（兼容多种格式）
 │   ├── export_md.py        # 组织图导出 MD（3 格式）
 │   ├── import_csv.py       # Position.csv 解析/校验/入库
 │   └── routers/
@@ -63,6 +64,7 @@ HR_Management/
 │       ├── positions.py
 │       ├── employees.py
 │       ├── orgchart.py
+│       ├── data_clean.py   # 数据清洗路由：上传解析 + 确认导入
 │       └── import_routes.py
 ├── static/
 │   ├── index.html          # 单页，Tab：主数据/岗位/员工/组织架构/导入
@@ -286,7 +288,34 @@ REST 规范：名词复数资源、HTTP 方法映射 CRUD（GET 查 / POST 建 /
   - US Statutory MLRO (P054-4-7) → Group Global AML Compliance Officer (P005-2)
   ```
 
-## 7. Position.csv 导入（app/import_csv.py + 路由 + CLI）
+## 7. Org-Chart 数据清洗（app/data_clean.py）
+
+上传 Org-Chart.md，按 Position.csv 模版格式自动解析、清洗、输出标准 CSV，可一键导入。
+
+### 7.1 解析流程
+1. **树块检测**：兼容两种格式——` ```tree ` 代码块（Org-Chart2）和 `# 完整组织架构树` 标题后无标记树（Org-Chart.md）
+2. **行解析**：从树字符剥离 → 提取 P 编号（`P\d{3,}-(?:[123]|4-\d{1,2})`）→ 两步正则匹配职位名/中文名/法律分类/年份
+3. **仅提取内部全职岗位**（🧑‍💼 In-house + 👨‍👩‍👧 Family Volunteer），排除外包岗 📋
+4. **公司/经理推断**：仅扫描树块，从父节点继承隶属公司和直线经理
+
+### 7.2 清洗规则（8 个关键字段完整读取）
+| 字段 | 来源 |
+| --- | --- |
+| 职位名 | P 编号后的英文名，去除 Global/Regional/Family 前缀（Position.md 规则：不含工作范围） |
+| 职位类型 | 树中的 🧑‍💼/👨‍👩‍👧 类型标记 |
+| 隶属公司 | 树中最近的公司父节点（从 parenthetical 提取公司名） |
+| 级别 | 从职位名推断（Managing Director→M11a，CEO→M12b，等） |
+| 国家或地区 | 从岗位编号后缀推断（-4-5→Country·卢森堡） |
+| 职位开启日 | `(Opening:YYYY)` |
+| **工作地点** | **从公司名字的地点信息推断**（不依赖岗位编号，支持未来无编号格式） |
+| 法律强制/可选 | P 编号后的 `【...】` 注解提取 |
+
+### 7.3 兼容性
+- **Org-Chart.md**（原始版）：5 个岗位全部正确读取
+- **Org-Chart2.md**（新版）：68 个岗位全部读取（公司、级别、开启日、法律强制均正确）
+- 直线经理：简单深度推断（扁平树完全正确，嵌套树可后续手动调整）
+
+## 8. Position.csv 导入（app/import_csv.py + 路由 + CLI）
 
 - 标准库 `csv` 解析（自动处理引号逗号，如 `"Peeters Shanghai IT Services Co., Ltd."`）。
 - 字段映射 16 列 → `position_numbers`；自动建 company / position(职能) / country。
@@ -305,6 +334,7 @@ CLI：`python -m scripts.import_csv data/Position.csv`；Web：上传接口。
 - **岗位管理**：列表（筛选+搜索+分页）→ 新建表单（**编号自动生成、不可填**；工作职责描述/三个成本字段/备注可空）→ 详情抽屉：全部字段 + 占用员工 + 直线/虚线经理（**仅管理岗可选**）+ **成本字段区** + **生命周期时间线** + 流转操作按钮。
   - 成本字段区：模式切换（自动计算 / 手动输入）单选框，**未启用模式字段置灰**；自动模式点「重算」调用 `/calc-cost`。
 - **员工管理**：列表 → 新建（选择岗位，仅列 Open/Vacant/Offered）→ 详情：档案 + 入职/调岗/离职操作。
+- **数据清洗（data_clean.js）**：上传 Org-Chart.md → 解析报告 → CSV 预览（Position.csv 格式）→ 下载/复制/确认导入。
 - **导入页**：文件选择上传 + 校验报告（imported/skipped/errors 明细）。
 - **组织架构图（orgchart.js，核心）**：
   - 读取 `/api/orgchart`，按 `solid_line_manager_id` 建多根树。
@@ -341,9 +371,10 @@ CLI：`python -m scripts.import_csv data/Position.csv`；Web：上传接口。
    - `POST /api/positions/{id}/calc-cost` 按国家税务科目正确计算。
    - 导入含重复编号的 CSV → 报告 errors 列出重复明细，重复行不导入。
    - `POST /api/positions` 不传 `number` 正常生成；`POST /api/employees` 省略 birth_date/phone/email/remark 正常保存。
-5. **UI 走查**：导入 → 主数据配置（增改级别/地点/国家/用工税额）→ 岗位详情时间线（已关闭岗有关闭事件）→ 成本字段模式切换（置灰联动）→ 新建员工挂到 Open 岗 → 该岗变 Filled、组织图显示在职 → 调岗（旧岗 Vacant）→ 离职（岗位 Vacant）。
+5. **UI 走查**：数据清洗 → 导入 → 主数据配置 → 岗位详情 → 成本字段 → 员工管理 → 组织图 → 导出 MD。
 6. **组织图**：实线/虚线正确渲染；虚拟根开关生效；公司聚焦视图正确；缩放/平移可用；导出 MD 3 种格式内容正确；关闭岗置灰可隐藏。
-7. 数据备份：复制 `data/db/hr.db` 后重开可用。
+7. **数据清洗验证**：原始 Org-Chart.md（5 岗）+ Org-Chart2.md（68 岗）均可正确解析；8 个关键字段（职位/类型/公司/级别/国家范围/开启日/工作地点/法律强制）全部读取。
+8. 数据备份：复制 `data/db/hr.db` 后重开可用。
 
 ## 11. 风险与注意点
 

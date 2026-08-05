@@ -305,7 +305,48 @@
 
 ---
 
-## 7. 健康检查
+## 7. 数据清洗（Org-Chart 解析 → CSV 生成）
+
+上传 Org-Chart.md，按 Position.csv 模版格式自动解析、清洗、输出标准 CSV。规则文件（Position.md）使用固定模版。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/data-clean/files` | 列出 testingdata/原始文件/ 下的文件 |
+| POST | `/data-clean/parse` | 解析固定原始文件（Org-Chart.md + Position.md），返回报告+预览 |
+| POST | `/data-clean/upload-parse` | 上传 Org-Chart.md（规则用固定 Position.md），返回报告+CSV |
+| POST | `/data-clean/import` | 确认导入（解析+幂等 upsert） |
+
+**POST /data-clean/upload-parse（上传 Org-Chart.md）**
+
+multipart/form-data，字段 `orgchart`：Org-Chart.md 文件。
+
+响应：
+
+```json
+{
+  "total_positions": 68,
+  "report": {
+    "total_positions": 68,
+    "valid": 57,
+    "fixed": 11,
+    "warnings": [{"position": "P004-1", "warning": "已去除工作范围前缀 'Global'"}],
+    "errors": []
+  },
+  "csv_text": "职位,职位类型,岗位编号,隶属公司,...",
+  "cleaned": [...],
+  "template": "Position.csv"
+}
+```
+
+**解析能力**：
+- 兼容两种 Org-Chart 格式（` ```tree ` 代码块 / 无标记树块）
+- 仅提取内部全职岗位（🧑‍💼 + 👨‍👩‍👧），排除外包岗 📋
+- 从树结构推断隶属公司和直线经理
+- 8 个关键字段完整读取：职位名、职位类型、隶属公司、级别（从职位名推断）、国家或地区（从岗位编号推断）、职位开启日、工作地点（从**公司名字**推断，不依赖岗位编号）、法律强制/可选
+
+---
+
+## 8. 健康检查
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
@@ -328,6 +369,7 @@
 | POST | /employees/{id}/transfers | employees |
 | GET | /orgchart | orgchart |
 | POST | /import/csv | import_routes |
+| GET/POST | /data-clean/files、/parse、/upload-parse、/import | data_clean |
 | GET | /health | main |
 
 > 注：以上为系统当前活跃端点全集。
