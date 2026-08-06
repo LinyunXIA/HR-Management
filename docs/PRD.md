@@ -118,8 +118,8 @@ Position.csv 模版文件
 | --- | --- |
 | `Org-Chart.md` | 最初始的 Org-Chart 格式（导入时的源文件之一） |
 | `Org-Chart2.md` | 另一种 Org-Chart 格式（导入时的源文件之一，2007-2012 周期） |
-| `Position.md` | **导入规则文件**（级别对照、工作范围/国家编号、工作地点、汇报规则等），可导入配置管理 |
-| `Position.csv` | **清洗后导出的模版文件**，也是最终导入系统的模版文件（17 列） |
+| `Position.md` | **导入规则文件**（级别对照、工作范围/国家编号、工作地点、汇报规则、**职位类型映射**（§9）等），可导入配置管理 |
+| `Position.csv` | **清洗后导出的模版文件**，也是最终导入系统的模版文件（17 列，含「职位类型」列） |
 
 数据流：`Org-Chart.md / Org-Chart2.md` → 系统数据清洗模块 → 输出 `Position.csv` 模版 → 用户下载/编辑 → 上传导入系统。
 
@@ -150,6 +150,7 @@ Position.csv 模版文件
 | **工作范围** Scope | 新增/编辑/排序；用于岗位「工作范围」下拉 | Family / Global / Regional / Country 初始化 |
 | **国家/地区** Country | 新增/编辑；工作范围=Country 时的**二级菜单** | 按 §3.2 9 个国家初始化 |
 | **法律强制/可选** Legal Category | 新增/编辑；用于岗位「法律强制/可选」下拉 | 按 §3.5 三类初始化 |
+| **职位类型** Position Type | 新增/编辑；用于岗位「职位类型」下拉 | 按 §3.7 三类初始化（Consultant / Employee / External Employee） |
 | **员工用工税额** Employment Tax | 按国家维护税务科目与税率（见 F1.6） | 空（用户逐国配置） |
 
 - **下拉过滤规则**：岗位管理的**直线经理 / 虚线经理**下拉框，仅显示**管理岗**（级别以 `M` 开头，如 M7 / M8a / M10 / M12b）的岗位，个人贡献者（B 级）岗位不出现。
@@ -179,6 +180,7 @@ Position.csv 模版文件
 | 虚线经理 | 岗位编号引用（0~N） | 否 |
 | 法律强制/可选 | §3.5 三类 | 是 |
 | Org-Chart中的显示 | 组织架构图展示名 | 是 |
+| **职位类型** | 职位类型（Consultant / Employee / External Employee，由 F0 主数据字典维护，岗位表单下拉选择） | **否** |
 | 之前的职位 | 转岗来源岗位编号 | 否 |
 | 之前的公司 | 转岗来源公司 | 否 |
 | 备注 | 兼任、双线汇报、外包归集、法定任命等 | 否 |
@@ -326,7 +328,7 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 | 字段 | 读取方式 |
 | --- | --- |
 | 职位名 | 从树中提取英文名，自动去除工作范围前缀（Global/Regional/Family） |
-| 职位类型 | 从树中的 🧑‍💼/👨‍👩‍👧 标记继承 |
+| 职位类型 | 从树中的 🧑‍💼/👨‍👩‍👧 标记继承，按 Position.md §9 映射：Family Volunteer Unpaid→Consultant，In-house Full-time→Employee，Outsourced External→External Employee（清洗时排除外包岗） |
 | 隶属公司 | 从树的父节点继承（最近的公司节点） |
 | 级别 | 从职位名推断（Managing Director→M11a，CEO→M12b，等） |
 | 国家或地区 | 从岗位编号后缀推断（-4-5→Country·卢森堡） |

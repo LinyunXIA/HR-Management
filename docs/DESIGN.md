@@ -139,6 +139,7 @@ class PositionNumber(Base):        # 岗位编号（管理主体）
     work_location String(名称)     # 来自 work_locations 字典
     job_responsibility
     legal_category String(名称)    # 来自 legal_categories 字典
+    position_type  String(名称)    # 职位类型：Consultant/Employee/External Employee（来自 position_types 字典）
     solid_line_manager_id  FK self, nullable   # 直线经理（仅管理岗可选）
     org_chart_display, prev_position_id, prev_company_id, remark
     status        Enum(planned|open|offered|filled|vacant|frozen|closed)
@@ -302,7 +303,7 @@ REST 规范：名词复数资源、HTTP 方法映射 CRUD（GET 查 / POST 建 /
 | 字段 | 来源 |
 | --- | --- |
 | 职位名 | P 编号后的英文名，去除 Global/Regional/Family 前缀（Position.md 规则：不含工作范围） |
-| 职位类型 | 树中的 🧑‍💼/👨‍👩‍👧 类型标记 |
+| 职位类型 | 树中的 🧑‍💼/👨‍👩‍👧 类型标记，按 Position.md §9 映射（Family Volunteer→Consultant，In-house→Employee，Outsourced→External Employee 且清洗时排除） |
 | 隶属公司 | 树中最近的公司父节点（从 parenthetical 提取公司名） |
 | 级别 | 从职位名推断（Managing Director→M11a，CEO→M12b，等） |
 | 国家或地区 | 从岗位编号后缀推断（-4-5→Country·卢森堡） |
