@@ -11,7 +11,7 @@ env/
 ENV/
 
 # ===== 运行时数据 =====
-# data/ 整个目录（含 SQLite 数据库，可由 testingdata/Position.csv 导入重建）
+# data/ 整个目录（PostgreSQL 配置见 DATABASE_URL 环境变量，测试数据从 testingdata/Position.csv 导入）
 data/
 
 # ===== 源数据 / 参考文档 =====

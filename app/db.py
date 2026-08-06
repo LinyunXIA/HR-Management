@@ -1,15 +1,14 @@
-"""数据库引擎与会话管理（SQLite 单文件，位于 data/db/）。"""
+"""数据库引擎与会话管理（PostgreSQL，全部新建，无历史迁移）。"""
 import os
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB_DIR = os.path.join(BASE_DIR, "data", "db")
-os.makedirs(DB_DIR, exist_ok=True)
-DB_PATH = os.path.join(DB_DIR, "hr.db")
+# 通过环境变量配置 PostgreSQL 连接
+# 示例: DATABASE_URL=postgresql://user:password@localhost:5432/hr_db
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/hr_db")
 
-engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 

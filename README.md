@@ -9,7 +9,12 @@
 # 1. 安装依赖（Python 3.14）
 .venv/bin/pip install -r requirements.txt
 
-# 2. 启动（自动建表，首次需导入数据）
+# 2. 配置 PostgreSQL 连接（全部新建，无历史迁移）
+cp .env.example .env
+# 编辑 .env 设置 DATABASE_URL，例如：
+#   DATABASE_URL=postgresql://user:password@localhost:5432/hr_db
+
+# 3. 启动（自动建表到 PostgreSQL）
 .venv/bin/uvicorn main:app --reload
 ```
 
@@ -24,7 +29,7 @@
 # 或网页「数据导入」页面上传 Position.csv
 ```
 
-仓库内的 `data/db/hr.db` 已含导入好的 63 个岗位（当前 Position.csv 数据源），直接启动即可查看。
+需要先在 PostgreSQL 中创建数据库 `hr_db`。数据从 `testingdata/Position.csv` 全部新建导入。
 
 ## 功能
 
@@ -47,10 +52,10 @@
 ## 项目结构
 
 ```
-main.py                  FastAPI 入口（建表、路由、静态托管）
+main.py                  FastAPI 入口（建表到 PostgreSQL、路由、静态托管）
 app/                    后端：models / lifecycle 状态机 / orgchart / import_csv / routers
 static/                 前端：原生 JS 单页（岗位/员工/组织图/导入）
 scripts/import_csv.py    CLI 导入脚本
 testingdata/            源数据：Position.csv / Position.md / Org-Chart.md
-data/db/hr.db            SQLite 数据库
+.env.example            PostgreSQL 连接配置示例
 ```
