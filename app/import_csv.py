@@ -142,12 +142,16 @@ def import_csv(db, rows):
             except ValueError:
                 report["warnings"].append(f"{number}: 未知法律分类「{lc}」")
 
+        # 职位类型（Position.md §9：Consultant / Employee / External Employee）
+        position_type = (raw.get("职位类型") or "").strip() or None
+
         data = {
             "position_id": positions[function_name].id,
             "company_id": companies[company_name].id,
             "level": (raw.get("级别") or "").strip() or None,
             "scope": scope,
             "country_id": country.id if country else None,
+            "position_type": position_type,
             "opening_date": opening,
             "closing_date": closing,
             "work_location": (raw.get("工作地点") or "").strip() or None,

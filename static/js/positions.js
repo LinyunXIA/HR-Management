@@ -43,7 +43,7 @@ const Positions = {
           <button class="btn primary" id="pf-new">＋ 新建岗位</button>
         </div>
         <table>
-          <thead><tr><th>岗位编号</th><th>职位</th><th>隶属公司</th><th>级别</th><th>范围</th><th>状态</th><th>占用员工</th><th>税前薪资</th><th>公司份额</th><th>用工成本</th><th></th></tr></thead>
+          <thead><tr><th>岗位编号</th><th>职位</th><th>职位类型</th><th>隶属公司</th><th>级别</th><th>范围</th><th>状态</th><th>占用员工</th><th>税前薪资</th><th>公司份额</th><th>用工成本</th><th></th></tr></thead>
           <tbody>${this.rows()}</tbody>
         </table>
         ${this.pager()}
@@ -60,11 +60,12 @@ const Positions = {
   },
 
   rows() {
-    if (!this.result.items.length) return '<tr><td colspan="11" class="empty">暂无岗位</td></tr>';
+    if (!this.result.items.length) return '<tr><td colspan="12" class="empty">暂无岗位</td></tr>';
     return this.result.items.map((p) => `
       <tr>
         <td class="num">${esc(p.number)}</td>
         <td>${esc(p.position_name)}</td>
+        <td>${esc(p.position_type || '—')}</td>
         <td>${esc(p.company_name)}</td>
         <td>${esc(p.level || '—')}</td>
         <td>${esc(scopeDisplay(p))}</td>
@@ -116,6 +117,9 @@ const Positions = {
           <div class="field"><label>级别</label>
             <select id="pc-level"><option value="">—</option>${App.levels.map((l) => `<option value="${esc(l.code)}">${esc(l.code)}${l.label ? ' · ' + esc(l.label) : ''}${l.is_management ? '（管理岗）' : ''}</option>`).join('')}</select>
           </div>
+          <div class="field"><label>职位类型</label>
+            <select id="pc-ptype"><option value="">—</option>${App.positionTypes.map((t) => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join('')}</select>
+          </div>
           <div class="field"><label>工作范围 *</label>
             <select id="pc-scope">${App.scopes.map((s) => `<option value="${s.code}">${esc(s.label)}</option>`).join('')}</select>
           </div>
@@ -166,6 +170,7 @@ const Positions = {
         level: val('#pc-level') || null,
         scope: val('#pc-scope'),
         country_id: val('#pc-scope') === 'country' ? +val('#pc-country') : null,
+        position_type: val('#pc-ptype') || null,
         opening_date: val('#pc-opening') || null,
         closing_date: val('#pc-closing') || null,
         work_location: val('#pc-wloc') || null,
@@ -217,7 +222,8 @@ const Positions = {
         <div class="detail-grid">
           ${ditem('岗位编号', p.number)} ${ditem('状态', statusBadge(p.status))}
           ${ditem('职位', p.position_name)} ${ditem('隶属公司', p.company_name)}
-          ${ditem('级别', p.level)} ${ditem('工作范围', scopeDisplay(p))}
+          ${ditem('级别', p.level)} ${ditem('职位类型', p.position_type || '—')}
+          ${ditem('工作范围', scopeDisplay(p))}
           ${ditem('开启日', fmtDate(p.opening_date))} ${ditem('关闭日', fmtDate(p.closing_date))}
           ${ditem('工作地点', p.work_location)} ${ditem('占用员工', p.incumbent_name || '—')}
           ${ditem('直线经理', p.solid_line_number ? `${p.solid_line_number} ${p.solid_line_manager_name || ''}` : '—')}
@@ -288,6 +294,9 @@ const Positions = {
           <div class="field"><label>级别</label>
             <select id="pe-level"><option value="">—</option>${App.levels.map((l) => `<option value="${esc(l.code)}" ${l.code === p.level ? 'selected' : ''}>${esc(l.code)}${l.label ? ' · ' + esc(l.label) : ''}</option>`).join('')}</select>
           </div>
+          <div class="field"><label>职位类型</label>
+            <select id="pe-ptype"><option value="">—</option>${App.positionTypes.map((t) => `<option value="${esc(t.name)}" ${t.name === p.position_type ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select>
+          </div>
           <div class="field"><label>工作范围</label>
             <select id="pe-scope">${App.scopes.map((s) => `<option value="${s.code}" ${s.code === p.scope ? 'selected' : ''}>${esc(s.label)}</option>`).join('')}</select>
           </div>
@@ -355,6 +364,7 @@ const Positions = {
         level: val('#pe-level') || null,
         scope: val('#pe-scope'),
         country_id: val('#pe-scope') === 'country' ? +val('#pe-country') : null,
+        position_type: val('#pe-ptype') || null,
         opening_date: val('#pe-opening') || null,
         closing_date: val('#pe-closing') || null,
         work_location: val('#pe-wloc') || null,

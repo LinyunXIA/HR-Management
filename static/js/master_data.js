@@ -32,6 +32,9 @@ const MasterData = {
     { key: 'legalcategories', label: '法律强制/可选', endpoint: '/legal-categories',
       columns: [{ k: 'name', label: '名称' }, { k: 'sort_order', label: '排序' }],
       fields: [{ k: 'name', label: '名称', type: 'text', req: true }, { k: 'sort_order', label: '排序', type: 'number' }] },
+    { key: 'positiontypes', label: '职位类型', endpoint: '/position-types',
+      columns: [{ k: 'name', label: '名称' }, { k: 'sort_order', label: '排序' }],
+      fields: [{ k: 'name', label: '名称', type: 'text', req: true }, { k: 'sort_order', label: '排序', type: 'number' }] },
   ],
 
   async render() {

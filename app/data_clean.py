@@ -19,9 +19,13 @@ P_NUM_PATTERN = r"P\d{3,}-(?:[123]|4-\d{1,2})"
 P_NUM_RE = re.compile(rf"\b({P_NUM_PATTERN})\b")
 
 # 行类型：🧑‍💼 In-house Full-time / 👨‍👩‍👧 Family Volunteer Unpaid / 📋 Outsourced External
+# 映射规则（Position.md §9）：
+#   Family Volunteer Unpaid → Consultant
+#   In-house Full-time     → Employee
+#   Outsourced External    → External Employee（清洗时排除外包岗，不入库）
 TYPE_MAP = {
-    "🧑‍💼": "In-house Full-time - Employee",
-    "👨‍👩‍👧": "Family Volunteer Unpaid - Consultant",
+    "🧑‍💼": "Employee",
+    "👨‍👩‍👧": "Consultant",
 }
 SKIP_TYPES = {"📋"}
 

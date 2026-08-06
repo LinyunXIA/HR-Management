@@ -13,6 +13,7 @@ from app.models import (
     LegalCategoryDef,
     Level,
     PositionNumber,
+    PositionType,
     ScopeDef,
     WorkLocation,
 )
@@ -32,6 +33,9 @@ from app.schemas import (
     LevelCreate,
     LevelOut,
     LevelUpdate,
+    PositionTypeCreate,
+    PositionTypeOut,
+    PositionTypeUpdate,
     ScopeCreate,
     ScopeOut,
     ScopeUpdate,
@@ -118,6 +122,12 @@ def _legal_ref(db: Session, obj: LegalCategoryDef):
         raise HTTPException(400, f"「{obj.name}」已被岗位引用，禁止删除")
 
 
+def _position_type_ref(db: Session, obj: PositionType):
+    used = db.query(PositionNumber).filter(PositionNumber.position_type == obj.name).first()
+    if used:
+        raise HTTPException(400, f"职位类型「{obj.name}」已被岗位引用，禁止删除")
+
+
 _crud(Company, CompanyOut, CompanyCreate, CompanyUpdate, "/companies", order_by="name", ref_check=_company_ref)
 _crud(Country, CountryOut, CountryCreate, CountryUpdate, "/countries", order_by="name", ref_check=_country_ref)
 _crud(Level, LevelOut, LevelCreate, LevelUpdate, "/levels", order_by="sort_order", ref_check=_level_ref)
@@ -126,6 +136,8 @@ _crud(WorkLocation, WorkLocationOut, WorkLocationCreate, WorkLocationUpdate,
 _crud(ScopeDef, ScopeOut, ScopeCreate, ScopeUpdate, "/scopes", order_by="sort_order", ref_check=_scope_ref)
 _crud(LegalCategoryDef, LegalCategoryOut, LegalCategoryCreate, LegalCategoryUpdate,
       "/legal-categories", order_by="sort_order", ref_check=_legal_ref)
+_crud(PositionType, PositionTypeOut, PositionTypeCreate, PositionTypeUpdate,
+      "/position-types", order_by="sort_order", ref_check=_position_type_ref)
 
 
 # ---------------------------------------------------------------- 对外接口：获取所有隶属公司

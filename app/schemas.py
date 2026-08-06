@@ -46,6 +46,7 @@ class PositionNumberCreate(BaseModel):
     level: str | None = None
     scope: Scope
     country_id: int | None = None
+    position_type: str | None = None  # 职位类型：Consultant/Employee/External Employee
     opening_date: date | None = None
     closing_date: date | None = None
     work_location: str | None = None
@@ -71,6 +72,7 @@ class PositionNumberUpdate(BaseModel):
     level: str | None = None
     scope: Scope | None = None
     country_id: int | None = None
+    position_type: str | None = None
     opening_date: date | None = None
     closing_date: date | None = None
     work_location: str | None = None
@@ -228,6 +230,23 @@ class LegalCategoryCreate(BaseModel):
 
 
 class LegalCategoryUpdate(BaseModel):
+    name: str | None = None
+    sort_order: int | None = None
+
+
+class PositionTypeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    sort_order: int
+
+
+class PositionTypeCreate(BaseModel):
+    name: str
+    sort_order: int = 0
+
+
+class PositionTypeUpdate(BaseModel):
     name: str | None = None
     sort_order: int | None = None
 

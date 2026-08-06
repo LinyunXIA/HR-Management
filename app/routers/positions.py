@@ -145,6 +145,7 @@ def create_position(payload: PositionNumberCreate, response: Response, db: Sessi
         level=payload.level,
         scope=payload.scope,
         country_id=country.id if country else None,
+        position_type=payload.position_type,
         opening_date=payload.opening_date,
         closing_date=payload.closing_date,
         work_location=payload.work_location,
@@ -216,7 +217,7 @@ def update_position(pid: int, payload: PositionNumberUpdate, db: Session = Depen
 
     for field in ("level", "opening_date", "closing_date", "work_location",
                   "job_responsibility", "legal_category", "org_chart_display",
-                  "prev_position_id", "prev_company_id", "remark"):
+                  "prev_position_id", "prev_company_id", "remark", "position_type"):
         val = getattr(payload, field)
         if val is not None:
             setattr(pn, field, val)

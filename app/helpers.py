@@ -131,6 +131,7 @@ def serialize_position(db: Session, pn: PositionNumber) -> dict:
         "scope": pn.scope.value if pn.scope else None,
         "country_id": pn.country_id,
         "country_name": country.name if country else None,
+        "position_type": pn.position_type,
         "opening_date": pn.opening_date,
         "closing_date": pn.closing_date,
         "work_location": pn.work_location,

@@ -135,6 +135,15 @@ class LegalCategoryDef(Base):
     sort_order = Column(Integer, nullable=False, default=0)
 
 
+class PositionType(Base):
+    """职位类型字典（按 Position.md §9 映射）。"""
+    __tablename__ = "position_types"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(50), unique=True, nullable=False)  # Consultant / Employee / External Employee
+    sort_order = Column(Integer, nullable=False, default=0)
+
+
 class EmploymentTaxItem(Base):
     """员工用工税额（按国家；科目 + 税率）。"""
     __tablename__ = "employment_tax_items"
@@ -168,6 +177,7 @@ class PositionNumber(Base):
     level = Column(String(20), nullable=True)
     scope = Column(SAEnum(Scope, native_enum=False, length=20), nullable=False)
     country_id = Column(Integer, ForeignKey("countries.id"), nullable=True)
+    position_type = Column(String(30), nullable=True)  # 职位类型：Consultant/Employee/External Employee
 
     opening_date = Column(Date, nullable=True)
     closing_date = Column(Date, nullable=True)

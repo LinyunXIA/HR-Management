@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.models import (
     LegalCategoryDef,
     Level,
+    PositionType,
     ScopeDef,
     WorkLocation,
 )
@@ -60,6 +61,13 @@ LEGAL_CATEGORIES = [
     "法律强制·内部全职不可外包",
     "可选（集团内控推荐）",
     "纯后勤可选",
+]
+
+# 职位类型：按 Position.md §9 映射规则
+POSITION_TYPES = [
+    "Consultant",          # Family Volunteer Unpaid → Consultant
+    "Employee",            # In-house Full-time → Employee
+    "External Employee",   # Outsourced External → External Employee
 ]
 
 
@@ -138,4 +146,7 @@ def seed_master_data(db: Session):
     if db.query(LegalCategoryDef).count() == 0:
         for i, name in enumerate(LEGAL_CATEGORIES):
             db.add(LegalCategoryDef(name=name, sort_order=i))
+    if db.query(PositionType).count() == 0:
+        for i, name in enumerate(POSITION_TYPES):
+            db.add(PositionType(name=name, sort_order=i))
     db.commit()
