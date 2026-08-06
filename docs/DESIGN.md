@@ -78,7 +78,7 @@ HR_Management/
 │       ├── orgchart.js     # SVG 汇报线树渲染 + 公司聚焦 + 导出
 │       └── import.js       # 导入页
 ├── scripts/
-│   └── import_csv.py       # CLI 导入：python -m scripts.import_csv testingdata/Position.csv
+│   └── import_csv.py       # CLI 导入：python -m scripts.import_csv testingdata/原始文件/Position.csv
 ├── testingdata/            # 源数据 Position.csv / Position.md / Org-Chart.md
 └── docs/                   # PRD.md / DESIGN.md / UI_MOCKUP.html
 ```
@@ -361,7 +361,7 @@ CLI：`python -m scripts.import_csv data/Position.csv`；Web：上传接口。
 
 1. `.venv/bin/pip install -r requirements.txt`（Python 3.14 兼容验证）。
 2. `uvicorn main:app --reload` → http://127.0.0.1:8000 打开。
-3. **导入**：`python -m scripts.import_csv testingdata/Position.csv` → 期望 91 行、无 error；`position_numbers`=91。
+3. **导入**：`python -m scripts.import_csv testingdata/原始文件/Position.csv` → 期望 91 行、无 error；`position_numbers`=91。
 4. **API 冒烟（curl）**：
    - `GET /api/positions?status=open` 数量正确（91 中 9 个已关闭）。
    - `GET /api/orgchart`：nodes=91、solid_edges 数、dotted_edges 数（约 20+）、roots=[P063,P066,P001]。

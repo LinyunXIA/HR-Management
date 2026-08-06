@@ -24,12 +24,12 @@ cp .env.example .env
 
 ```bash
 # 命令行导入（幂等；--reset 先清空全部数据）
-.venv/bin/python -m scripts.import_csv testingdata/Position.csv --reset
+.venv/bin/python -m scripts.import_csv testingdata/原始文件/Position.csv --reset
 
 # 或网页「数据导入」页面上传 Position.csv
 ```
 
-需要先在 PostgreSQL 中创建数据库 `hr_db`。数据从 `testingdata/Position.csv` 全部新建导入。
+需要先在 PostgreSQL 中创建数据库 `hr_db`。数据从 `testingdata/原始文件/Position.csv` 全部新建导入。
 
 ## 功能
 
@@ -56,6 +56,6 @@ main.py                  FastAPI 入口（建表到 PostgreSQL、路由、静态
 app/                    后端：models / lifecycle 状态机 / orgchart / import_csv / routers
 static/                 前端：原生 JS 单页（岗位/员工/组织图/导入）
 scripts/import_csv.py    CLI 导入脚本
-testingdata/            源数据：Position.csv / Position.md / Org-Chart.md
+testingdata/原始文件/  源数据：Position.csv / Position.md / Org-Chart.md / Org-Chart2.md
 .env.example            PostgreSQL 连接配置示例
 ```

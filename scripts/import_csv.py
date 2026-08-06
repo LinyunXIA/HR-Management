@@ -1,7 +1,7 @@
 """CLI 导入脚本。
 
 用法：
-    python -m scripts.import_csv testingdata/Position.csv [--reset]
+    python -m scripts.import_csv testingdata/原始文件/Position.csv [--reset]
     --reset  先清空全部数据表再导入（重建空库）
 """
 import csv
@@ -18,7 +18,7 @@ from app.seed import seed_master_data
 
 def main():
     args = sys.argv[1:]
-    path = "testingdata/Position.csv"
+    path = "testingdata/原始文件/Position.csv"
     reset = False
     if "--reset" in args:
         reset = True
