@@ -342,7 +342,7 @@ multipart/form-data，字段 `orgchart`：Org-Chart.md 文件。
 
 **解析能力**：
 - 兼容两种 Org-Chart 格式（` ```tree ` 代码块 / 无标记树块）
-- 仅提取内部全职岗位（🧑‍💼 + 👨‍👩‍👧），排除外包岗 📋
+- 提取全部三类岗位：🧑‍💼 / 👨‍👩‍👧 / 📋（外包岗以 `External Employee` 入库）
 - 职位类型按 Position.md §9 映射（Family Volunteer→Consultant，In-house→Employee，Outsourced→External Employee）
 - 从树结构推断隶属公司和直线经理
 - 8 个关键字段完整读取：职位名、职位类型、隶属公司、级别（从职位名推断）、国家或地区（从岗位编号推断）、职位开启日、工作地点（从**公司名字**推断，不依赖岗位编号）、法律强制/可选

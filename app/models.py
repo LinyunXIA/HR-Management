@@ -47,6 +47,7 @@ class PositionStatus(str, enum.Enum):
 class LegalCategory(str, enum.Enum):
     """法律强制/可选。"""
     MANDATORY_INTERNAL = "法律强制·内部全职不可外包"
+    MANDATORY_OUTSOURCEABLE = "法律强制·允许第三方外包"
     OPTIONAL = "可选（集团内控推荐）"
     LOGISTICS = "纯后勤可选"
 

@@ -39,9 +39,10 @@ Position.csv 模版文件
 - 开发/测试/生产三环境数据库物理隔离，同机不同库 `hr_db_{env}`，开发操作不可影响生产（见 §7D）。
 
 ### 1.3 非目标（V1 明确不做）
-- 外包服务商岗位管理（`Org-Chart.md` 中的 📋 外包岗，V1 仅作参考不录入系统）。
 - 多租户、复杂权限；复杂审批流；薪资、考勤、绩效、招聘全流程、社保。
 - 移动端深度适配（桌面浏览器优先）。
+
+> 注：`Org-Chart.md` 中的 📋 外包岗**已纳入 V2.1**，需导入系统，职位类型 `External Employee`（见 §3.7 / §4 F5.2）。
 
 ---
 
@@ -56,7 +57,7 @@ Position.csv 模版文件
 | 级别 | Level | 个人贡献者 B6~B10b / 管理岗 M7~M12b（见 §3.6）。 |
 | 直线经理 | Solid-line Manager | 该岗位的直接汇报岗位，以**岗位编号**引用；唯一。构成组织树主干。 |
 | 虚线经理 | Dotted-line Manager | 矩阵式职能汇报岗位（0~N 个），以**岗位编号**引用。 |
-| 法律强制/可选 | Legal Mandatory / Optional | 法律强制·内部全职不可外包 / 可选（集团内控推荐）/ 纯后勤可选，三类。 |
+| 法律强制/可选 | Legal Mandatory / Optional | 法律强制·内部全职不可外包 / 法律强制·允许第三方外包 / 可选（集团内控推荐）/ 纯后勤可选，四类。 |
 | 职位开启日/关闭日 | Opening / Closing Date | 岗位生命周期的起止日期（数据源为年份精度）；`N/A` = 无关闭日（仍在生效）。 |
 | 生命周期事件 | Position Event | 岗位每次状态变更的记录（原→新状态、时间、备注、关联员工）。 |
 | 家族自然人 | Family Natural Person | 集团顶层股东（创始人/家族），非系统内岗位；P063/P066 等直报对象。 |
@@ -91,10 +92,11 @@ Position.csv 模版文件
 - **虚线经理**：矩阵式职能汇报。典型：各法人 MLRO 对集团 Global AML Compliance Officer（P005-2）、各投资岗对 Global Investment Governance Manager（P007-2）、各区内审联络员对 Global Internal Audit Manager（P003-2）、各区域 IT 岗对 Global System Support Specialist（P021-2）、各属地合规外包岗对 Global Contract Governance Manager（P008-2）。
 - 后端校验直线关系**无环路**、虚线无重复。
 
-### 3.5 法律强制/可选（三类，仅内部全职岗位）
+### 3.5 法律强制/可选（四类，按 Position.md §10）
 | 分类 | 含义 |
 | --- | --- |
 | 法律强制·内部全职不可外包 | 法规必须设立、必须内部全职承担（法定高管、MLRO、资金三线、卢森堡核心决策岗等）。 |
+| 法律强制·允许第三方外包 | 法规必须设立，但允许外包给第三方服务商（外包岗专用）。 |
 | 可选（集团内控推荐） | 内控优化设置、推荐保留，无立法强制。 |
 | 纯后勤可选 | 纯后勤性质（司机、保洁、前台等）。 |
 
@@ -150,7 +152,7 @@ Position.csv 模版文件
 | **工作地点** Work Location | 新增/编辑；用于岗位「工作地点」下拉 | 按 §3.3 12 个地点初始化 |
 | **工作范围** Scope | 新增/编辑/排序；用于岗位「工作范围」下拉 | Family / Global / Regional / Country 初始化 |
 | **国家/地区** Country | 新增/编辑；工作范围=Country 时的**二级菜单** | 按 §3.2 9 个国家初始化 |
-| **法律强制/可选** Legal Category | 新增/编辑；用于岗位「法律强制/可选」下拉 | 按 §3.5 三类初始化 |
+| **法律强制/可选** Legal Category | 新增/编辑；用于岗位「法律强制/可选」下拉 | 按 §3.5 四类初始化 |
 | **职位类型** Position Type | 新增/编辑；用于岗位「职位类型」下拉 | 按 §3.7 三类初始化（Consultant / Employee / External Employee） |
 | **员工用工税额** Employment Tax | 按国家维护税务科目与税率（见 F1.6） | 空（用户逐国配置） |
 
@@ -179,7 +181,7 @@ Position.csv 模版文件
 | 工作职责描述 | 1~2 句概括 | 否 |
 | 直线经理 | 岗位编号引用（唯一） | 否 |
 | 虚线经理 | 岗位编号引用（0~N） | 否 |
-| 法律强制/可选 | §3.5 三类 | 是 |
+| 法律强制/可选 | §3.5 四类 | 是 |
 | Org-Chart中的显示 | 组织架构图展示名 | 是 |
 | **职位类型** | 职位类型（Consultant / Employee / External Employee，由 F0 主数据字典维护，岗位表单下拉选择） | **否** |
 | 之前的职位 | 转岗来源岗位编号 | 否 |
@@ -314,7 +316,7 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 
 #### F5.1 功能流程
 1. 用户上传 Org-Chart.md（规则文件 Position.md 使用固定模版）
-2. 系统解析树形结构，提取所有 🧑‍💼 内部全职岗位（排除外包岗 📋）
+2. 系统解析树形结构，提取所有岗位（含 🧑‍💼 内部全职 + 👨‍👩‍👧 家族志愿 + 📋 外包岗）
 3. 数据清洗后生成符合 Position.csv 格式的 CSV（17 列）
 4. 用户在前端预览清洗报告 + CSV 数据
 5. 确认后一键导入系统（复用 F4 幂等 upsert）
@@ -323,13 +325,13 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 - 兼容两种 Org-Chart 树格式：
   - 格式 A：` ```tree ` 代码块（如 Org-Chart.md）
   - 格式 B：`# 完整组织架构树` 标题后无标记树（如 Org-Chart2.md）
-- 仅提取内部全职岗位（🧑‍💼 In-house + 👨‍👩‍👧 Family Volunteer），排除外包岗 📋
+- 提取全部三类岗位：🧑‍💼 In-house / 👨‍👩‍👧 Family Volunteer / 📋 Outsourced（外包岗以 `External Employee` 入库）
 
 #### F5.3 8 个关键字段读取规则
 | 字段 | 读取方式 |
 | --- | --- |
 | 职位名 | 从树中提取英文名，自动去除工作范围前缀（Global/Regional/Family） |
-| 职位类型 | 从树中的 🧑‍💼/👨‍👩‍👧 标记继承，按 Position.md §9 映射：Family Volunteer Unpaid→Consultant，In-house Full-time→Employee，Outsourced External→External Employee（清洗时排除外包岗） |
+| 职位类型 | 从树中的 🧑‍💼/👨‍👩‍👧/📋 标记继承，按 Position.md §9 映射：Family Volunteer Unpaid→Consultant，In-house Full-time→Employee，Outsourced External→External Employee |
 | 隶属公司 | 从树的父节点继承（最近的公司节点） |
 | 级别 | 从职位名推断（Managing Director→M11a，CEO→M12b，等） |
 | 国家或地区 | 从岗位编号后缀推断（-4-5→Country·卢森堡） |
@@ -485,7 +487,7 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 ### 已确认决策（2026-08-03）
 - **数据权威**：以 `Position.csv` 为准（§3.7）。
 - **组织图主视图**：汇报线树（§4 F3）。
-- **外包岗位**：V1 仅内部全职，外包岗不入系统（§1.3）。
+- **外包岗位**：V2.1 起纳入，外包岗以 `External Employee` 随 CSV 导入系统（见 §1.3 / §4 F5）。
 - **虚拟根节点**：「家族自然人股东」虚拟根**默认开启**，可开关（§4 F3.1）。
 - **员工必须挂岗**：V1 不允许「待分配」员工，`当前岗位` 必填；挂编须岗位为 Open / Vacant（§4 F2.2 / F1.5）。
 - **年份精度**：开启/关闭日数据源为年份，系统存 date，年份→`YYYY-01-01`（§4 F1.2）。

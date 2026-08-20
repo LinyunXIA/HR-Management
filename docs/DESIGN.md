@@ -16,7 +16,7 @@
 关键既定决策（详见 PRD §3.7/§10）：
 - **数据权威**：以 `Position.csv` 为准；`Org-Chart.md` 仅展示参考，V1 不直接读取。
 - **组织图主视图**：汇报线树（节点=岗位，按直线经理成树，虚线另行标注）。
-- **外包岗位**：V1 仅内部全职（CSV 91 岗），外包服务商不入系统。
+- **外包岗位**：V2.1 起纳入，外包岗以 `External Employee` 导入系统（与内部全职同流程）。
 - **员工必须挂岗**：不允许「待分配」员工。
 - **虚拟根节点**：「家族自然人股东」默认开启、可开关。
 - **年份精度**：开启/关闭日存 date，年份→`YYYY-01-01`。
@@ -112,7 +112,7 @@ class Scope(Base):                 # 工作范围（Family/Global/Regional/Count
     __tablename__ = 'scopes'
     id, code(unique), label, suffix_code(1..4), sort_order   # suffix_code 驱动编号
 
-class LegalCategory(Base):         # 法律强制/可选（按 §3.5 初始化 3 类）
+class LegalCategory(Base):         # 法律强制/可选（按 §3.5 初始化 4 类）
     __tablename__ = 'legal_categories'
     id, name(unique), sort_order
 
@@ -296,14 +296,14 @@ REST 规范：名词复数资源、HTTP 方法映射 CRUD（GET 查 / POST 建 /
 ### 7.1 解析流程
 1. **树块检测**：兼容两种格式——` ```tree ` 代码块（Org-Chart2）和 `# 完整组织架构树` 标题后无标记树（Org-Chart.md）
 2. **行解析**：从树字符剥离 → 提取 P 编号（`P\d{3,}-(?:[123]|4-\d{1,2})`）→ 两步正则匹配职位名/中文名/法律分类/年份
-3. **仅提取内部全职岗位**（🧑‍💼 In-house + 👨‍👩‍👧 Family Volunteer），排除外包岗 📋
+3. **提取全部三类岗位**（🧑‍💼 In-house + 👨‍👩‍👧 Family Volunteer + 📋 Outsourced），外包岗以 `External Employee` 入库
 4. **公司/经理推断**：仅扫描树块，从父节点继承隶属公司和直线经理
 
 ### 7.2 清洗规则（8 个关键字段完整读取）
 | 字段 | 来源 |
 | --- | --- |
 | 职位名 | P 编号后的英文名，去除 Global/Regional/Family 前缀（Position.md 规则：不含工作范围） |
-| 职位类型 | 树中的 🧑‍💼/👨‍👩‍👧 类型标记，按 Position.md §9 映射（Family Volunteer→Consultant，In-house→Employee，Outsourced→External Employee 且清洗时排除） |
+| 职位类型 | 树中的 🧑‍💼/👨‍👩‍👧 类型标记，按 Position.md §9 映射（Family Volunteer→Consultant，In-house→Employee，Outsourced→External Employee） |
 | 隶属公司 | 树中最近的公司父节点（从 parenthetical 提取公司名） |
 | 级别 | 从职位名推断（Managing Director→M11a，CEO→M12b，等） |
 | 国家或地区 | 从岗位编号后缀推断（-4-5→Country·卢森堡） |

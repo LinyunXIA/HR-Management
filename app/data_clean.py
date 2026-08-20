@@ -1,7 +1,7 @@
 """Org-Chart.md 解析 + Position.md 规则解析 + 数据清洗/校验/CSV 导出。
 
 解析流程：
-1. parse_orgchart(md_text) → 提取内部全职岗位（🧑‍💼 + 👨‍👩‍👧），含隶属公司、直线经理
+1. parse_orgchart(md_text) → 提取全部岗位（🧑‍💼 + 👨‍👩‍👧 + 📋），含隶属公司、直线经理
 2. parse_rules(md_text) → 提取级别映射、国家编号、工作地点
 3. clean_data(positions, rules) → 格式校验、字段补全、生成显示名
 4. validate_and_report(cleaned) → 生成清洗报告（通过/修复/警告/错误）
@@ -22,12 +22,13 @@ P_NUM_RE = re.compile(rf"\b({P_NUM_PATTERN})\b")
 # 映射规则（Position.md §9）：
 #   Family Volunteer Unpaid → Consultant
 #   In-house Full-time     → Employee
-#   Outsourced External    → External Employee（清洗时排除外包岗，不入库）
+#   Outsourced External    → External Employee
 TYPE_MAP = {
     "🧑‍💼": "Employee",
     "👨‍👩‍👧": "Consultant",
+    "📋": "External Employee",
 }
-SKIP_TYPES = {"📋"}
+SKIP_TYPES: set[str] = set()
 
 # 岗位行正则（两步匹配，兼容两种格式）：
 # 格式1: P001-1 - Family Chairman & General Manager - 家族主席兼总经理 【可选...】(Opening: 1982) 【备注】
@@ -55,8 +56,11 @@ def parse_orgchart(md_text: str) -> Tuple[List[Dict], Dict]:
     positions = []
     company_map: Dict[str, dict] = {}
     depth_first_pos: Dict[int, str] = {}  # depth -> 第一个出现的岗位编号
+    parse_orgchart._ext_seq = 900  # type: ignore  # 外包合成编号起始，防与 P001-P091 冲突
 
     current_type: Optional[str] = None  # 从类型标记行继承
+    current_outsourced_legal: Optional[str] = None  # 外包小类标题（【...】）继承
+    current_company: Optional[str] = None  # 当前隶属公司（用于合成外包岗）
     in_tree = False  # 只处理树结构区域内的行
 
     for line in lines:
@@ -100,30 +104,81 @@ def parse_orgchart(md_text: str) -> Tuple[List[Dict], Dict]:
             if marker in clean:
                 line_type = type_name
                 break
-        if "📋" in clean:
-            line_type = "skip"
         if line_type is not None:
             current_type = line_type
+            current_outsourced_legal = None  # 切换类型时重置外包小类
             continue
 
         # ── 4. 公司节点 ──
         if not P_NUM_RE.search(clean):
-            cm = COMPANY_RE.search(clean)
-            if cm:
-                company_name = cm.group(1).strip()
-                detail = cm.group(2)
-                dm = COMPANY_DETAIL_RE.search(detail)
-                # 只取第一个地名（| 或｜之前的部分）
-                raw_location = dm.group(1).strip() if dm else detail.split("｜")[0].split("|")[0].strip()
-                company_map[company_name] = {
-                    "name": company_name,
-                    "location": raw_location,
-                    "year": dm.group(2) if dm else None,
-                }
-            continue  # 公司行不做更多处理
+            # 公司行特征：含 （...）且不含 (Opening:，避免误判含 （ 的外包法律分类
+            if "(Opening:" not in clean:
+                cm = COMPANY_RE.search(clean)
+                if cm:
+                    company_name = cm.group(1).strip()
+                    detail = cm.group(2)
+                    dm = COMPANY_DETAIL_RE.search(detail)
+                    # 只取第一个地名（| 或｜之前的部分）
+                    raw_location = dm.group(1).strip() if dm else detail.split("｜")[0].split("|")[0].strip()
+                    company_map[company_name] = {
+                        "name": company_name,
+                        "location": raw_location,
+                        "year": dm.group(2) if dm else None,
+                    }
+                    current_company = company_name
+                    continue  # 公司行不做更多处理
+            # ── 4b. 外包岗（无 P 编号）── 按 External Employee 捕获
+            # 例：Local Belgian Tax Advisor - 比利时本地税务顾问 【法律强制·允许第三方外包】(Opening: 1982)
+            if current_type == "External Employee":
+                # 先检测是否为法律分类小标题（仅 【...】），记录后跳过
+                only_bracket = re.match(r"^【(.+)】$", clean.strip())
+                if only_bracket:
+                    current_outsourced_legal = only_bracket.group(1).strip()
+                    continue
+                om = re.search(r"(.+?)\s*-\s*(.+?)\s*(?:【(.+?)】)?\s*\(Opening:\s*(\d{4})", clean)
+                if om:
+                    pos_name_en = om.group(1).strip()
+                    pos_name_cn = om.group(2).strip()
+                    legal_cat = om.group(3).strip() if om.group(3) else None
+                    if not legal_cat:
+                        legal_cat = current_outsourced_legal
+                    opening = om.group(4)
+                    after_opening = clean[om.end():]
+                    tm = POS_TRAIL_RE.search(after_opening)
+                    remark = tm.group(1).strip() if tm else None
+                    # 生成合成 P 编号（避免与既有 P001-P091 冲突，从 P900 起）
+                    if not hasattr(parse_orgchart, "_ext_seq"):
+                        parse_orgchart._ext_seq = 900  # type: ignore
+                    pos_number = f"P{parse_orgchart._ext_seq:03d}-2"  # 外包默认按 Global 处理
+                    parse_orgchart._ext_seq += 1  # type: ignore
+                    # 直线经理逻辑同正式岗
+                    line_manager = None
+                    if depth in depth_first_pos:
+                        line_manager = depth_first_pos[depth]
+                    else:
+                        for shallower in range(depth - 1, -1, -1):
+                            if shallower in depth_first_pos:
+                                line_manager = depth_first_pos[shallower]
+                                break
+                        depth_first_pos[depth] = pos_number
+                    node_stack_entry = {
+                        "number": pos_number,
+                        "name_en": pos_name_en,
+                        "name_cn": pos_name_cn,
+                        "type": current_type,
+                        "line_manager": line_manager,
+                        "opening_year": opening,
+                        "legal_category": legal_cat,
+                        "remark": remark,
+                        "depth": depth,
+                        "company": current_company,
+                        "line_idx": None,
+                    }
+                    positions.append(node_stack_entry)
+            continue
 
         # ── 5. 岗位节点（含 P 编号） ── 两步匹配
-        if not current_type or current_type == "skip":
+        if not current_type:
             continue
 
         bm = POS_BASE_RE.search(clean)

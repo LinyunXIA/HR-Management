@@ -56,9 +56,10 @@ SCOPES = [
     ("country", "Country（国家/地区）", "4"),
 ]
 
-# 法律强制/可选：按 Position.md §3.5（3 类）
+# 法律强制/可选：按 Position.md §10（4 类，含外包允许）
 LEGAL_CATEGORIES = [
     "法律强制·内部全职不可外包",
+    "法律强制·允许第三方外包",
     "可选（集团内控推荐）",
     "纯后勤可选",
 ]
@@ -132,21 +133,42 @@ def _get_levels() -> list:
 
 
 def seed_master_data(db: Session):
-    """初始化主数据字典（空表时写入）。"""
+    """初始化主数据字典（幂等：缺失项补齐）。"""
     levels = _get_levels()
     if db.query(Level).count() == 0:
         for i, (code, label, is_mgmt) in enumerate(levels):
             db.add(Level(code=code, label=label, is_management=is_mgmt, sort_order=i))
+    else:
+        # 已有数据时，补齐 Position.md 新增级别（若有）
+        existing_codes = {r[0] for r in db.query(Level.code).all()}
+        for i, (code, label, is_mgmt) in enumerate(levels):
+            if code not in existing_codes:
+                db.add(Level(code=code, label=label, is_management=is_mgmt, sort_order=len(existing_codes) + i))
     if db.query(WorkLocation).count() == 0:
         for i, name in enumerate(WORK_LOCATIONS):
             db.add(WorkLocation(name=name, sort_order=i))
+    else:
+        existing = {r[0] for r in db.query(WorkLocation.name).all()}
+        for i, name in enumerate(WORK_LOCATIONS):
+            if name not in existing:
+                db.add(WorkLocation(name=name, sort_order=len(existing) + i))
     if db.query(ScopeDef).count() == 0:
         for i, (code, label, suffix) in enumerate(SCOPES):
             db.add(ScopeDef(code=code, label=label, suffix_code=suffix, sort_order=i))
     if db.query(LegalCategoryDef).count() == 0:
         for i, name in enumerate(LEGAL_CATEGORIES):
             db.add(LegalCategoryDef(name=name, sort_order=i))
+    else:
+        existing = {r[0] for r in db.query(LegalCategoryDef.name).all()}
+        for i, name in enumerate(LEGAL_CATEGORIES):
+            if name not in existing:
+                db.add(LegalCategoryDef(name=name, sort_order=len(existing) + i))
     if db.query(PositionType).count() == 0:
         for i, name in enumerate(POSITION_TYPES):
             db.add(PositionType(name=name, sort_order=i))
+    else:
+        existing = {r[0] for r in db.query(PositionType.name).all()}
+        for i, name in enumerate(POSITION_TYPES):
+            if name not in existing:
+                db.add(PositionType(name=name, sort_order=len(existing) + i))
     db.commit()
