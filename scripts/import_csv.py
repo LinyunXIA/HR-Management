@@ -3,6 +3,11 @@
 用法：
     python -m scripts.import_csv testingdata/原始文件/Position.csv [--reset]
     --reset  先清空全部数据表再导入（重建空库）
+
+三环境行为（PRD §7D.3）：
+    - dev  : --reset / drop_all 允许
+    - test : --reset / drop_all 允许
+    - prod : --reset / drop_all 直接拒绝（FATAL）
 """
 import csv
 import json
@@ -11,7 +16,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.db import Base, SessionLocal, engine
+from app.db import APP_ENV, Base, SessionLocal, assert_writable, engine, startup_banner
 from app.import_csv import import_csv
 from app.seed import seed_master_data
 
@@ -26,9 +31,17 @@ def main():
     if args:
         path = args[0]
 
+    print(startup_banner(), file=sys.stderr)
+
     if reset:
-        print("[reset] 清空数据表…", file=sys.stderr)
+        try:
+            assert_writable("--reset / drop_all")
+        except RuntimeError as e:
+            print(str(e), file=sys.stderr)
+            sys.exit(1)
+        print(f"[reset] APP_ENV={APP_ENV} 清空数据表…", file=sys.stderr)
         Base.metadata.drop_all(bind=engine)
+
     Base.metadata.create_all(bind=engine)
     with SessionLocal() as db:
         seed_master_data(db)

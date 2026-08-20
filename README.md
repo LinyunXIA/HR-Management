@@ -3,33 +3,50 @@
 覆盖岗位全生命周期、人员信息、组织架构图（汇报线树）三大能力的轻量 HR 工具。
 数据权威为 `Position.csv`（见 [docs/PRD.md](docs/PRD.md)）。
 
+## 三环境 DB 隔离（PRD §7D）
+
+同机不同库：`hr_db_dev` / `hr_db_test` / `hr_db_prod`，按 `APP_ENV` 自动选择。
+
+| 环境 | 库名 | 用途 | `--reset` |
+|---|---|---|---|
+| `dev`（默认） | `hr_db_dev` | 本地开发 | 允许 |
+| `test` | `hr_db_test` | 自动化 / 临时验证 | 允许 |
+| `prod` | `hr_db_prod` | 生产 | **禁止**（FATAL） |
+
 ## 启动
 
 ```bash
 # 1. 安装依赖（Python 3.14）
 .venv/bin/pip install -r requirements.txt
 
-# 2. 配置 PostgreSQL 连接（全部新建，无历史迁移）
-cp .env.example .env
-# 编辑 .env 设置 DATABASE_URL，例如：
-#   DATABASE_URL=postgresql://user:password@localhost:5432/hr_db
+# 2. 配置数据库（首次）
+cp .env.example .env                 # dev 默认（hr_db_dev）
+# 可选：cp .env.example .env.test    # test 库（hr_db_test）
+# 可选：cp .env.example .env.prod    # prod 库（hr_db_prod）
+# 启动时按 APP_ENV 自动加载对应 .env.*；库名不一致则拒启
 
-# 3. 启动（自动建表到 PostgreSQL）
+# 3. 启动（默认 dev → http://127.0.0.1:8000）
 .venv/bin/uvicorn main:app --reload
+
+# 切换环境
+APP_ENV=test .venv/bin/uvicorn main:app --reload --port 8001
+APP_ENV=prod .venv/bin/uvicorn main:app --reload --port 8002
 ```
 
-打开 http://127.0.0.1:8000
+启动时会打印 `[startup] APP_ENV=xxx DB=postgresql://user:***@host:5432/hr_db_xxx`，请核对库名。
 
 ## 数据导入
 
 ```bash
-# 命令行导入（幂等；--reset 先清空全部数据）
-.venv/bin/python -m scripts.import_csv testingdata/原始文件/Position.csv --reset
+# 命令行导入（幂等）
+APP_ENV=dev  .venv/bin/python -m scripts.import_csv testingdata/原始文件/Position.csv
+APP_ENV=test .venv/bin/python -m scripts.import_csv testingdata/原始文件/Position.csv --reset
+# APP_ENV=prod 时 --reset 一律被拦截（FATAL）
 
 # 或网页「数据导入」页面上传 Position.csv
 ```
 
-需要先在 PostgreSQL 中创建数据库 `hr_db`。数据从 `testingdata/原始文件/Position.csv` 全部新建导入。
+需要先在 PostgreSQL 中创建对应的三套库。生产数据导入走运维 + `pg_dump` 备份，不经 `--reset`。
 
 ## 功能
 

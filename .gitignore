@@ -28,9 +28,14 @@ testingdata/
 .DS_Store
 Thumbs.db
 
-# ===== 环境与密钥 =====
+# ===== 环境与密钥（PRD §7D：三环境 DB 隔离） =====
 .env
 .env.local
+.env.*.local
+.env.test
+.env.prod
+.env.development
+.env.staging
 *.pem
 
 # ===== 工具/会话状态 =====

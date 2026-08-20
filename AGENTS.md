@@ -15,19 +15,29 @@
 # 安装依赖（Python 3.14 venv）
 .venv/bin/pip install -r requirements.txt
 
-# 配置数据库（必须）
-cp .env.example .env
-# 编辑 .env 设置 DATABASE_URL=postgresql://user:password@localhost:5432/hr_db
-# 需先在 PostgreSQL 创建数据库 hr_db
+# 三环境配置（PRD §7D，均 gitignored）
+cp .env.example .env            # dev 默认
+# 可选：cp .env.example .env.test   # test 库（hr_db_test）
+# 可选：cp .env.example .env.prod   # prod 库（hr_db_prod）
+# 启动时按 APP_ENV 自动加载对应 .env.*；库名强制 hr_db_{env}，不一致则拒启
 
-# 启动（自动建表 + 种子数据）
+# 启动（dev 默认；自动建表 + 种子数据）
 .venv/bin/uvicorn main:app --reload --port 7273   # http://127.0.0.1:7273
 
-# 数据导入（幂等 upsert；--reset 清空重建）
-.venv/bin/python -m scripts.import_csv testingdata/原始文件/Position.csv --reset
+# 切换环境（dev / test / prod）
+APP_ENV=dev  .venv/bin/uvicorn main:app --reload --port 7273
+APP_ENV=test .venv/bin/uvicorn main:app --reload --port 7274   # hr_db_test
+APP_ENV=prod .venv/bin/uvicorn main:app --reload --port 7275   # hr_db_prod
+
+# 数据导入（幂等 upsert；dev/test 允许 --reset；prod 禁止）
+APP_ENV=dev  .venv/bin/python -m scripts.import_csv testingdata/原始文件/Position.csv --reset
+APP_ENV=test .venv/bin/python -m scripts.import_csv testingdata/原始文件/Position.csv
+APP_ENV=prod .venv/bin/python -m scripts.import_csv testingdata/原始文件/Position.csv
 
 # 或在网页「数据导入」Tab 上传 Position.csv
 ```
+
+**生产护栏**：`APP_ENV=prod` 时 `--reset` / `Base.metadata.drop_all` 一律被 `app.db.assert_writable()` 拦截并退出码 1。生产重置必须走 `pg_dump hr_db_prod` + 受控迁移，不经本系统。
 
 **无测试/静态检查配置**。验证方式：`curl /api/*` 或无头浏览器 `--headless --dump-dom http://127.0.0.1:7273/#orgchart` 检查 DOM。
 
@@ -105,10 +115,11 @@ cp .env.example .env
 - **Git**：未明确要求时不自动 commit/push；commit 前检查 `git status` / `diff`
 - **配置变更**：修改 `opencode.json` / `.opencode/**` 后需重启 opencode 生效
 
-## 10. 当前运行状态（2026-08-20 扫描）
+## 10. 当前运行状态（2026-08-21 扫描）
 
-- PostgreSQL 18.4（Postgres.app）已连通：`postgresql://postgres:***@localhost:5432/hr_db`
-- 表计数：`companies=3, countries=0, position_numbers=5, employees=0`（非满量 91，待 --reset 重导入）
+- PostgreSQL 18.4（Postgres.app）已连通：`hr_db_dev` / `hr_db_test` / `hr_db_prod` 三库并存（prod 已建空库）
+- **三环境 DB 隔离（PRD §7D）已落地**：`app/db.py` 自动按 `APP_ENV` 加载 `.env` / `.env.test` / `.env.prod`；库名一致性校验 + prod 护栏生效
+- 表计数（hr_db_dev）：`position_numbers=5`（testingdata 当前为 5 行精简版，待扩充到 91）
 - Python 3.14.7 + FastAPI 0.141.1 + SQLAlchemy 2.0.51 已就绪
 - 分支 `main` 与 `origin/main` 同步，工作区 clean
 - opencode 1.18.15 已安装，全局 provider: minimax / openrouter

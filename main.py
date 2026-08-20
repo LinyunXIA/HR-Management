@@ -1,16 +1,21 @@
 """FastAPI 入口：建表、注册路由、托管静态文件。"""
 import os
+import sys
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import models  # noqa: F401  确保模型注册到 Base.metadata
-from app.db import Base, SessionLocal, engine
+from app.db import APP_ENV, Base, SessionLocal, engine, startup_banner
 from app.seed import seed_master_data
 from app.routers import data_clean, employees, import_routes, master_data, orgchart, positions, transfers
 
+# 启动时打印三环境自检日志（PRD §7D.2）
+print(startup_banner(), file=sys.stderr, flush=True)
+
 # 启动时建表（幂等）+ 初始化主数据字典
+# create_all 本身不会删除已有表（非破坏性），无需按 env 区分
 Base.metadata.create_all(bind=engine)
 with SessionLocal() as db:
     seed_master_data(db)
@@ -28,7 +33,7 @@ app.include_router(transfers.router)
 
 @app.get("/api/v1/health")
 def health():
-    return {"status": "ok", "app": "HR Management"}
+    return {"status": "ok", "app": "HR Management", "env": APP_ENV}
 
 
 @app.get("/", include_in_schema=False)
