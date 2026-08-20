@@ -34,8 +34,7 @@ Thumbs.db
 *.pem
 
 # ===== 工具/会话状态 =====
-.claude/
-.mcp.json
+# (opencode 配置已纳入版本管理，不再忽略 .opencode/)
 
-# ===== 本地开发文档（不纳入版本管理） =====
-CLAUDE.md
+# ===== 本地开发文档 =====
+# AGENTS.md / docs/* 已纳入版本管理
