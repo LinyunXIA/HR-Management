@@ -3,7 +3,7 @@ async function api(path, options = {}) {
   const opts = { headers: {}, ...options };
   if (opts.body && typeof opts.body !== 'string') opts.body = JSON.stringify(opts.body);
   if (opts.body && !opts.noJson) opts.headers['Content-Type'] = 'application/json';
-  const res = await fetch('/api' + path, opts);
+  const res = await fetch('/api/v1' + path, opts);
   const data = await res.json().catch(() => null);
   if (!res.ok) {
     const msg = (data && (data.detail || data.message)) || `HTTP ${res.status}`;

@@ -1,5 +1,7 @@
-"""数据清洗路由：解析原始文件 → 预览 → 确认导入。"""
-import os
+"""数据清洗作业资源：POST /data-clean-jobs。"""
+import io
+import csv as csv_mod
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile, File
@@ -9,118 +11,104 @@ from app.data_clean import run_clean
 from app.db import SessionLocal
 from app.import_csv import import_csv
 
-router = APIRouter(prefix="/api/data-clean", tags=["data-clean"])
+router = APIRouter(prefix="/api/v1", tags=["data-clean"])
 
-# 原始文件目录
 RAW_DIR = Path(__file__).resolve().parent.parent.parent / "testingdata" / "原始文件"
+
+# 内存作业存储（进程内，无持久化）
+_JOBS: dict[str, dict] = {}
 
 
 class ParseRequest(BaseModel):
-    """指定原始文件路径进行解析（可选，也可上传文件）。"""
     orgchart_path: str | None = None
     rules_path: str | None = None
 
 
-class ParseResponse(BaseModel):
-    total_positions: int
-    report: dict
-    csv_text: str
-    cleaned: list
+@router.get("/data-clean-jobs")
+def list_data_clean_jobs():
+    """作业列表。"""
+    return {"total": len(_JOBS), "items": list(_JOBS.values())}
 
 
-@router.get("/files")
+@router.get("/data-clean-jobs/{job_id}")
+def get_data_clean_job(job_id: str):
+    job = _JOBS.get(job_id)
+    if not job:
+        raise HTTPException(404, "清洗作业不存在")
+    return job
+
+
+@router.get("/data-clean-jobs/files/list")
 def list_raw_files():
-    """列出 testingdata/原始文件/ 下的文件。"""
+    """列出原始文件（兼容保留）。"""
     files = []
     if RAW_DIR.exists():
         for f in sorted(RAW_DIR.iterdir()):
             if f.is_file():
-                files.append({
-                    "name": f.name,
-                    "size": f.stat().st_size,
-                    "path": str(f),
-                })
+                files.append({"name": f.name, "size": f.stat().st_size, "path": str(f)})
     return {"directory": str(RAW_DIR), "files": files}
 
 
-@router.post("/parse", response_model=ParseResponse)
-def parse_raw_files(req: ParseRequest | None = None):
-    """解析原始文件（Org-Chart.md + Position.md），执行数据清洗，返回报告+预览。
-
-    默认从 testingdata/原始文件/ 读取；也可通过 req 指定路径。
-    """
-    org_path = Path(req.orgchart_path) if req and req.orgchart_path else RAW_DIR / "Org-Chart.md"
-    rules_path = Path(req.rules_path) if req and req.rules_path else RAW_DIR / "Position.md"
-
-    if not org_path.exists():
-        raise HTTPException(400, f"Org-Chart.md 不存在：{org_path}")
-    if not rules_path.exists():
-        raise HTTPException(400, f"Position.md 不存在：{rules_path}")
-
-    org_text = org_path.read_text(encoding="utf-8")
-    rules_text = rules_path.read_text(encoding="utf-8")
-
-    result = run_clean(org_text, rules_text)
-
-    return ParseResponse(
-        total_positions=result["report"]["total_positions"],
-        report=result["report"],
-        csv_text=result["csv_text"],
-        cleaned=result["cleaned"],
-    )
-
-
-@router.post("/import")
-def import_cleaned_data():
-    """确认导入：解析并执行 CSV 导入（幂等 upsert）。"""
-    org_path = RAW_DIR / "Org-Chart.md"
-    rules_path = RAW_DIR / "Position.md"
-
-    if not org_path.exists() or not rules_path.exists():
-        raise HTTPException(400, "原始文件不存在")
-
-    org_text = org_path.read_text(encoding="utf-8")
-    rules_text = rules_path.read_text(encoding="utf-8")
+@router.post("/data-clean-jobs", status_code=201)
+async def create_data_clean_job(orgchart: UploadFile | None = File(None)):
+    """创建清洗作业：上传 Org-Chart.md 或使用服务器原始文件。"""
+    if orgchart is not None:
+        org_text = (await orgchart.read()).decode("utf-8")
+        rules_path = RAW_DIR / "Position.md"
+        if not rules_path.exists():
+            raise HTTPException(500, "规则文件 Position.md 不存在")
+        rules_text = rules_path.read_text(encoding="utf-8")
+    else:
+        org_path = RAW_DIR / "Org-Chart.md"
+        rules_path = RAW_DIR / "Position.md"
+        if not org_path.exists() or not rules_path.exists():
+            raise HTTPException(400, "原始文件不存在")
+        org_text = org_path.read_text(encoding="utf-8")
+        rules_text = rules_path.read_text(encoding="utf-8")
 
     result = run_clean(org_text, rules_text)
-    csv_text = result["csv_text"]
-
-    # 使用现有 import_csv 导入
-    import io
-    import csv as csv_mod
-    reader = csv_mod.DictReader(io.StringIO(csv_text))
-
-    db = SessionLocal()
-    try:
-        import_report = import_csv(db, reader)
-        return {
-            "clean_report": result["report"],
-            "import_report": import_report,
-        }
-    finally:
-        db.close()
-
-
-@router.post("/upload-parse")
-async def upload_orgchart(orgchart: UploadFile = File(...)):
-    """上传 Org-Chart.md 并解析（规则文件使用固定模版 Position.md）。
-
-    返回清洗后的 CSV 预览（格式与 Position.csv 模版对齐）。
-    """
-    org_text = (await orgchart.read()).decode("utf-8")
-
-    # 规则文件使用固定的 Position.md
-    rules_path = RAW_DIR / "Position.md"
-    if not rules_path.exists():
-        raise HTTPException(500, "规则文件 Position.md 不存在")
-    rules_text = rules_path.read_text(encoding="utf-8")
-
-    result = run_clean(org_text, rules_text)
-
-    return {
+    job_id = uuid.uuid4().hex[:8]
+    job = {
+        "id": job_id,
         "total_positions": result["report"]["total_positions"],
         "report": result["report"],
         "csv_text": result["csv_text"],
         "cleaned": result["cleaned"],
         "template": "Position.csv",
     }
+    _JOBS[job_id] = job
+    return job
+
+
+@router.post("/data-clean-jobs/{job_id}/imports", status_code=201)
+def import_data_clean_job(job_id: str):
+    """将清洗作业的 CSV 导入系统（幂等 upsert）。"""
+    job = _JOBS.get(job_id)
+    if not job:
+        raise HTTPException(404, "清洗作业不存在")
+    csv_text = job["csv_text"]
+    reader = csv_mod.DictReader(io.StringIO(csv_text))
+    db = SessionLocal()
+    try:
+        import_report = import_csv(db, reader)
+        return {"clean_report": job["report"], "import_report": import_report, "job_id": job_id}
+    finally:
+        db.close()
+
+
+# 兼容旧端点（301 迁移提示，实际已替换为 /data-clean-jobs）
+@router.post("/data-clean/parse")
+def legacy_parse(req: ParseRequest | None = None):
+    raise HTTPException(410, "已迁移至 POST /api/v1/data-clean-jobs")
+
+@router.post("/data-clean/upload-parse")
+async def legacy_upload_parse(orgchart: UploadFile = File(...)):
+    raise HTTPException(410, "已迁移至 POST /api/v1/data-clean-jobs")
+
+@router.post("/data-clean/import")
+def legacy_import():
+    raise HTTPException(410, "已迁移至 POST /api/v1/data-clean-jobs/{job_id}/imports")
+
+@router.get("/data-clean/files")
+def legacy_files():
+    raise HTTPException(410, "已迁移至 GET /api/v1/data-clean-jobs/files/list")

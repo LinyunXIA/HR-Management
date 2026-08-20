@@ -44,7 +44,7 @@ from app.schemas import (
     WorkLocationUpdate,
 )
 
-router = APIRouter(prefix="/api", tags=["master-data"])
+router = APIRouter(prefix="/api/v1", tags=["master-data"])
 
 
 def _crud(model, out_schema, create_schema, update_schema, path: str,
@@ -61,7 +61,7 @@ def _crud(model, out_schema, create_schema, update_schema, path: str,
         db.add(obj)
         db.commit()
         db.refresh(obj)
-        response.headers["Location"] = f"/api{path}/{obj.id}"
+        response.headers["Location"] = f"/api/v1{path}/{obj.id}"
         return obj
 
     @router.patch(path + "/{obj_id}", response_model=out_schema)
@@ -169,7 +169,7 @@ def create_tax_item(payload: EmploymentTaxItemCreate, response: Response, db: Se
                            tax_rate=payload.tax_rate, is_active=payload.is_active)
     db.add(it)
     db.commit()
-    response.headers["Location"] = f"/api/employment-tax-items/{it.id}"
+    response.headers["Location"] = f"/api/v1/employment-tax-items/{it.id}"
     country = db.get(Country, it.country_id)
     return {"id": it.id, "country_id": it.country_id, "country_name": country.name if country else None,
             "item_name": it.item_name, "tax_rate": float(it.tax_rate or 0), "is_active": it.is_active}

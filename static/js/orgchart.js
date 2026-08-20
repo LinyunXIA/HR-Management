@@ -19,7 +19,7 @@ const OrgChart = {
   bounds: { minX: 0, maxX: 1, minY: 0, maxY: 1 },
 
   async render() {
-    this.data = await get('/orgchart');
+    this.data = await get('/org-charts');
     this.vb = null;   // 重进页重置视图
     const companies = [...new Set(this.data.nodes.map((n) => n.company).filter(Boolean))].sort();
     const el = document.getElementById('tab-orgchart');
@@ -290,7 +290,7 @@ const OrgChart = {
   hideTip() { if (this._tip) { this._tip.remove(); this._tip = null; } },
 
   async exportMd(fmt) {
-    const res = await fetch(`/api/orgchart?format=md&report=${fmt}`);
+    const res = await fetch(`/api/v1/org-charts?report=${fmt}`, { headers: { 'Accept': 'text/markdown' } });
     if (!res.ok) { const d = await res.json().catch(() => null); throw new Error(d?.detail || '导出失败'); }
     const text = await res.text();
     const names = { org: 'orgchart-公司岗位', solid: 'orgchart-直线汇报线', dotted: 'orgchart-虚线汇报线' };

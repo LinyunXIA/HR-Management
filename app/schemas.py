@@ -137,6 +137,11 @@ class TransferRequest(BaseModel):
     to_position_id: int
 
 
+class TransferCreate(BaseModel):
+    employee_id: int
+    to_position_id: int
+
+
 # ---------------------------------------------------------------- 主数据（F0）
 class CompanyCreate(BaseModel):
     name: str

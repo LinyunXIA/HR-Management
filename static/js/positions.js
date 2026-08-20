@@ -256,7 +256,7 @@ const Positions = {
     const calcBtn = modal.querySelector('#pd-calccost');
     if (calcBtn) calcBtn.onclick = async () => {
       try {
-        const c = await get(`/positions/${id}/cost`);
+        const c = await get(`/positions/${id}/cost-calculation`);
         await patch(`/positions/${id}`, { company_share: c.company_share, labor_cost: c.labor_cost });
         toast(`已重算并保存：公司份额 ${fmtMoney(c.company_share)} · 用工成本 ${fmtMoney(c.labor_cost)}`, 'ok');
         this.openDetail(id);
@@ -271,7 +271,7 @@ const Positions = {
     modal.querySelectorAll('[data-to]').forEach((b) => b.onclick = async () => {
       if (!confirm(`确认将岗位流转为「${STATUS_LABEL[b.dataset.to]}」？`)) return;
       try {
-        await post(`/positions/${id}/events`, { to_status: b.dataset.to, note: '手动流转' });
+        await post(`/positions/${id}/transitions`, { to_status: b.dataset.to, note: '手动流转' });
         closeModal(); toast('流转成功', 'ok'); this.render(); App.loadStats();
       } catch (e) { toast(e.message); }
     });
@@ -347,7 +347,7 @@ const Positions = {
     modal.querySelector('#pe-calccost').onclick = async () => {
       try {
         await patch(`/positions/${p.id}`, { cost_mode: 'auto', salary_before_tax: val('#pe-salary') ? +val('#pe-salary') : null });
-        const c = await get(`/positions/${p.id}/cost`);
+        const c = await get(`/positions/${p.id}/cost-calculation`);
         await patch(`/positions/${p.id}`, { company_share: c.company_share, labor_cost: c.labor_cost });
         modal.querySelector('#pe-salary').value = c.salary_before_tax ?? '';
         modal.querySelector('#pe-share').value = c.company_share ?? '';

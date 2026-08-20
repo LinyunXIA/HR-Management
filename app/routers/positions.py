@@ -36,7 +36,7 @@ from app.schemas import (
     TransitionRequest,
 )
 
-router = APIRouter(prefix="/api", tags=["positions"])
+router = APIRouter(prefix="/api/v1", tags=["positions"])
 
 
 def _assert_management(db: Session, mgr: PositionNumber, role: str):
@@ -48,16 +48,6 @@ def _assert_management(db: Session, mgr: PositionNumber, role: str):
 
 
 # ---------------------------------------------------------------- 基础字典
-@router.get("/companies", response_model=list[CompanyOut])
-def list_companies(db: Session = Depends(get_db)):
-    return db.query(Company).order_by(Company.name).all()
-
-
-@router.get("/countries", response_model=list[CountryOut])
-def list_countries(db: Session = Depends(get_db)):
-    return db.query(Country).order_by(Country.code).all()
-
-
 @router.get("/position-functions", response_model=list[PositionFunctionOut])
 def list_functions(db: Session = Depends(get_db)):
     return db.query(Position).order_by(Position.name).all()
@@ -73,7 +63,7 @@ def create_function(payload: PositionFunctionCreate, response: Response, db: Ses
     pos = Position(name=name)
     db.add(pos)
     db.commit()
-    response.headers["Location"] = f"/api/position-functions/{pos.id}"
+    response.headers["Location"] = f"/api/v1/position-functions/{pos.id}"
     return pos
 
 
@@ -170,7 +160,7 @@ def create_position(payload: PositionNumberCreate, response: Response, db: Sessi
     db.add(PositionEvent(position_number_id=pn.id, from_status=None,
                          to_status=PositionStatus.PLANNED.value, note="岗位建档"))
     db.commit()
-    response.headers["Location"] = f"/api/positions/{pn.id}"
+    response.headers["Location"] = f"/api/v1/positions/{pn.id}"
     return serialize_position(db, pn)
 
 
@@ -244,7 +234,7 @@ def update_position(pid: int, payload: PositionNumberUpdate, db: Session = Depen
     return serialize_position(db, pn)
 
 
-@router.post("/positions/{pid}/events", status_code=201)
+@router.post("/positions/{pid}/transitions", status_code=201)
 def transition_position(pid: int, payload: TransitionRequest, response: Response, db: Session = Depends(get_db)):
     """创建一条生命周期流转事件（会同步变更岗位状态）。"""
     pn = get_or_404(db, PositionNumber, pid, "岗位不存在")
@@ -253,12 +243,43 @@ def transition_position(pid: int, payload: TransitionRequest, response: Response
         db.commit()
     except lifecycle.LifecycleError as e:
         raise HTTPException(422, str(e))
-    response.headers["Location"] = f"/api/positions/{pid}/events/{event.id}"
+    response.headers["Location"] = f"/api/v1/positions/{pid}/transitions/{event.id}"
     return {"id": event.id, "position_number_id": pid, "from_status": event.from_status,
             "to_status": event.to_status, "changed_at": event.changed_at, "note": event.note}
 
 
-@router.get("/positions/{pid}/cost")
+@router.get("/positions/{pid}/transitions")
+def list_position_transitions(pid: int, db: Session = Depends(get_db)):
+    """列出岗位的生命周期流转事件。"""
+    get_or_404(db, PositionNumber, pid, "岗位不存在")
+    events = (
+        db.query(PositionEvent)
+        .filter(PositionEvent.position_number_id == pid)
+        .order_by(PositionEvent.changed_at.desc(), PositionEvent.id.desc())
+        .all()
+    )
+    return [
+        {"id": e.id, "position_number_id": e.position_number_id, "from_status": e.from_status,
+         "to_status": e.to_status, "changed_at": e.changed_at, "note": e.note, "employee_id": e.employee_id}
+        for e in events
+    ]
+
+
+@router.get("/transitions")
+def list_transitions(position_id: int | None = None, db: Session = Depends(get_db)):
+    """全局流转事件列表（可按岗位过滤）。"""
+    q = db.query(PositionEvent)
+    if position_id:
+        q = q.filter(PositionEvent.position_number_id == position_id)
+    events = q.order_by(PositionEvent.changed_at.desc(), PositionEvent.id.desc()).all()
+    return [
+        {"id": e.id, "position_number_id": e.position_number_id, "from_status": e.from_status,
+         "to_status": e.to_status, "changed_at": e.changed_at, "note": e.note, "employee_id": e.employee_id}
+        for e in events
+    ]
+
+
+@router.get("/positions/{pid}/cost-calculation")
 def get_position_cost(pid: int, db: Session = Depends(get_db)):
     """按国家用工税额计算公司份额/用工成本（只读，不落库）。
 

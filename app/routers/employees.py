@@ -13,7 +13,7 @@ from app.models import (
 )
 from app.schemas import EmployeeCreate, EmployeeUpdate, TransferRequest
 
-router = APIRouter(prefix="/api", tags=["employees"])
+router = APIRouter(prefix="/api/v1", tags=["employees"])
 
 
 def serialize_employee(db: Session, emp: Employee) -> dict:
@@ -110,7 +110,7 @@ def create_employee(payload: EmployeeCreate, response: Response, db: Session = D
     lifecycle.transition(db, pn, PositionStatus.FILLED, note=f"员工 {payload.name} 入职挂编",
                          employee_id=emp.id, system=True)
     db.commit()
-    response.headers["Location"] = f"/api/employees/{emp.id}"
+    response.headers["Location"] = f"/api/v1/employees/{emp.id}"
     return serialize_employee(db, emp)
 
 
@@ -134,27 +134,6 @@ def update_employee(eid: int, payload: EmployeeUpdate, db: Session = Depends(get
             _vacate(db, emp, f"员工 {emp.name} 离职")
         emp.employment_status = payload.employment_status
     db.commit()
-    return serialize_employee(db, emp)
-
-
-@router.post("/employees/{eid}/transfers", status_code=201)
-def transfer_employee(eid: int, payload: TransferRequest, response: Response, db: Session = Depends(get_db)):
-    """创建一条调岗记录（旧岗→Vacant，新岗→Filled）。"""
-    emp = get_or_404(db, Employee, eid, "员工不存在")
-    if emp.employment_status == EmploymentStatus.TERMINATED:
-        raise HTTPException(400, "离职员工不可调岗")
-    new_pn = get_or_404(db, PositionNumber, payload.to_position_id, "目标岗位不存在")
-    _assert_attachable(db, new_pn)
-    old_pn = db.get(PositionNumber, emp.position_number_id) if emp.position_number_id else None
-    if old_pn and old_pn.id != new_pn.id:
-        if old_pn.status == PositionStatus.FILLED:
-            lifecycle.transition(db, old_pn, PositionStatus.VACANT, note=f"员工 {emp.name} 转岗",
-                                 employee_id=emp.id, system=True)
-        emp.position_number_id = new_pn.id
-        lifecycle.transition(db, new_pn, PositionStatus.FILLED, note=f"员工 {emp.name} 入职挂编",
-                             employee_id=emp.id, system=True)
-    db.commit()
-    response.headers["Location"] = f"/api/employees/{eid}"
     return serialize_employee(db, emp)
 
 

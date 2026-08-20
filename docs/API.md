@@ -5,7 +5,7 @@
 | 文档版本 | v1.0 |
 | 更新日期 | 2026-08-04 |
 | 基准 | 严格 REST 规范（见 [DESIGN.md](./DESIGN.md) §6） |
-| Base URL | `http://127.0.0.1:8000/api` |
+| Base URL | `http://127.0.0.1:8000/api/v1` |
 
 ---
 
@@ -125,8 +125,10 @@
 | POST | `/positions` | 创建（201，**编号自动生成**） |
 | GET | `/positions/{id}` | 详情（含事件时间线） |
 | PATCH | `/positions/{id}` | 部分更新（含成本字段；直线经理变更做环检测） |
-| POST | `/positions/{id}/events` | 状态流转（201，创建一条事件并变更状态） |
-| GET | `/positions/{id}/cost` | 按国家用工税额计算成本（只读） |
+| POST | `/positions/{id}/transitions` | 状态流转（201，创建一条事件并变更状态） |
+| GET | `/positions/{id}/transitions` | 该岗位的流转事件列表 |
+| GET | `/transitions?positionId=` | 全局流转事件列表（可按岗位过滤） |
+| GET | `/positions/{id}/cost-calculation` | 按国家用工税额计算成本（只读派生资源） |
 | DELETE | `/positions/{id}` | 删除（有在职员工或已有事件时禁止） |
 
 **GET /positions 查询参数**
@@ -167,7 +169,7 @@
 
 响应（201 + `Location: /api/positions/{id}`）：完整岗位对象，含 `number`、`status`、`cost_mode`、`salary_before_tax`、`company_share`、`labor_cost`、`incumbent_name` 等（键列表见 §3.3）。
 
-**POST /positions/{id}/events（状态流转）请求体**
+**POST /positions/{id}/transitions（状态流转）请求体**
 
 ```json
 { "to_status": "open", "note": "开岗招聘" }
@@ -175,7 +177,7 @@
 
 响应（201）：`{ "id", "position_number_id", "from_status", "to_status", "changed_at", "note" }`。非法流转返回 422。
 
-**GET /positions/{id}/cost（自动模式成本计算，只读）**
+**GET /positions/{id}/cost-calculation（自动模式成本计算，只读派生资源）**
 
 响应：
 
@@ -225,7 +227,8 @@
 | POST | `/employees` | 创建（201，必须挂岗 → 岗位自动 Filled） |
 | GET | `/employees/{id}` | 详情（含岗位、直线/虚线经理） |
 | PATCH | `/employees/{id}` | 部分更新；`employment_status=离职` 触发解绑 → 岗位 Vacant |
-| POST | `/employees/{id}/transfers` | 调岗（201，旧岗→Vacant，新岗→Filled） |
+| POST | `/transfers` | 调岗（201，旧岗→Vacant，新岗→Filled） |
+| GET | `/transfers?employeeId=` | 调岗记录列表（可按员工过滤） |
 | DELETE | `/employees/{id}` | 删除（仅已离职且已解绑） |
 
 **GET /employees 查询参数**：`company_id`、`employee_type`、`employment_status`、`search`、`page`、`page_size`。
@@ -247,10 +250,10 @@
 { "employment_status": "离职" }
 ```
 
-**POST /employees/{id}/transfers 请求体**
+**POST /transfers 请求体**
 
 ```json
-{ "to_position_id": 15 }
+{ "employee_id": 5, "to_position_id": 15 }
 ```
 
 **员工对象字段**：`id, employee_no, name, gender, birth_date, phone, email, hire_date, employee_type, employment_status, position_number_id, position_number, position_name, company_id, company_name, solid_line_manager_id, solid_line_number, solid_line_manager_name, dotted_manager_ids, dotted_manager_numbers, remark, created_at, updated_at`
@@ -261,10 +264,10 @@
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/orgchart` | 汇报线树数据（JSON） |
-| GET | `/orgchart?format=md&report={org\|solid\|dotted}` | 导出 Markdown |
+| GET | `/org-charts` | 汇报线树数据（JSON） |
+| GET | `/org-charts?report={org\|solid\|dotted}` | 导出 Markdown（`Accept: text/markdown`） |
 
-**GET /orgchart（JSON）**
+**GET /org-charts（JSON）**
 
 ```json
 {
@@ -294,7 +297,7 @@
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/import/csv` | 上传 Position.csv（multipart，字段名 `file`），幂等 upsert |
+| POST | `/imports` | 上传 Position.csv（multipart，字段名 `file`），幂等 upsert |
 
 响应：
 
@@ -313,12 +316,12 @@
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/data-clean/files` | 列出 testingdata/原始文件/ 下的文件 |
-| POST | `/data-clean/parse` | 解析固定原始文件（Org-Chart.md + Position.md），返回报告+预览 |
-| POST | `/data-clean/upload-parse` | 上传 Org-Chart.md（规则用固定 Position.md），返回报告+CSV |
-| POST | `/data-clean/import` | 确认导入（解析+幂等 upsert） |
+| GET | `/data-clean-jobs/files/list` | 列出 testingdata/原始文件/ 下的文件 |
+| POST | `/data-clean-jobs` | 创建清洗作业（上传 Org-Chart.md 或解析服务器文件，返回作业 id+报告+CSV） |
+| GET | `/data-clean-jobs/{jobId}` | 查询清洗作业 |
+| POST | `/data-clean-jobs/{jobId}/imports` | 将作业 CSV 导入系统（幂等 upsert） |
 
-**POST /data-clean/upload-parse（上传 Org-Chart.md）**
+**POST /data-clean-jobs（上传 Org-Chart.md）**
 
 multipart/form-data，字段 `orgchart`：Org-Chart.md 文件。
 
@@ -366,13 +369,17 @@ multipart/form-data，字段 `orgchart`：Org-Chart.md 文件。
 | GET | /public/companies | master_data |
 | GET/POST | /position-functions | positions |
 | GET/POST, GET/PATCH/DELETE | /positions、/positions/{id} | positions |
-| POST | /positions/{id}/events | positions |
-| GET | /positions/{id}/cost | positions |
+| POST | /positions/{id}/transitions | positions |
+| GET | /positions/{id}/transitions | positions |
+| GET | /transitions | positions |
+| GET | /positions/{id}/cost-calculation | positions |
 | GET/POST, GET/PATCH/DELETE | /employees、/employees/{id} | employees |
-| POST | /employees/{id}/transfers | employees |
-| GET | /orgchart | orgchart |
-| POST | /import/csv | import_routes |
-| GET/POST | /data-clean/files、/parse、/upload-parse、/import | data_clean |
+| POST | /transfers | transfers |
+| GET | /transfers | transfers |
+| GET | /org-charts | orgchart |
+| POST | /imports | import_routes |
+| GET | /imports | import_routes |
+| GET/POST | /data-clean-jobs、/data-clean-jobs/{jobId}、/data-clean-jobs/{jobId}/imports、/data-clean-jobs/files/list | data_clean |
 | GET | /health | main |
 
 > 注：以上为系统当前活跃端点全集。

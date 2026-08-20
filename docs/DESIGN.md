@@ -202,9 +202,9 @@ ALLOWED = {
 - 非法流转返回 422（如 `planned → filled`）。
 - 挂编条件：岗位须为 `open / vacant / offered`；`filled`（已占用）/`closed`/`planned` 拒绝挂编。
 
-## 6. REST API 设计（前缀 /api）
+## 6. REST API 设计（前缀 /api/v1）
 
-REST 规范：名词复数资源、HTTP 方法映射 CRUD（GET 查 / POST 建 / PATCH 部分更新 / DELETE 删）、创建返回 201 + `Location` 头、动作建模为子资源或查询参数。
+REST 规范：名词复数资源、HTTP 方法映射 CRUD（GET 查 / POST 建 / PATCH 部分更新 / DELETE 删）、创建返回 201 + `Location` 头、动作建模为子资源或查询参数。**完全 RESTful：零 RPC，动作资源化**。
 
 ### 6.0 主数据（F0，`routers/master_data.py`）
 
@@ -226,20 +226,23 @@ REST 规范：名词复数资源、HTTP 方法映射 CRUD（GET 查 / POST 建 /
 | POST | /positions | 创建（201，**编号自动生成**，不可手工；描述/成本字段/备注可空） |
 | GET | /positions/{id} | 详情：字段 + 占用员工 + 直线/虚线 + 事件时间线 + 成本字段 |
 | PATCH | /positions/{id} | 部分更新（含直线/虚线、成本字段；直线变更做环检测） |
-| POST | /positions/{id}/events | 创建一条生命周期流转事件（201，同步变更岗位状态） |
-| GET | /positions/{id}/cost | 按国家用工税额计算公司份额/用工成本（只读；保存用 PATCH） |
+| POST | /positions/{id}/transitions | 状态流转（201，创建一条事件并变更状态） |
+| GET | /positions/{id}/transitions | 该岗位的流转事件列表 |
+| GET | /transitions?positionId= | 全局流转事件列表（可按岗位过滤） |
+| GET | /positions/{id}/cost-calculation | 按国家用工税额计算成本（只读派生资源） |
 | DELETE | /positions/{id} | 仅无占用员工且无事件时允许 |
 | GET | /employees | 员工列表：filter company_id/employee_type/employment_status/search，分页 |
 | POST | /employees | 创建（201，必须挂岗 → 岗位自动 Filled） |
 | GET | /employees/{id} | 详情（含岗位、直线/虚线经理解析） |
 | PATCH | /employees/{id} | 部分更新；`employment_status=离职` 触发解绑→岗位 Vacant |
-| POST | /employees/{id}/transfers | 创建一条调岗记录（201，旧岗→Vacant，新岗→Filled） |
+| POST | /transfers | 调岗（201，旧岗→Vacant，新岗→Filled） |
+| GET | /transfers?employeeId= | 调岗记录列表（可按员工过滤） |
 | DELETE | /employees/{id} | 删除员工（仅已离职且已解绑） |
-| GET | /orgchart | 组织树数据：{nodes, solid_edges, dotted_edges, roots} |
-| GET | /orgchart?format=md&report=org\|solid\|dotted | 导出 Markdown（同资源不同表示） |
-| POST | /import/csv | 上传 Position.csv → 校验/幂等入库，返回报告 |
+| GET | /org-charts | 组织树数据：{nodes, solid_edges, dotted_edges, roots} |
+| GET | /org-charts?report={org\|solid\|dotted} | 导出 Markdown（`Accept: text/markdown`） |
+| POST | /imports | 上传 Position.csv → 校验/幂等入库，返回报告 |
 
-### 6.2 /orgchart 返回结构（供 SVG 渲染）
+### 6.2 /org-charts 返回结构（供 SVG 渲染）
 
 ```json
 {
@@ -261,7 +264,7 @@ REST 规范：名词复数资源、HTTP 方法映射 CRUD（GET 查 / POST 建 /
 
 ### 6.4 导出 MD（app/export_md.py，3 格式）
 
-`GET /orgchart?format=md&report={org|solid|dotted}` 返回 `text/markdown`（前端一键下载）。
+`GET /org-charts?report={org|solid|dotted}` `Accept: text/markdown` 返回 `text/markdown`（前端一键下载）。
 
 - **`org`（公司 + 岗位，无汇报线）**：按公司分组，岗位列在所属公司下（含显示名、编号、级别、状态）：
   ```markdown

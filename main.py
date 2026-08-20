@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from app import models  # noqa: F401  确保模型注册到 Base.metadata
 from app.db import Base, SessionLocal, engine
 from app.seed import seed_master_data
-from app.routers import data_clean, employees, import_routes, master_data, orgchart, positions
+from app.routers import data_clean, employees, import_routes, master_data, orgchart, positions, transfers
 
 # 启动时建表（幂等）+ 初始化主数据字典
 Base.metadata.create_all(bind=engine)
@@ -23,9 +23,10 @@ app.include_router(positions.router)
 app.include_router(employees.router)
 app.include_router(orgchart.router)
 app.include_router(import_routes.router)
+app.include_router(transfers.router)
 
 
-@app.get("/api/health")
+@app.get("/api/v1/health")
 def health():
     return {"status": "ok", "app": "HR Management"}
 

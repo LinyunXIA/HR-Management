@@ -2,6 +2,7 @@
 const DataClean = {
   parsed: null,
   csvText: null,
+  jobId: null,
 
   async render() {
     const el = document.getElementById('tab-data_clean');
@@ -68,7 +69,7 @@ const DataClean = {
     const fd = new FormData();
     fd.append('orgchart', file);
     try {
-      const r = await fetch('/api/data-clean/upload-parse', { method: 'POST', body: fd });
+      const r = await fetch('/api/v1/data-clean-jobs', { method: 'POST', body: fd });
       if (!r.ok) {
         const err = await r.json().catch(() => ({ detail: '解析失败' }));
         throw new Error(err.detail || '解析失败');
@@ -76,6 +77,7 @@ const DataClean = {
       const data = await r.json();
       this.parsed = data;
       this.csvText = data.csv_text;
+      this.jobId = data.id;
       document.getElementById('dc-status').innerHTML =
         '<span style="color:var(--ok)">✅ 解析完成，共 ' + data.total_positions + ' 个岗位</span>' +
         '<span class="hint" style="margin-left:8px">输出格式：Position.csv 模版（17 列）</span>';
@@ -128,7 +130,8 @@ const DataClean = {
     if (!this.csvText) { toast('请先解析 Org-Chart.md'); return; }
     if (!confirm('确认导入清洗后的岗位到系统？\n这将对现有岗位数据执行幂等 upsert（按编号新增或更新）。')) return;
     try {
-      const r = await post('/data-clean/import', {});
+      if (!this.jobId) { toast('请先重新解析'); return; }
+      const r = await post(`/data-clean-jobs/${this.jobId}/imports`, {});
       const imp = r.import_report || {};
       toast('导入完成：新增 ' + (imp.imported||0) + '，更新 ' + (imp.updated||0) + '，错误 ' + (imp.errors?.length||0), 'ok');
       App.loadStats();
