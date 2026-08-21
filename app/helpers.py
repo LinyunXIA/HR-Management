@@ -150,7 +150,7 @@ def serialize_position(db: Session, pn: PositionNumber) -> dict:
         "closing_date": pn.closing_date,
         "work_location": pn.work_location,
         "job_responsibility": pn.job_responsibility,
-        "legal_category": pn.legal_category.value if pn.legal_category else None,
+        "legal_category": pn.legal_category if pn.legal_category else None,
         "solid_line_manager_id": pn.solid_line_manager_id,
         "solid_line_number": sl.number if sl else None,
         "solid_line_manager_name": sl.position.name if sl else None,

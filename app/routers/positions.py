@@ -21,6 +21,7 @@ from app.models import (
     Country,
     Employee,
     EmploymentTaxItem,
+    LegalCategoryDef,
     Position,
     PositionEvent,
     PositionNumber,
@@ -129,6 +130,11 @@ def create_position(payload: PositionNumberCreate, response: Response, db: Sessi
         mgr = get_or_404(db, PositionNumber, mid, f"虚线经理岗位不存在 (id={mid})")
         _assert_management(db, mgr, "虚线经理")
 
+    # DESIGN §4.1：legal_category 为字符串，校验来自 LegalCategoryDef 字典（issue #2）
+    if payload.legal_category:
+        if not db.query(LegalCategoryDef).filter(LegalCategoryDef.name == payload.legal_category).first():
+            raise HTTPException(400, f"法律强制/可选「{payload.legal_category}」不存在，请先在主数据中添加")
+
     pn = PositionNumber(
         number=number,
         position_id=position.id,
@@ -206,6 +212,11 @@ def update_position(pid: int, payload: PositionNumberUpdate, db: Session = Depen
         validate_number_format(pn.number, new_scope, new_country.code if new_country else None)
         pn.scope = new_scope
         pn.country_id = new_country.id if new_country else None
+
+    # 校验 legal_category 字典存在性（issue #2）
+    if payload.legal_category is not None and payload.legal_category:
+        if not db.query(LegalCategoryDef).filter(LegalCategoryDef.name == payload.legal_category).first():
+            raise HTTPException(400, f"法律强制/可选「{payload.legal_category}」不存在，请先在主数据中添加")
 
     for field in ("level", "opening_date", "closing_date", "work_location",
                   "job_responsibility", "legal_category", "org_chart_display",

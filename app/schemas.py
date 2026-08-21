@@ -8,7 +8,6 @@ from app.models import (
     EmployeeType,
     EmploymentStatus,
     Gender,
-    LegalCategory,
     PositionStatus,
     Scope,
 )
@@ -51,7 +50,7 @@ class PositionNumberCreate(BaseModel):
     closing_date: date | None = None
     work_location: str | None = None
     job_responsibility: str | None = None
-    legal_category: LegalCategory | None = None
+    legal_category: str | None = None
     solid_line_manager_id: int | None = None
     dotted_manager_ids: list[int] = []
     org_chart_display: str | None = None
@@ -77,7 +76,7 @@ class PositionNumberUpdate(BaseModel):
     closing_date: date | None = None
     work_location: str | None = None
     job_responsibility: str | None = None
-    legal_category: LegalCategory | None = None
+    legal_category: str | None = None
     solid_line_manager_id: int | None = None
     dotted_manager_ids: list[int] | None = None
     org_chart_display: str | None = None

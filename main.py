@@ -74,6 +74,27 @@ def _ensure_employee_check_constraint():
 
 _ensure_employee_check_constraint()
 
+# 轻量迁移：legal_category 由 SAEnum(冗余枚举名) → String 字典值（issue #2）
+def _migrate_legal_category_values():
+    try:
+        with engine.begin() as conn:
+            mapping = {
+                "MANDATORY_INTERNAL": "法律强制·内部全职不可外包",
+                "MANDATORY_OUTSOURCEABLE": "法律强制·允许第三方外包",
+                "OPTIONAL": "可选（集团内控推荐）",
+                "LOGISTICS": "纯后勤可选",
+            }
+            for old, new in mapping.items():
+                res = conn.execute(text(
+                    "UPDATE position_numbers SET legal_category = :new WHERE legal_category = :old"
+                ), {"new": new, "old": old})
+                if res.rowcount:
+                    print(f"[migrate] legal_category {old} -> {new} ({res.rowcount} 行)", file=sys.stderr)
+    except Exception as e:
+        print(f"[migrate] legal_category migration skipped: {e}", file=sys.stderr)
+
+_migrate_legal_category_values()
+
 with SessionLocal() as db:
     seed_master_data(db)
 

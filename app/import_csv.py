@@ -14,6 +14,7 @@ from app.models import (
     Company,
     Country,
     LegalCategory,
+    LegalCategoryDef,
     Position,
     PositionNumber,
     PositionNumberDottedLine,
@@ -137,10 +138,17 @@ def import_csv(db, rows):
         legal = None
         lc = (raw.get("法律强制/可选") or "").strip()
         if lc:
+            # 校验 against LegalCategoryDef 字典，兼容旧 enum 值
             try:
-                legal = LegalCategory(lc)
+                legal = LegalCategory(lc).value
             except ValueError:
-                report["warnings"].append(f"{number}: 未知法律分类「{lc}」")
+                # 非 enum 值：检查字典表中是否存在，存在则按字符串入库
+                exists = db.query(LegalCategoryDef).filter(LegalCategoryDef.name == lc).first()  # type: ignore  # noqa: F821
+                if exists:
+                    legal = lc
+                else:
+                    report["warnings"].append(f"{number}: 未知法律分类「{lc}」")
+                    legal = lc  # 仍入库为字符串，允许运行时通过字典扩展
 
         # 职位类型（Position.md §9：Consultant / Employee / External Employee）
         position_type = (raw.get("职位类型") or "").strip() or None
