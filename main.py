@@ -2,10 +2,13 @@
 import os
 import sys
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
+
+from app.limiter import limiter
 
 from app import models  # noqa: F401  确保模型注册到 Base.metadata
 from app.db import APP_ENV, Base, SessionLocal, engine, startup_banner
@@ -41,6 +44,14 @@ with SessionLocal() as db:
     seed_master_data(db)
 
 app = FastAPI(title="轻量级 HR 管理系统", version="1.0.0")
+app.state.limiter = limiter
+
+
+def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(status_code=429, content={"detail": f"请求过于频繁，请稍后重试（{exc.detail}）"})
+
+
+app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 
 app.include_router(auth.router)
 app.include_router(master_data.router)

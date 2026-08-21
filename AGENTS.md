@@ -15,11 +15,13 @@
 # 安装依赖（Python 3.14 venv）
 .venv/bin/pip install -r requirements.txt
 
-# 三环境配置（PRD §7D，均 gitignored）
-cp .env.example .env            # dev 默认
-# 可选：cp .env.example .env.test   # test 库（hr_db_test）
-# 可选：cp .env.example .env.prod   # prod 库（hr_db_prod）
-# 启动时按 APP_ENV 自动加载对应 .env.*；库名强制 hr_db_{env}，不一致则拒启
+# 三环境配置（PRD §7D，单文件 .env 合并版）
+cp .env.example .env            # 单文件内含 dev/test/prod 三段，通过 APP_ENV 切换
+# .env 内示例：
+#   DATABASE_URL_dev=postgresql://.../hr_db_dev
+#   DATABASE_URL_test=postgresql://.../hr_db_test
+#   DATABASE_URL_prod=postgresql://.../hr_db_prod  # 含 ${POSTGRES_PASSKEY}
+# 库名强制 hr_db_{env}，不一致则拒启；旧的 .env.test/.env.prod 仍兼容
 
 # 启动（dev 默认；自动建表 + 种子数据）
 .venv/bin/uvicorn main:app --reload --port 7273   # http://127.0.0.1:7273
@@ -67,8 +69,9 @@ APP_ENV=prod .venv/bin/python -m scripts.import_csv testingdata/原始文件/Pos
 ## 5. 后端结构（app/）
 
 - `main.py:1`：入口；`Base.metadata.create_all` + `seed_master_data`；注册 6 个 router；`/` 返回 `static/index.html`；挂载 `/static`
-- `app/db.py:1`：PostgreSQL 引擎（`DATABASE_URL` 环境变量，默认 `postgresql://postgres:postgres@localhost:5432/hr_db`）
-- `app/models.py:1`：13 张表（companies/countries/levels/work_locations/scopes/legal_categories/position_types/employment_tax_items/positions/position_numbers/position_number_dotted_lines/position_events/employees）
+- `app/db.py:1`：三环境引擎（`DATABASE_URL_{env}` + `APP_ENV` 分流 + 库名强制 `hr_db_{env}` + 读写护栏 + `limiter`）；单文件 `.env` 合并版
+- `app/auth.py`：JWT 签发/校验（`Authorization: Bearer`）、bcrypt；`app/limiter.py` 全局限流（`120/min`，登录 `10/min`）
+- `app/models.py:1`：14 张表（含 `users`）+ `position_numbers/employees.version` 乐观锁
 - `app/helpers.py:1`：`validate_number_format` / `generate_number` / `check_cycle` / `set_dotted_lines` / `serialize_position`
 - `app/lifecycle.py:1`：状态机 + 事件记录
 - `app/orgchart.py`：`build_orgchart(db)` → `{nodes, solid_edges, dotted_edges, roots}`（含虚拟根“家族自然人”）
@@ -76,7 +79,7 @@ APP_ENV=prod .venv/bin/python -m scripts.import_csv testingdata/原始文件/Pos
 - `app/export_md.py`：组织图导出 MD（3 格式：org/solid/dotted）
 - `app/data_clean.py`：Org-Chart.md 解析清洗
 - `app/seed.py:1`：主数据初始化（从 Position.md 级别对照表解析，fallback 到内置 19 级）
-- `app/routers/`：`master_data.py` / `data_clean.py` / `positions.py` / `employees.py` / `orgchart.py` / `import_routes.py`
+- `app/routers/`：`auth.py` / `master_data.py` / `data_clean.py` / `positions.py` / `employees.py` / `orgchart.py` / `import_routes.py`
 - `app/schemas.py`：Pydantic 校验
 
 ## 6. 关键实现约束
@@ -105,7 +108,7 @@ APP_ENV=prod .venv/bin/python -m scripts.import_csv testingdata/原始文件/Pos
 - `data/`（gitignored）：运行时文件存储（当前主用 PostgreSQL）
 - `docs/`：`PRD.md` / `DESIGN.md` / `API.md` / `API_PUBLIC.md` / `UI_MOCKUP.html`
 - `scripts/import_csv.py`：CLI 导入脚本
-- `.env`（gitignored）：`DATABASE_URL` 必配；`.env.example` 为模版
+- `.env`（gitignored, 合并版）：`DATABASE_URL_{dev,test,prod}` 三段 + `APP_ENV` 切换；`.env.example` 为模版（含 JWT/limiter 示例）
 
 ## 9. Opencode 工作约定
 
@@ -115,10 +118,11 @@ APP_ENV=prod .venv/bin/python -m scripts.import_csv testingdata/原始文件/Pos
 - **Git**：未明确要求时不自动 commit/push；commit 前检查 `git status` / `diff`
 - **配置变更**：修改 `opencode.json` / `.opencode/**` 后需重启 opencode 生效
 
-## 10. 当前运行状态（2026-08-21 扫描）
+## 10. 当前运行状态（2026-08-22 扫描）
 
-- PostgreSQL 18.4（Postgres.app）已连通：`hr_db_dev` / `hr_db_test` / `hr_db_prod` 三库并存（prod 已建空库）
-- **三环境 DB 隔离（PRD §7D）已落地**：`app/db.py` 自动按 `APP_ENV` 加载 `.env` / `.env.test` / `.env.prod`；库名一致性校验 + prod 护栏生效
+- PostgreSQL 18.4（Postgres.app）已连通：`hr_db_dev` / `hr_db_test` / `hr_db_prod` 三库并存（prod 含 `${POSTGRES_PASSKEY}` 展开）
+- **三环境 DB 隔离（PRD §7D 合并版）已落地**：单文件 `.env` 内 `DATABASE_URL_{dev,test,prod}` + `APP_ENV` 切换；库名一致性校验 + prod 护栏 + `${POSTGRES_PASSKEY}` 展开生效
+- **JWT§7B + 乐观锁§7C + 速率限制§7B.2 已落地**：`PyJWT/bcrypt`、`version` 列、全局 `120/min` / 登录 `10/min` / 公共 `60/min`
 - 表计数（hr_db_dev）：`position_numbers=5`（testingdata 当前为 5 行精简版，待扩充到 91）
 - Python 3.14.7 + FastAPI 0.141.1 + SQLAlchemy 2.0.51 已就绪
 - 分支 `main` 与 `origin/main` 同步，工作区 clean

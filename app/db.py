@@ -53,13 +53,15 @@ def _expand_env(value: str) -> str:
 
 
 def _load_env_file(env: str) -> list[str]:
-    """加载 `.env.{env}` 与 `.env`（按需），仅写入未显式设置的 key。
+    """加载 `.env`（统一单文件，内含三环境段）并兼容旧的 `.env.{env}`。
 
     支持 `${VAR}` / `$VAR` 引用 shell 环境变量（用于避免密码硬编码）。
     返回加载的文件列表，便于启动日志。
     """
     loaded: list[str] = []
-    for name in (f".env.{env}", ".env"):
+    # 1) 统一单文件 .env（必读）
+    # 2) 兼容旧的三文件 .env.{env}（若存在则追加，且仅对未显式键生效）
+    for name in (".env", f".env.{env}"):
         path = PROJECT_ROOT / name
         if not path.exists():
             continue
@@ -77,17 +79,54 @@ def _load_env_file(env: str) -> list[str]:
             k = k.strip()
             if not k:
                 continue
+            # 去引号后暂不展开 ${VAR}，延迟到 _resolve 阶段统一展开，
+            # 以支持 .env 内 DATABASE_URL_prod 引用 ${POSTGRES_PASSKEY} 且该变量在 shell 后设的场景
             v = _strip_quotes(v)
-            v = _expand_env(v)
             if k not in os.environ:
+                # 先存原始值，带 ${} 的稍后展开
                 os.environ[k] = v
-        loaded.append(name)
+                # 对非 DATABASE_URL_* 的普通键立即展开（JWT 等）
+                if not k.startswith("DATABASE_URL"):
+                    try:
+                        os.environ[k] = _expand_env(v)
+                    except RuntimeError:
+                        # 延迟展开，保留原始值供后续错误提示
+                        pass
+        if name not in loaded:
+            loaded.append(name)
     return loaded
 
 
+def _peek_app_env_from_dotenv() -> str | None:
+    """若 shell 未设 APP_ENV，尝试从 .env 读取 APP_ENV（首个非注释行）。"""
+    path = PROJECT_ROOT / ".env"
+    if not path.exists():
+        return None
+    try:
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            if k.strip() == "APP_ENV":
+                return _strip_quotes(v).strip().lower() or None
+    except OSError:
+        return None
+    return None
+
+
 def get_app_env() -> str:
-    """解析 APP_ENV；未设则回退 dev；非法值抛出。"""
+    """解析 APP_ENV；未设则回退 dev；非法值抛出。
+
+    优先级：shell 显式 > .env 内 APP_ENV > dev。
+    """
     raw = os.environ.get("APP_ENV", "").strip().lower()
+    if not raw:
+        peek = _peek_app_env_from_dotenv()
+        if peek:
+            raw = peek
     if not raw:
         raw = "dev"
     if raw not in ALLOWED_ENVS:
@@ -136,12 +175,27 @@ def _default_url(app_env: str) -> str:
 
 
 def _resolve_database_url() -> tuple[str, str, list[str]]:
-    """确定 (DATABASE_URL, APP_ENV, loaded_env_files)。"""
+    """确定 (DATABASE_URL, APP_ENV, loaded_env_files)。
+
+    支持合并 .env：
+      - 若显式 DATABASE_URL 已设（shell/.env 直接写），直接使用
+      - 否则若存在 DATABASE_URL_{env}（如 DATABASE_URL_prod），取该值并展开 ${VAR}
+      - 否则回退到默认拼接
+    """
     app_env = get_app_env()
     loaded = _load_env_file(app_env)
     url = os.environ.get("DATABASE_URL", "").strip()
-    if not url:
-        url = _default_url(app_env)
+    if url:
+        url = _expand_env(url)
+    else:
+        per_env_key = f"DATABASE_URL_{app_env}"
+        per_env_val = os.environ.get(per_env_key, "").strip()
+        if per_env_val:
+            url = _expand_env(per_env_val)
+            # 将解析后的 URL 同步为 DATABASE_URL，便于后续代码/日志一致
+            os.environ["DATABASE_URL"] = url
+        else:
+            url = _default_url(app_env)
     _validate_database_url(url, app_env)
     return url, app_env, loaded
 

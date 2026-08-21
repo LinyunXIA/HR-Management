@@ -1,7 +1,9 @@
 """认证路由：登录 / 注册 / 当前用户（PRD §7B）。"""
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+
+from app.limiter import limiter
 
 from app.auth import (
     create_access_token,
@@ -35,7 +37,8 @@ class TokenResponse(BaseModel):
 
 
 @router.post("/auth/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == payload.username).first()
     if not user or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(401, "用户名或密码错误")
@@ -53,7 +56,8 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/auth/register", status_code=201)
-def register(payload: RegisterRequest, response: Response,
+@limiter.limit("10/minute")
+def register(request: Request, payload: RegisterRequest, response: Response,
              current: User = Depends(get_current_user),
              db: Session = Depends(get_db)):
     """注册新用户（需已登录的管理员）。首个用户可无认证注册（种子阶段兜底）。"""
@@ -80,7 +84,8 @@ def register(payload: RegisterRequest, response: Response,
 
 # 允许匿名注册首个用户的备用端点（与上方复用逻辑，避免循环依赖）
 @router.post("/auth/register-first", status_code=201)
-def register_first(payload: RegisterRequest, response: Response, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def register_first(request: Request, payload: RegisterRequest, response: Response, db: Session = Depends(get_db)):
     if db.query(User).count() > 0:
         raise HTTPException(400, "系统已有用户，请使用 /auth/register（需管理员 Token）")
     if db.query(User).filter(User.username == payload.username).first():

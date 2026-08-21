@@ -6,3 +6,5 @@ python-multipart>=0.0.9
 psycopg2-binary>=2.9
 PyJWT>=2.8
 bcrypt>=4.1
+slowapi>=0.1.9
+limits>=3.13

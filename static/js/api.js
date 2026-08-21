@@ -21,6 +21,10 @@ async function api(path, options = {}) {
         if (window.Auth) Auth.showLogin();
       }
     }
+    if (res.status === 429) {
+      const msg = (data && data.detail) || '请求过于频繁，请稍后重试';
+      toast(msg, 'error');
+    }
     if (res.status === 409) {
       const msg = (data && (data.detail || data.message)) || '数据已被他人修改，请刷新后重试';
       throw Object.assign(new Error(typeof msg === 'string' ? msg : JSON.stringify(msg)), { status: 409 });
