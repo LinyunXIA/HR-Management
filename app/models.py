@@ -46,7 +46,7 @@ class PositionStatus(str, enum.Enum):
 
 
 class LegalCategory(str, enum.Enum):
-    """法律强制/可选。"""
+    """法律强制/可选（仅用于 CSV 导入映射，运行时以 LegalCategoryDef 字典为准）。"""
     MANDATORY_INTERNAL = "法律强制·内部全职不可外包"
     MANDATORY_OUTSOURCEABLE = "法律强制·允许第三方外包"
     OPTIONAL = "可选（集团内控推荐）"
@@ -197,7 +197,8 @@ class PositionNumber(Base):
     closing_date = Column(Date, nullable=True)
     work_location = Column(String(255), nullable=True)
     job_responsibility = Column(Text, nullable=True)
-    legal_category = Column(SAEnum(LegalCategory, native_enum=False, length=50), nullable=True)
+    # DESIGN §4.1：String 引用 legal_categories 字典，允许运行时扩展（issue #2）
+    legal_category = Column(String(50), nullable=True)
 
     solid_line_manager_id = Column(
         Integer, ForeignKey("position_numbers.id", ondelete="SET NULL"), nullable=True
