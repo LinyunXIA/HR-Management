@@ -40,6 +40,40 @@ def _ensure_version_columns():
 
 _ensure_version_columns()
 
+# 轻量迁移：补 employees 在职必须挂岗的 CHECK 约束（issue #1，PRD §5）
+def _ensure_employee_check_constraint():
+    try:
+        with engine.begin() as conn:
+            # 若已存在旧的违反约束的行，先报告（不阻断启动，但约束将添加失败）
+            v = conn.execute(text(
+                "SELECT count(*) FROM employees "
+                "WHERE employment_status NOT IN ('TERMINATED', '离职') AND position_number_id IS NULL"
+            )).scalar()
+            if v and v > 0:
+                print(f"[migrate] WARNING: {v} 行在职员工 position_number_id 为 NULL，CHECK 约束将拒绝此数据，请先修复", file=sys.stderr)
+            # 幂等添加/修复 CHECK（PostgreSQL 无 IF NOT EXISTS，依赖 pg_constraint 判断）
+            exists = conn.execute(text(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname='ck_employees_position_required_if_active'"
+            )).first()
+            expected_def = "CHECK ((employment_status = ANY (ARRAY['TERMINATED'::text, '离职'::text])) OR (position_number_id IS NOT NULL))"
+            need_replace = False
+            if exists:
+                # 若旧约束定义仅含 '离职'（未含 TERMINATED），则替换
+                if 'TERMINATED' not in exists[0]:
+                    need_replace = True
+                    conn.execute(text("ALTER TABLE employees DROP CONSTRAINT ck_employees_position_required_if_active"))
+                    print("[migrate] 旧 ck_employees_position_required_if_active 定义不完整，已删除待重建", file=sys.stderr)
+            if not exists or need_replace:
+                conn.execute(text(
+                    "ALTER TABLE employees ADD CONSTRAINT ck_employees_position_required_if_active "
+                    "CHECK (employment_status IN ('TERMINATED', '离职') OR position_number_id IS NOT NULL)"
+                ))
+                print("[migrate] ck_employees_position_required_if_active 已添加", file=sys.stderr)
+    except Exception as e:
+        print(f"[migrate] employees CHECK constraint skipped: {e}", file=sys.stderr)
+
+_ensure_employee_check_constraint()
+
 with SessionLocal() as db:
     seed_master_data(db)
 

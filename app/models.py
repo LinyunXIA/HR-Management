@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     Date,
     DateTime,
@@ -258,8 +259,18 @@ class PositionEvent(Base):
 
 
 class Employee(Base):
-    """人员档案（必须挂岗）。"""
+    """人员档案（必须挂岗 — 在职 NOT NULL，离职解绑可为 NULL）。"""
     __tablename__ = "employees"
+    __table_args__ = (
+        # PRD §5 要求「必须挂岗」：在职/试用期/休假时 position_number_id 必须非空，
+        # 仅离职（离职）允许解绑为 NULL。DB 层强制，防止绕过应用逻辑产生孤儿记录。
+        # 保持 nullable=True 以支持离职解绑流程（app/routers/employees.py:_vacate），
+        # 但用 CHECK 约束保证在职员工不为 NULL（issue #1，Option B）。
+        CheckConstraint(
+            "employment_status IN ('TERMINATED', '离职') OR position_number_id IS NOT NULL",
+            name="ck_employees_position_required_if_active",
+        ),
+    )
 
     id = Column(Integer, primary_key=True)
     employee_no = Column(String(50), unique=True, nullable=False)
