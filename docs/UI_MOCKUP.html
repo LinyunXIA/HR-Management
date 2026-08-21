@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>轻量级 HR 管理系统 · UI 原型图（v0.4）</title>
+<title>轻量级 HR 管理系统 · UI 原型图（v2.2）</title>
 <style>
   :root{
     --bg:#f5f6f8; --panel:#fff; --border:#e3e6ea; --text:#1f2733; --muted:#6b7480;
@@ -88,15 +88,42 @@
 <body>
 <div class="wrap">
   <h1>轻量级 HR 管理系统 · UI 原型</h1>
-  <p class="sub">PRD v0.4 / DESIGN v1.1 — 线框示意图（顶部导航含新增「主数据配置」，点击切换页面）</p>
+  <p class="sub">PRD v2.2 / DESIGN v2.2 — 线框示意图（6 Tab + 顶部登录态；单文件 .env 合并、JWT/限流/乐观锁已落地）</p>
 
   <div class="app-nav">
-    <button data-page="master" class="active">主数据配置 <span class="badge">NEW</span></button>
+    <button data-page="data_clean">数据清洗</button>
+    <button data-page="master" class="active">主数据配置</button>
     <button data-page="positions">岗位管理</button>
     <button data-page="employees">员工管理</button>
     <button data-page="orgchart">组织架构</button>
     <button data-page="import">数据导入</button>
+    <span class="box" style="margin-left:auto">👤 admin · admin <span class="box btn">退出</span></span>
   </div>
+  <div class="note-box">顶部：左侧标题 + 中间 6 Tab + 右侧登录徽章（<code>admin/admin123</code> JWT，<code>localStorage:hr_token</code>）；限流：全局 120/min、登录 10/min、公共 60/min → 429 toast；乐观锁冲突 → 409 toast“已被他人修改，请刷新”。</div>
+
+  <!-- ================= 数据清洗 ================= -->
+  <section class="page" id="page-data_clean">
+    <div class="wf">
+      <div class="wf-head"><span class="title">数据清洗</span><span class="note">上传 Org-Chart.md → 解析清洗 → 输出 Position.csv 格式 CSV → 导入系统</span></div>
+      <div class="wf-body">
+        <div style="border:2px dashed var(--border);border-radius:10px;padding:28px;text-align:center;color:var(--muted)">
+          📄 点击选择或拖入 Org-Chart.md
+          <div style="font-size:11px;margin-top:6px">支持 <code>```tree</code> / <code># 完整组织架构树</code> 两种格式；提取 🧑‍💼/👨‍👩‍👧/📋 三类岗位</div>
+        </div>
+        <div class="mt12" style="display:flex;gap:10px">
+          <div style="flex:1;background:#fafbfc;border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center"><div style="font-weight:700">68</div><div style="font-size:11px;color:var(--muted)">解析岗位</div></div>
+          <div style="flex:1;background:#e8f6ec;border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center"><div style="font-weight:700;color:var(--ok)">57</div><div style="font-size:11px;color:var(--muted)">✅ 通过</div></div>
+          <div style="flex:1;background:#eef4fd;border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center"><div style="font-weight:700;color:var(--primary)">11</div><div style="font-size:11px;color:var(--muted)">🔧 已修复</div></div>
+          <div style="flex:1;background:#fff8e6;border:1px solid #f0e2b8;border-radius:8px;padding:10px;text-align:center"><div style="font-weight:700">2</div><div style="font-size:11px;color:var(--muted)">⚠️ 警告</div></div>
+        </div>
+        <div class="note-box">8 关键字段：职位名 / 类型 / 公司 / 级别 / 国家范围 / 开启日 / 工作地点（从公司名推断） / 法律强制；下游可下载 CSV 或一键导入（复用 <code>/imports</code> upsert）。</div>
+        <div class="mt12" style="border:1px solid var(--border);border-radius:8px;padding:8px">
+          <div style="font-weight:600;font-size:12px;margin-bottom:6px">清洗结果 CSV（Position.csv 17 列） <span class="box btn">复制</span> <span class="box btn">下载</span> <span class="box btn primary">✓ 确认导入</span></div>
+          <div style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted);background:#fafbfc;padding:6px;border-radius:6px">职位,职位类型,岗位编号,隶属公司,级别,国家或地区,职位开启日,...</div>
+        </div>
+      </div>
+    </div>
+  </section>
 
   <!-- ================= 主数据配置 ================= -->
   <section class="page active" id="page-master">
@@ -172,7 +199,8 @@
         </tbody>
       </table>
 
-      <div class="wf-head mt12"><span class="title">岗位详情（成本字段区）</span><span class="note">两种模式互斥，未启用置灰</span></div>
+      <div class="note-box">编辑保存携带 <code>version</code>（来自 <code>GET /positions/{id}</code>）；若他人已修改 → 后端 409，前端 toast“数据已被他人修改，请刷新后重试”；含直线/虚线经理环检测、管理岗限定。</div>
+      <div class="wf-head mt12"><span class="title">岗位详情（成本字段区）</span><span class="note">两种模式互斥，未启用置灰；version 透传；429 限流提示</span></div>
       <div class="wf-body">
         <div class="cost-toggle">
           <div class="cost-mode"><input type="radio" name="costmode" id="auto"><label for="auto">自动计算（按国家用工税额）</label></div>
@@ -194,10 +222,25 @@
     </div>
   </section>
 
+  <!-- ================= 登录态（JWT） ================= -->
+  <section class="page" id="page-auth" style="display:none">
+    <div class="wf" style="max-width:420px;margin:0 auto">
+      <div class="wf-head"><span class="title">登录</span><span class="note">JWT · admin/admin123</span></div>
+      <div class="wf-body">
+        <div style="display:grid;gap:10px">
+          <div class="cost-field"><label>用户名 *</label><input type="text" value="admin"></div>
+          <div class="cost-field"><label>密码 *</label><input type="text" value="••••••••"></div>
+          <div class="note-box">登录 → <code>POST /auth/login</code> → <code>access_token</code> 存 <code>localStorage:hr_token</code>；后续 <code>Authorization: Bearer</code> 自动携带；401 弹登录，429 “请求过于频繁”。</div>
+          <div style="display:flex;justify-content:flex-end;gap:8px"><span class="box btn">取消</span><span class="box btn primary">登录</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- ================= 员工管理 ================= -->
   <section class="page" id="page-employees">
     <div class="wf">
-      <div class="wf-head"><span class="title">员工管理</span><span class="note">必须挂岗；入职/调岗/离职自动联动岗位状态</span></div>
+      <div class="wf-head"><span class="title">员工管理</span><span class="note">必须挂岗；入职/调岗/离职自动联动岗位状态；离职携带 version，409 需刷新</span></div>
       <div class="toolbar">
         <span class="box sel">公司：全部</span><span class="box">类型：全部</span><span class="box">在职状态：全部</span>
         <span class="box">🔍 搜索</span><span class="box grow"></span><span class="box btn primary">＋ 新增员工</span>
@@ -276,7 +319,8 @@
     </div>
   </section>
 
-  <p class="sub mt12">此文件为 UI 线框示意图（docs/UI_MOCKUP.html），用于评审界面结构与交互；实际以运行的系统为准。</p>
+  <div class="note-box mt12" style="position:fixed;top:70px;right:24px;background:#d64545;color:#fff;border:none;max-width:320px">示例 toast（409）：数据已被他人修改，请刷新后重试<br>示例 toast（429）：请求过于频繁，请稍后重试</div>
+  <p class="sub mt12">此文件为 UI 线框示意图（docs/UI_MOCKUP.html v2.2），用于评审界面结构与交互；实际以运行的系统为准。更新：单文件 .env 合并 + JWT/限流/乐观锁 + 数据清洗 Tab + 登录态。</p>
 </div>
 
 <script>

@@ -2,10 +2,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | v1.0 |
-| 更新日期 | 2026-08-04 |
+| 文档版本 | v1.1 |
+| 更新日期 | 2026-08-22 |
 | 基准 | 严格 REST 规范（见 [DESIGN.md](./DESIGN.md) §6） |
-| Base URL | `http://127.0.0.1:8000/api/v1` |
+| Base URL | `http://127.0.0.1:8000/api/v1`（端口随 `uvicorn --port` 可变，dev 默认 `7273`；三环境 `.env` 单文件 via `APP_ENV` 分流，见 `app/db.py:1`） |
 
 ---
 
@@ -13,14 +13,19 @@
 
 - **REST 规范**：名词复数资源、HTTP 方法映射 CRUD、创建返回 `201 Created` + `Location` 头、部分更新用 `PATCH`。
 - **请求/响应**：JSON（`Content-Type: application/json`）；导出为 `text/markdown`。
+- **认证**：对外接口 `GET /public/companies` 及 `GET /auth/me`、`GET /users`、`POST /auth/register` 需 JWT（`Authorization: Bearer <token>`，见 §2.4；`app/auth.py:76`）。内部管理接口（岗位/员工/主数据 CRUD）当前不强制 JWT，前端通过 `static/js/api.js:2` 自动携带（若已登录）。
+- **限流**：全局 `120/minute` / IP（`app/limiter.py:1` / `main.py:1`）；敏感接口单独更严：`POST /auth/login` `10/min`、`POST /auth/register-first` `5/min`、`GET /public/companies` `60/min`，超限返回 `429`。
 - **状态码**：
   | 码 | 含义 |
   | --- | --- |
   | 200 | 成功（GET / PATCH / DELETE） |
   | 201 | 创建成功（POST，响应头含 `Location`） |
   | 400 | 参数/业务校验失败（详情见 `detail`） |
+  | 401 | 未认证/Token 过期或无效（对外接口） |
   | 404 | 资源不存在 |
+  | 409 | 乐观锁冲突（`version` 不一致，见 §3.2/`app/helpers.py:1`） |
   | 422 | 状态流转非法 |
+  | 429 | 限流（`RateLimitExceeded`，见 `main.py:1`） |
 - **错误格式**：`{"detail": "错误描述"}` 或校验错误的字段数组。
 - **分页**：列表接口返回 `{total, page, page_size, items}`，参数 `page` / `page_size`（默认 50）。
 
@@ -42,9 +47,9 @@
 
 ## 2. 主数据（Master Data）
 
-### 2.1 隶属公司 / 国家 / 级别 / 工作地点 / 工作范围
+### 2.1 隶属公司 / 国家 / 级别 / 工作地点 / 工作范围 / 法律强制 / 职位类型
 
-资源路径：`/companies`、`/countries`、`/levels`、`/work-locations`、`/scopes`
+资源路径：`/companies`、`/countries`、`/levels`、`/work-locations`、`/scopes`、`/legal-categories`、`/position-types`
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
@@ -74,6 +79,8 @@
 | levels | `code`（如 M8a/B7b）, `label`, `is_management`, `sort_order` |
 | work-locations | `name`, `sort_order` |
 | scopes | `code`（family/global/regional/country）, `label`, `suffix_code`（1/2/3/4）, `sort_order` |
+| legal-categories | `name`, `sort_order` |
+| position-types | `name`, `sort_order` |
 
 ### 2.2 员工用工税额（按国家）
 
@@ -100,11 +107,36 @@
 
 对外暴露的只读接口已**单独成文**，见 **[API_PUBLIC.md](./API_PUBLIC.md)**。
 
-当前对外接口：
+当前对外接口（**需 JWT**，`app/routers/master_data.py:144`）：
 
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET | `/public/companies` | 所有隶属公司（仅 `id` + `name`），无认证 |
+| 方法 | 路径 | 说明 | 认证 | 限流 |
+| --- | --- | --- | --- | --- |
+| GET | `/public/companies` | 所有隶属公司（仅 `id` + `name`） | JWT | `60/min` |
+
+### 2.4 认证（Auth，PRD §7B）
+
+| 方法 | 路径 | 说明 | 认证 | 限流 |
+| --- | --- | --- | --- | --- |
+| POST | `/auth/login` | 登录换取 JWT | 无 | `10/min` |
+| POST | `/auth/register` | 注册新用户（需 admin） | JWT | `10/min` |
+| POST | `/auth/register-first` | 首个用户免认证注册（空库时） | 无 | `5/min` |
+| GET | `/auth/me` | 当前用户信息 | JWT | 全局 |
+| GET | `/users` | 用户列表（仅 admin） | JWT | 全局 |
+
+**POST /auth/login 请求体**
+
+```json
+{ "username": "admin", "password": "admin123" }
+```
+
+响应（`app/routers/auth.py:39`）：
+
+```json
+{ "access_token": "eyJhbGciOiJIUzI1NiIs...", "token_type": "bearer", "username": "admin", "role": "admin", "expires_in": 43200 }
+```
+
+- 默认种子 `admin/admin123`（`app/seed.py:1`，可由 `DEFAULT_ADMIN_USER/PASSWORD` 覆盖）。
+- JWT：HS256，`app/auth.py:20`（`JWT_SECRET_KEY`/`JWT_EXPIRE_MINUTES`），`Authorization: Bearer <token>`（兼容 `X-Token` / `?token=`）。
 
 ---
 
@@ -123,8 +155,8 @@
 | --- | --- | --- |
 | GET | `/positions` | 列表（含筛选） |
 | POST | `/positions` | 创建（201，**编号自动生成**） |
-| GET | `/positions/{id}` | 详情（含事件时间线） |
-| PATCH | `/positions/{id}` | 部分更新（含成本字段；直线经理变更做环检测） |
+| GET | `/positions/{id}` | 详情（含事件时间线 + `version`） |
+| PATCH | `/positions/{id}` | 部分更新（含成本字段；直线经理变更做环检测；**需 `version` 乐观锁，冲突 409**） |
 | POST | `/positions/{id}/transitions` | 状态流转（201，创建一条事件并变更状态） |
 | GET | `/positions/{id}/transitions` | 该岗位的流转事件列表 |
 | GET | `/transitions?positionId=` | 全局流转事件列表（可按岗位过滤） |
@@ -167,7 +199,15 @@
 }
 ```
 
-响应（201 + `Location: /api/positions/{id}`）：完整岗位对象，含 `number`、`status`、`cost_mode`、`salary_before_tax`、`company_share`、`labor_cost`、`incumbent_name` 等（键列表见 §3.3）。
+响应（201 + `Location: /api/positions/{id}`）：完整岗位对象，含 `number`、`status`、`cost_mode`、`salary_before_tax`、`company_share`、`labor_cost`、`incumbent_name`、`version` 等（键列表见 §3.3）。
+
+**PATCH /positions/{id}（乐观锁，PRD §7C）**
+
+- 请求体需携带 `version`（从 `GET /positions/{id}` 读取，`app/helpers.py:1` 的 `assert_version` 校验）：
+  ```json
+  { "version": 3, "remark": "更新备注" }
+  ```
+- 成功：`version` 自增并返回新对象；冲突：`409 {"detail":"岗位已被他人修改，请刷新后重试（当前版本 3，提交版本 2）"}`，前端 `static/js/positions.js:1` 提示刷新。
 
 **POST /positions/{id}/transitions（状态流转）请求体**
 
@@ -175,7 +215,7 @@
 { "to_status": "open", "note": "开岗招聘" }
 ```
 
-响应（201）：`{ "id", "position_number_id", "from_status", "to_status", "changed_at", "note" }`。非法流转返回 422。
+响应（201）：`{ "id", "position_number_id", "from_status", "to_status", "changed_at", "note" }`。非法流转返回 422。不受乐观锁约束（`lifecycle.transition` 原子）。
 
 **GET /positions/{id}/cost-calculation（自动模式成本计算，只读派生资源）**
 
@@ -192,7 +232,7 @@
 }
 ```
 
-> 计算规则：公司份额 = 税前薪资 × Σ(该岗位国家全部启用科目税率)；用工成本 = 税前薪资 + 公司份额。手动模式/无税前薪资/无国家 → 400。保存计算值请 `PATCH /positions/{id}`（`company_share` / `labor_cost`）。
+> 计算规则：公司份额 = 税前薪资 × Σ(该岗位国家全部启用科目税率)；用工成本 = 税前薪资 + 公司份额。手动模式/无税前薪资/无国家 → 400。保存计算值请 `PATCH /positions/{id}`（`company_share` / `labor_cost` + `version`）。
 
 ### 3.3 岗位对象字段
 
@@ -210,7 +250,7 @@
   "org_chart_display": "SSC Statutory MLRO", "prev_position_id": null, "prev_position_number": null,
   "prev_company_id": null, "prev_company_name": null, "remark": "双线汇报",
   "status": "open", "cost_mode": "manual", "salary_before_tax": null, "company_share": null, "labor_cost": null,
-  "incumbent_id": null, "incumbent_name": null,
+  "incumbent_id": null, "incumbent_name": null, "version": 3,
   "created_at": "2026-08-04T08:00:00", "updated_at": "2026-08-04T08:00:00"
 }
 ```
@@ -225,8 +265,8 @@
 | --- | --- | --- |
 | GET | `/employees` | 列表（含筛选） |
 | POST | `/employees` | 创建（201，必须挂岗 → 岗位自动 Filled） |
-| GET | `/employees/{id}` | 详情（含岗位、直线/虚线经理） |
-| PATCH | `/employees/{id}` | 部分更新；`employment_status=离职` 触发解绑 → 岗位 Vacant |
+| GET | `/employees/{id}` | 详情（含岗位、直线/虚线经理 + `version`） |
+| PATCH | `/employees/{id}` | 部分更新；`employment_status=离职` 触发解绑 → 岗位 Vacant；**需 `version` 乐观锁，冲突 409** |
 | POST | `/transfers` | 调岗（201，旧岗→Vacant，新岗→Filled） |
 | GET | `/transfers?employeeId=` | 调岗记录列表（可按员工过滤） |
 | DELETE | `/employees/{id}` | 删除（仅已离职且已解绑） |
@@ -244,11 +284,13 @@
 }
 ```
 
-**PATCH /employees/{id}（离职）**
+**PATCH /employees/{id}（离职，乐观锁）**
 
 ```json
-{ "employment_status": "离职" }
+{ "version": 2, "employment_status": "离职" }
 ```
+
+冲突同岗位：`409 {"detail":"员工已被他人修改，请刷新后重试"}`。
 
 **POST /transfers 请求体**
 
@@ -256,7 +298,7 @@
 { "employee_id": 5, "to_position_id": 15 }
 ```
 
-**员工对象字段**：`id, employee_no, name, gender, birth_date, phone, email, hire_date, employee_type, employment_status, position_number_id, position_number, position_name, company_id, company_name, solid_line_manager_id, solid_line_number, solid_line_manager_name, dotted_manager_ids, dotted_manager_numbers, remark, created_at, updated_at`
+**员工对象字段**：`id, employee_no, name, gender, birth_date, phone, email, hire_date, employee_type, employment_status, position_number_id, position_number, position_name, company_id, company_name, solid_line_manager_id, solid_line_number, solid_line_manager_name, dotted_manager_ids, dotted_manager_numbers, remark, version, created_at, updated_at`
 
 ---
 
@@ -356,30 +398,36 @@ multipart/form-data，字段 `orgchart`：Org-Chart.md 文件。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/health` | `{"status": "ok", "app": "HR Management"}` |
+| GET | `/health` | `{"status": "ok", "app": "HR Management", "env": "dev"}`（`env` 为 `APP_ENV`，`main.py:1`） |
 
 ---
 
 ## 附录：完整端点清单
 
-| 方法 | 路径 | 模块 |
-| --- | --- | --- |
-| GET/POST, PATCH/DELETE | /companies、/countries、/levels、/work-locations、/scopes、/legal-categories、/position-types | master_data |
-| GET/POST, PATCH/DELETE | /employment-tax-items、/employment-tax-items/{id} | master_data |
-| GET | /public/companies | master_data |
-| GET/POST | /position-functions | positions |
-| GET/POST, GET/PATCH/DELETE | /positions、/positions/{id} | positions |
-| POST | /positions/{id}/transitions | positions |
-| GET | /positions/{id}/transitions | positions |
-| GET | /transitions | positions |
-| GET | /positions/{id}/cost-calculation | positions |
-| GET/POST, GET/PATCH/DELETE | /employees、/employees/{id} | employees |
-| POST | /transfers | transfers |
-| GET | /transfers | transfers |
-| GET | /org-charts | orgchart |
-| POST | /imports | import_routes |
-| GET | /imports | import_routes |
-| GET/POST | /data-clean-jobs、/data-clean-jobs/{jobId}、/data-clean-jobs/{jobId}/imports、/data-clean-jobs/files/list | data_clean |
-| GET | /health | main |
+| 方法 | 路径 | 模块 | 认证 | 限流 |
+| --- | --- | --- | --- | --- |
+| POST | /auth/login | auth | 无 | `10/min` |
+| POST | /auth/register | auth | JWT | `10/min` |
+| POST | /auth/register-first | auth | 无 | `5/min` |
+| GET | /auth/me | auth | JWT | 全局 |
+| GET | /users | auth | JWT | 全局 |
+| GET/POST, PATCH/DELETE | /companies、/countries、/levels、/work-locations、/scopes、/legal-categories、/position-types | master_data | 无 | 全局 |
+| GET/POST, PATCH/DELETE | /employment-tax-items、/employment-tax-items/{id} | master_data | 无 | 全局 |
+| GET | /public/companies | master_data | JWT | `60/min` |
+| GET/POST | /position-functions | positions | 无 | 全局 |
+| GET/POST, GET/PATCH/DELETE | /positions、/positions/{id} | positions | 无 | 全局（PATCH 需 `version`，`app/helpers.py:1`） |
+| POST | /positions/{id}/transitions | positions | 无 | 全局 |
+| GET | /positions/{id}/transitions | positions | 无 | 全局 |
+| GET | /transitions | positions | 无 | 全局 |
+| GET | /positions/{id}/cost-calculation | positions | 无 | 全局 |
+| GET/POST, GET/PATCH/DELETE | /employees、/employees/{id} | employees | 无 | 全局（PATCH 需 `version`） |
+| POST | /transfers | transfers | 无 | 全局 |
+| GET | /transfers | transfers | 无 | 全局 |
+| GET | /org-charts | orgchart | 无 | 全局 |
+| POST | /imports | import_routes | 无 | 全局 |
+| GET | /imports | import_routes | 无 | 全局 |
+| GET/POST | /data-clean-jobs、/data-clean-jobs/{jobId}、/data-clean-jobs/{jobId}/imports、/data-clean-jobs/files/list | data_clean | 无 | 全局 |
+| GET | /health | main | 无 | 全局 |
 
-> 注：以上为系统当前活跃端点全集。
+> 注：以上为系统当前活跃端点全集。全局限流 `120/min`（`app/limiter.py:1`）；超限 `429`。
+

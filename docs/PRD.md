@@ -2,10 +2,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | v2.1（新增 7D 多环境 DB 隔离：hr_db_{env}、同机不同库、prod 防删、.env.* 约定） |
-| 更新日期 | 2026-08-20 |
+| 文档版本 | v2.2（合并单文件 .env：DATABASE_URL_{dev,test,prod} + 速率限制 + 外部 API 鉴权落地） |
+| 更新日期 | 2026-08-22 |
 | 状态 | 草案 |
-| 目标版本 | V2.1 |
+| 目标版本 | V2.2 |
 
 ---
 
@@ -350,6 +350,7 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 
 | 表 | 关键字段 | 说明 |
 | --- | --- | --- |
+| `users` | id, username(唯一), hashed_password(bcrypt), role, is_active, created_at | 系统用户（JWT，§7B；默认 `admin/admin123`） |
 | `companies` | id, name | 隶属公司（法人实体），主数据可维护 |
 | `countries` | id, name, code | 国家/地区（-4-{编号}），主数据可维护 |
 | `levels` | id, code(唯一), label, is_management, sort_order | 级别字典（按 §3.6 初始化；M 开头=管理岗） |
@@ -358,10 +359,10 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 | `legal_categories` | id, name(唯一), sort_order | 法律强制/可选字典 |
 | `employment_tax_items` | id, country_id, item_name(科目), tax_rate(税率), is_active | 员工用工税额配置（按国家） |
 | `positions` | id, name | 职位（职能） |
-| `position_numbers` | id, position_id, number(唯一), company_id, level(字典代码), scope(枚举+字典), country_id, opening_date, closing_date, work_location(字典), job_responsibility, legal_category(字典), solid_line_manager_id(自引用), org_chart_display, prev_position_id, prev_company_id, remark, status, **cost_mode(auto/manual), salary_before_tax, company_share, labor_cost** | 岗位编号（管理主体） |
+| `position_numbers` | id, position_id, number(唯一), company_id, level(字典代码), scope(枚举+字典), country_id, opening_date, closing_date, work_location(字典), job_responsibility, legal_category(字典), solid_line_manager_id(自引用), org_chart_display, prev_position_id, prev_company_id, remark, status, **cost_mode(auto/manual), salary_before_tax, company_share, labor_cost, version(乐观锁)** | 岗位编号（管理主体，`version` 见 §7C） |
 | `position_number_dotted_lines` | position_number_id, dotted_manager_id | 虚线经理多对多 |
 | `position_events` | id, position_number_id, from_status, to_status, changed_at, note, employee_id | 生命周期事件 |
-| `employees` | id, employee_no(唯一), name, gender, birth_date, phone, email, hire_date, employee_type, employment_status, position_number_id(**NOT NULL**), remark | 人员档案 |
+| `employees` | id, employee_no(唯一), name, gender, birth_date, phone, email, hire_date, employee_type, employment_status, position_number_id(**NOT NULL**), remark, **version(乐观锁)** | 人员档案（`version` 见 §7C） |
 
 约束要点：
 - `position_numbers.number`、`employees.employee_no` 唯一；岗位与员工**一对一**占用（至多 1 名在职员工）。
@@ -404,8 +405,8 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 - 请求头格式：`Authorization: Bearer <token>`。
 
 ### 7B.2 安全措施
-- 密码（如有用户系统）使用 bcrypt 哈希存储。
-- API 请求速率限制（防止滥用）。
+- 密码（如有用户系统）使用 bcrypt 哈希存储（`app/auth.py:29`，`PyJWT/bcrypt`）。
+- API 请求速率限制（`app/limiter.py:1` + `main.py:1`，`slowapi`；全局 `120/min` / IP，登录 `10/min` / 首注 `5/min` / 公共 `60/min`，超限 `429`）。
 - 输入校验：所有接口输入均经过 Pydantic 校验，防止注入。
 - PostgreSQL 连接使用参数化查询（SQLAlchemy ORM 天然支持），防 SQL 注入。
 
@@ -436,13 +437,19 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 - 同机不同库，库名强制 `hr_db_{env}`：`hr_db_dev` / `hr_db_test` / `hr_db_prod`，禁止自定义库名/复用同一库。
 - 同一 PostgreSQL 实例内三库并存，账号可共用但生产建议独立最小权限账号。
 
-### 7D.2 配置与文件约定
-- 环境变量：`APP_ENV`（环境）+ `DATABASE_URL`（连接串，库名必须与 `APP_ENV` 一致）。
-- 文件约定（均 gitignored，示例见 `.env.example`）：
-  - `.env`       → dev   `DATABASE_URL=postgresql://user:password@localhost:5432/hr_db_dev`
-  - `.env.test`  → test  `DATABASE_URL=postgresql://user:password@localhost:5432/hr_db_test`
-  - `.env.prod`  → prod  `DATABASE_URL=postgresql://user:password@localhost:5432/hr_db_prod`
-- 加载优先级：`DATABASE_URL` 显式值优先；否则按 `APP_ENV` 拼默认 URL；`APP_ENV` 未设时回退 `dev`。
+### 7D.2 配置与文件约定（合并版，`app/db.py:1`）
+- 环境变量：`APP_ENV`（环境）+ `DATABASE_URL` / `DATABASE_URL_{env}`（连接串，库名必须与 `APP_ENV` 一致）。
+- **单文件 `.env` 合并版**（`app/db.py:55`，`DATABASE_URL_{dev,test,prod}` 三段 + `APP_ENV` 切换，旧的 `.env.test`/`.env.prod` 仍兼容）：
+  ```ini
+  APP_ENV=dev
+  DATABASE_URL_dev=postgresql://postgres:postgres@localhost:5432/hr_db_dev
+  DATABASE_URL_test=postgresql://postgres:postgres@localhost:5432/hr_db_test
+  DATABASE_URL_prod=postgresql://postgres:${POSTGRES_PASSKEY}@localhost:5432/hr_db_prod
+  # 密码等敏感信息通过 ${POSTGRES_PASSKEY} 引用 shell 变量（启动前 export）
+  # 也可直接设 DATABASE_URL=... 强制覆盖（优先级更高）
+  ```
+  `.env` 单文件内含三环境，`DATABASE_URL_{env}` 按 `APP_ENV` 自动选择；`.env.example` 为模版（含 JWT/limiter 示例）。
+- 加载优先级：`DATABASE_URL` 显式值优先（含 `${POSTGRES_PASSKEY}` 展开）；否则取 `DATABASE_URL_{env}` 并展开；否则按 `APP_ENV` 拼默认 URL；`APP_ENV` 未设时回退 `dev`。
 - 启动自检：打印 `APP_ENV` 与脱敏后库名；若 `DATABASE_URL` 库名与 `APP_ENV` 不一致则拒绝启动。
 
 ### 7D.3 生产护栏（仅 prod 禁止破坏性操作）
@@ -460,8 +467,9 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 | 版本 | 范围 |
 | --- | --- |
 | **V2.0** | PostgreSQL、JWT 认证、乐观锁并发控制、数据清洗流程、岗位全生命周期（含成本）、员工管理、组织架构图（汇报线树 + 导出 MD）、数据导入 |
-| **V2.1（本 PRD）** | **7D 三环境 DB 隔离（hr_db_{env}、同机不同库、prod 防删、.env.* 文件约定）**，其余同 V2.0 |
-| V2.2+（待评估） | CSV 导出、公司分组组织树视图、外包岗管理、转岗历史时间线、编制审批、完善用户角色管理、虚线关系单独矩阵视图 |
+| **V2.1** | **7D 三环境 DB 隔离（hr_db_{env}、同机不同库、prod 防删、.env.* 文件约定）**，其余同 V2.0 |
+| **V2.2（本 PRD）** | **单文件 .env 合并（DATABASE_URL_{dev,test,prod} + APP_ENV 切换，含 ${POSTGRES_PASSKEY} 展开）、速率限制（slowapi 全局 120/min + 登录 10/min + 公共 60/min）、外部 API JWT 鉴权落地**，其余同 V2.1 |
+| V2.3+（待评估） | CSV 导出、公司分组组织树视图、外包岗管理、转岗历史时间线、编制审批、完善用户角色管理、虚线关系单独矩阵视图 |
 
 ---
 
@@ -478,7 +486,7 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 10. **导入重复校验**：CSV 内岗位编号重复时报错并列出明细，不静默忽略；与库内已有编号重复按更新处理。
 11. **新建表单校验**：岗位编号只能自动生成；新建岗位/新建员工的可留空字段（描述、成本、备注 / 生日、手机、邮箱、备注）可正常留空保存。
 12. **Org-Chart 数据清洗**：上传 Org-Chart.md 后 8 个关键字段（职位/类型/公司/级别/国家范围/开启日/工作地点/法律强制）全部正确读取；工作地点从公司名字推断（不依赖岗位编号）；CSV 输出符合 Position.csv 模版格式。
-13. **三环境隔离**：`dev` 执行 `--reset` 仅清空 `hr_db_dev`，`hr_db_prod` 不受影响；`prod` 下 `--reset`/`drop_all` 被拦截报错；`.env` / `.env.test` / `.env.prod` 示例可一键切换（见 7D）。
+13. **三环境隔离**：`dev` 执行 `--reset` 仅清空 `hr_db_dev`，`hr_db_prod` 不受影响；`prod` 下 `--reset`/`drop_all` 被拦截报错；`.env` 单文件三段 `DATABASE_URL_{dev,test,prod}` + `APP_ENV` 一键切换（兼容旧 `.env.test/.env.prod`，见 7D）。
 
 ---
 
@@ -499,7 +507,7 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 - **组织图可读性**：缩放/平移改进、公司聚焦视图（选中公司只看其子树）（§4 F3.3）。
 - **数据源为 63 行**：Position.csv 现为 15 列 63 行（用户编辑版），以此为准（§3.7）。
 - **法律强制/可选保留**：字段在系统中保留并可维护（导入数据若缺列留空）；表单与主数据均支持该字段（§4 F0/F1.2）。
-- **三环境 DB 隔离**：同机不同库强制 `hr_db_{env}`，`APP_ENV=dev/test/prod`，文件约定 `.env` / `.env.test` / `.env.prod`；仅 `prod` 禁止 `--reset`/`drop_all`，`test` 允许（见 §7D）。
+- **三环境 DB 隔离**：同机不同库强制 `hr_db_{env}`，`APP_ENV=dev/test/prod`，文件约定 `.env` 单文件三段 `DATABASE_URL_{dev,test,prod}` + `APP_ENV` 切换（兼容旧 `.env.test/.env.prod`）；仅 `prod` 禁止 `--reset`/`drop_all`，`test` 允许（见 §7D）。
 
 ### 待确认 / 开放问题
 - [ ] **Org-Chart.md 同步修订**（非系统功能，需人工处理）：P086~P088 及上海汇报关系与 CSV 不一致，建议以 CSV 为准后回写 Org-Chart.md。
