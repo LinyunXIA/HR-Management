@@ -1,7 +1,7 @@
 """Pydantic 请求/响应模型。"""
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from app.models import (
     CostMode,
@@ -63,6 +63,14 @@ class PositionNumberCreate(BaseModel):
     company_share: float | None = None
     labor_cost: float | None = None
     # 岗位编号仅自动生成，不接受手工输入
+
+    @model_validator(mode="after")
+    def check_position_exclusive(self):
+        has_id = self.position_id is not None
+        has_name = self.position_name is not None and str(self.position_name).strip() != ""
+        if not (has_id ^ has_name):
+            raise ValueError("Exactly one of position_id or position_name required")
+        return self
 
 
 class PositionNumberUpdate(BaseModel):
