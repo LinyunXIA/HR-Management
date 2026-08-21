@@ -153,9 +153,12 @@ const Employees = {
       modal.querySelector('#ed-offboard').onclick = async () => {
         if (!confirm(`确认员工 ${e.name} 离职？岗位将转空缺。`)) return;
         try {
-          await patch(`/employees/${id}`, { employment_status: '离职' });
+          await patch(`/employees/${id}`, { version: e.version, employment_status: '离职' });
           closeModal(); toast('已办理离职，岗位转空缺', 'ok'); this.render(); App.loadStats();
-        } catch (err) { toast(err.message); }
+        } catch (err) {
+          if (err.status === 409) toast('数据已被他人修改，请刷新后重试', 'error');
+          else toast(err.message);
+        }
       };
     }
   },

@@ -166,6 +166,18 @@ class Position(Base):
     numbers = relationship("PositionNumber", back_populates="position")
 
 
+class User(Base):
+    """系统用户（JWT 认证，PRD §7B）。"""
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    username = Column(String(100), unique=True, nullable=False)
+    hashed_password = Column(String(255), nullable=False)
+    role = Column(String(50), nullable=False, default="admin")
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=_now)
+
+
 class PositionNumber(Base):
     """岗位编号（管理主体）。"""
     __tablename__ = "position_numbers"
@@ -207,6 +219,7 @@ class PositionNumber(Base):
     salary_before_tax = Column(Numeric(14, 2), nullable=True)   # 税前薪资
     company_share = Column(Numeric(14, 2), nullable=True)       # 公司份额
     labor_cost = Column(Numeric(14, 2), nullable=True)          # 用工成本
+    version = Column(Integer, nullable=False, default=1)        # 乐观锁版本号（PRD §7C）
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
@@ -266,6 +279,7 @@ class Employee(Base):
         Integer, ForeignKey("position_numbers.id"), unique=True, nullable=True
     )  # 在职必须挂岗；离职解绑后为 NULL（档案保留）
     remark = Column(Text, nullable=True)
+    version = Column(Integer, nullable=False, default=1)        # 乐观锁版本号（PRD §7C）
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 

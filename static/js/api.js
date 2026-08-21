@@ -1,13 +1,34 @@
-/* fetch 封装 */
+/* fetch 封装 — 携带 JWT，处理 409/401 */
+function _token() { return localStorage.getItem('hr_token') || ''; }
+function _authHeader() {
+  const t = _token();
+  return t ? { 'Authorization': 'Bearer ' + t } : {};
+}
+
 async function api(path, options = {}) {
-  const opts = { headers: {}, ...options };
+  const opts = { headers: { ..._authHeader(), ...(options.headers || {}) }, ...options };
+  // 合并 headers 时保留 Authorization
+  opts.headers = { ..._authHeader(), ...(options.headers || {}) };
   if (opts.body && typeof opts.body !== 'string') opts.body = JSON.stringify(opts.body);
   if (opts.body && !opts.noJson) opts.headers['Content-Type'] = 'application/json';
   const res = await fetch('/api/v1' + path, opts);
   const data = await res.json().catch(() => null);
   if (!res.ok) {
+    if (res.status === 401) {
+      // 外部 API 未认证或 Token 过期
+      if (path !== '/auth/login' && path !== '/auth/me') {
+        toast('登录已过期，请重新登录', 'error');
+        if (window.Auth) Auth.showLogin();
+      }
+    }
+    if (res.status === 409) {
+      const msg = (data && (data.detail || data.message)) || '数据已被他人修改，请刷新后重试';
+      throw Object.assign(new Error(typeof msg === 'string' ? msg : JSON.stringify(msg)), { status: 409 });
+    }
     const msg = (data && (data.detail || data.message)) || `HTTP ${res.status}`;
-    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    const err = new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    err.status = res.status;
+    throw err;
   }
   return data;
 }

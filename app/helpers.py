@@ -105,6 +105,20 @@ def dotted_ids(db: Session, position_number_id: int) -> list[int]:
     return [r[0] for r in rows]
 
 
+def assert_version(obj, client_version: int | None, label: str = "数据"):
+    """乐观锁校验（PRD §7C）：携带 version 时必须一致，否则 409。"""
+    if client_version is None:
+        return
+    current = getattr(obj, "version", None)
+    if current is None:
+        return
+    if client_version != current:
+        raise HTTPException(
+            409,
+            f"{label}已被他人修改，请刷新后重试（当前版本 {current}，提交版本 {client_version}）",
+        )
+
+
 def serialize_position(db: Session, pn: PositionNumber) -> dict:
     pos = pn.position
     company = pn.company
@@ -155,6 +169,7 @@ def serialize_position(db: Session, pn: PositionNumber) -> dict:
         "labor_cost": float(pn.labor_cost) if pn.labor_cost is not None else None,
         "incumbent_id": incumbent.id if incumbent else None,
         "incumbent_name": incumbent.name if incumbent else None,
+        "version": pn.version,
         "created_at": pn.created_at,
         "updated_at": pn.updated_at,
     }

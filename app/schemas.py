@@ -89,6 +89,7 @@ class PositionNumberUpdate(BaseModel):
     salary_before_tax: float | None = None
     company_share: float | None = None
     labor_cost: float | None = None
+    version: int | None = None  # 乐观锁版本号（PRD §7C），携带时校验
 
 
 class TransitionRequest(BaseModel):
@@ -131,6 +132,7 @@ class EmployeeUpdate(BaseModel):
     employee_type: EmployeeType | None = None
     employment_status: EmploymentStatus | None = None
     remark: str | None = None
+    version: int | None = None  # 乐观锁版本号（PRD §7C）
 
 
 class TransferRequest(BaseModel):

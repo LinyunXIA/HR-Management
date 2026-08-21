@@ -161,3 +161,5 @@ td.num { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weigh
 pre.error-list { background: #fdf0f0; border: 1px solid #f0c9c9; border-radius: 8px; padding: 12px; font-size: 12px; white-space: pre-wrap; max-height: 200px; overflow: auto; }
 
 .empty { text-align: center; color: var(--muted); padding: 40px 0; }
+.auth-badge { display: flex; align-items: center; gap: 8px; }
+.auth-badge .btn { white-space: nowrap; }

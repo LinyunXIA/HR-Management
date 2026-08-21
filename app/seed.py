@@ -171,4 +171,25 @@ def seed_master_data(db: Session):
         for i, name in enumerate(POSITION_TYPES):
             if name not in existing:
                 db.add(PositionType(name=name, sort_order=len(existing) + i))
+    # 管理员种子（JWT，PRD §7B）
+    _seed_admin(db)
     db.commit()
+
+
+def _seed_admin(db: Session):
+    """种子管理员：admin / admin123（幂等，仅首次创建）。"""
+    from app.models import User
+    if db.query(User).count() > 0:
+        return
+    try:
+        from app.auth import hash_password
+    except Exception:
+        return
+    default_user = os.environ.get("DEFAULT_ADMIN_USER", "admin")
+    default_pwd = os.environ.get("DEFAULT_ADMIN_PASSWORD", "admin123")
+    db.add(User(
+        username=default_user,
+        hashed_password=hash_password(default_pwd),
+        role="admin",
+        is_active=True,
+    ))

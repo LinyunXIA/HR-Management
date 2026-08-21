@@ -257,10 +257,14 @@ const Positions = {
     if (calcBtn) calcBtn.onclick = async () => {
       try {
         const c = await get(`/positions/${id}/cost-calculation`);
-        await patch(`/positions/${id}`, { company_share: c.company_share, labor_cost: c.labor_cost });
+        const fresh = await get('/positions/' + id);
+        await patch(`/positions/${id}`, { version: fresh.version, company_share: c.company_share, labor_cost: c.labor_cost });
         toast(`已重算并保存：公司份额 ${fmtMoney(c.company_share)} · 用工成本 ${fmtMoney(c.labor_cost)}`, 'ok');
         this.openDetail(id);
-      } catch (e) { toast(e.message); }
+      } catch (e) {
+        if (e.status === 409) toast('数据已被他人修改，请刷新后重试', 'error');
+        else toast(e.message);
+      }
     };
 
     const trans = Positions.TRANSITIONS[p.status] || [];
@@ -346,18 +350,25 @@ const Positions = {
     applyEditCost();
     modal.querySelector('#pe-calccost').onclick = async () => {
       try {
-        await patch(`/positions/${p.id}`, { cost_mode: 'auto', salary_before_tax: val('#pe-salary') ? +val('#pe-salary') : null });
+        await patch(`/positions/${p.id}`, { version: p.version, cost_mode: 'auto', salary_before_tax: val('#pe-salary') ? +val('#pe-salary') : null });
         const c = await get(`/positions/${p.id}/cost-calculation`);
-        await patch(`/positions/${p.id}`, { company_share: c.company_share, labor_cost: c.labor_cost });
+        // cost 重算后需带最新 version
+        const fresh = await get('/positions/' + p.id);
+        await patch(`/positions/${p.id}`, { version: fresh.version, company_share: c.company_share, labor_cost: c.labor_cost });
         modal.querySelector('#pe-salary').value = c.salary_before_tax ?? '';
         modal.querySelector('#pe-share').value = c.company_share ?? '';
         modal.querySelector('#pe-labor').value = c.labor_cost ?? '';
         toast(`已重算并保存：公司份额 ${fmtMoney(c.company_share)} · 用工成本 ${fmtMoney(c.labor_cost)}`, 'ok');
-      } catch (e) { toast(e.message); }
+        p.version = fresh.version + 1;
+      } catch (e) {
+        if (e.status === 409) toast('数据已被他人修改，请刷新后重试', 'error');
+        else toast(e.message);
+      }
     };
     modal.querySelector('#pe-save').onclick = async () => {
       const mode = modal.querySelector('input[name="pe-costmode"]:checked').value;
       const body = {
+        version: p.version,
         position_id: App.functions.find((f) => f.name === val('#pe-posname'))?.id || null,
         position_name: val('#pe-posname'),
         company_id: +val('#pe-company'),
@@ -382,7 +393,10 @@ const Positions = {
       try {
         await patch('/positions/' + p.id, body);
         closeModal(); toast('已保存', 'ok'); this.render();
-      } catch (e) { toast(e.message); }
+      } catch (e) {
+        if (e.status === 409) toast('数据已被他人修改，请刷新后重试', 'error');
+        else toast(e.message);
+      }
     };
   },
 };

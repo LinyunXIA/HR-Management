@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app import lifecycle
 from app.db import get_db
-from app.helpers import dotted_ids, get_or_404
+from app.helpers import assert_version, dotted_ids, get_or_404
 from app.models import (
     Employee,
     EmploymentStatus,
@@ -46,6 +46,7 @@ def serialize_employee(db: Session, emp: Employee) -> dict:
         "dotted_manager_ids": dotted,
         "dotted_manager_numbers": dotted_nums,
         "remark": emp.remark,
+        "version": emp.version,
         "created_at": emp.created_at,
         "updated_at": emp.updated_at,
     }
@@ -123,6 +124,7 @@ def get_employee(eid: int, db: Session = Depends(get_db)):
 @router.patch("/employees/{eid}")
 def update_employee(eid: int, payload: EmployeeUpdate, db: Session = Depends(get_db)):
     emp = get_or_404(db, Employee, eid, "员工不存在")
+    assert_version(emp, payload.version, "员工")
     for field in ("name", "gender", "birth_date", "phone", "email",
                   "hire_date", "employee_type", "remark"):
         val = getattr(payload, field)
@@ -133,6 +135,7 @@ def update_employee(eid: int, payload: EmployeeUpdate, db: Session = Depends(get
                 and emp.employment_status != EmploymentStatus.TERMINATED):
             _vacate(db, emp, f"员工 {emp.name} 离职")
         emp.employment_status = payload.employment_status
+    emp.version = (emp.version or 1) + 1
     db.commit()
     return serialize_employee(db, emp)
 

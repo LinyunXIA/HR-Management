@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app import lifecycle
 from app.db import get_db
 from app.helpers import (
+    assert_version,
     check_cycle,
     dotted_ids,
     generate_number,
@@ -187,6 +188,7 @@ def get_position(pid: int, db: Session = Depends(get_db)):
 @router.patch("/positions/{pid}")
 def update_position(pid: int, payload: PositionNumberUpdate, db: Session = Depends(get_db)):
     pn = get_or_404(db, PositionNumber, pid, "岗位不存在")
+    assert_version(pn, payload.version, "岗位")
     if payload.position_id is not None:
         pn.position_id = payload.position_id
     if payload.company_id is not None:
@@ -230,6 +232,7 @@ def update_position(pid: int, payload: PositionNumberUpdate, db: Session = Depen
                 _assert_management(db, get_or_404(db, PositionNumber, mid, f"虚线经理岗位不存在 (id={mid})"), "虚线经理")
         set_dotted_lines(db, pn.id, payload.dotted_manager_ids)
 
+    pn.version = (pn.version or 1) + 1
     db.commit()
     return serialize_position(db, pn)
 

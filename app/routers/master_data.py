@@ -4,6 +4,7 @@ from typing import Callable
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
+from app.auth import get_current_user
 from app.db import get_db
 from app.helpers import get_or_404
 from app.models import (
@@ -140,10 +141,10 @@ _crud(PositionType, PositionTypeOut, PositionTypeCreate, PositionTypeUpdate,
       "/position-types", order_by="sort_order", ref_check=_position_type_ref)
 
 
-# ---------------------------------------------------------------- 对外接口：获取所有隶属公司
+# ---------------------------------------------------------------- 对外接口：获取所有隶属公司（PRD §7B 外部 API 需 JWT）
 @router.get("/public/companies")
-def public_companies(db: Session = Depends(get_db)):
-    """对外暴露：返回所有隶属公司列表（仅 id + 名称）。"""
+def public_companies(db: Session = Depends(get_db), _user=Depends(get_current_user)):
+    """对外暴露：返回所有隶属公司列表（仅 id + 名称）。需 JWT。"""
     return [{"id": c.id, "name": c.name} for c in db.query(Company).order_by(Company.name).all()]
 
 

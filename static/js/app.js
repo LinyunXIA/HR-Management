@@ -67,6 +67,7 @@ const App = {
 };
 
 document.addEventListener('DOMContentLoaded', async () => {
+  if (window.Auth) { await Auth.fetchMe(); Auth.renderBadge(); }
   try { await App.loadDicts(); } catch (e) { toast('初始化字典失败：' + e.message); }
   App.init();
 });
