@@ -17,9 +17,27 @@ from app.db import get_db
 from app.models import User
 
 # ---------------------------------------------------------------- 配置
-JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "dev-only-secret-please-change-in-prod-32+chars")
+_DEFAULT_JWT_SECRET = "dev-only-secret-please-change-in-prod-32+chars"
+JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", _DEFAULT_JWT_SECRET)
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_MINUTES = int(os.environ.get("JWT_EXPIRE_MINUTES", "720"))  # 默认 12h
+
+# 生产环境必须覆盖默认密钥（PRD §10 Item 6）
+try:
+    from app.db import APP_ENV as _APP_ENV  # 延迟导入，避免循环
+    if _APP_ENV == "prod":
+        if JWT_SECRET_KEY == _DEFAULT_JWT_SECRET:
+            raise RuntimeError(
+                "[FATAL] JWT_SECRET_KEY 未覆盖：生产环境必须设置强随机 JWT_SECRET_KEY（≥32字符），"
+                "参见 .env.example"
+            )
+        if len(JWT_SECRET_KEY) < 32:
+            raise RuntimeError("[FATAL] JWT_SECRET_KEY 过短：生产环境要求 ≥32 字符")
+except RuntimeError:
+    raise
+except Exception:
+    # 非 prod 或 APP_ENV 尚未就绪时跳过校验（测试/dev 不拦截）
+    pass
 
 # 形如 Authorization: Bearer <token>  或  X-Token: <token>（兼容内部 Token 头）
 BEARER_PREFIX = "Bearer "
