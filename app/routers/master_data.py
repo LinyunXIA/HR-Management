@@ -80,6 +80,12 @@ def _crud(model, out_schema, create_schema, update_schema, path: str,
     @router.delete(path + "/{obj_id}")
     def delete_item(obj_id: int, db: Session = Depends(get_db)):
         obj = get_or_404(db, model, obj_id)
+        # 公司软删除：id 保留，仅标记 is_active=False (closed)，被引用时也允许停用
+        if model == Company:
+            obj.is_active = False
+            db.commit()
+            db.refresh(obj)
+            return {"ok": True, "id": obj_id, "is_active": False, "status": "closed"}
         if ref_check:
             ref_check(db, obj)
         db.delete(obj)
@@ -148,8 +154,11 @@ _crud(PositionType, PositionTypeOut, PositionTypeCreate, PositionTypeUpdate,
 @router.get("/public/companies")
 @limiter.limit("60/minute")
 def public_companies(request: Request, db: Session = Depends(get_db), _user=Depends(get_current_user)):
-    """对外暴露：返回所有隶属公司列表（仅 id + 名称）。需 JWT。"""
-    return [{"id": c.id, "name": c.name} for c in db.query(Company).order_by(Company.name).all()]
+    """对外暴露：返回所有隶属公司列表（含状态）。需 JWT。"""
+    return [
+        {"id": c.id, "name": c.name, "is_active": c.is_active, "status": "opened" if c.is_active else "closed"}
+        for c in db.query(Company).order_by(Company.name).all()
+    ]
 
 
 # ---------------------------------------------------------------- 员工用工税额（按国家）

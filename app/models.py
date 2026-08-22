@@ -81,11 +81,12 @@ class CostMode(str, enum.Enum):
 
 # ---------------------------------------------------------------- 表
 class Company(Base):
-    """隶属公司（法人实体）。"""
+    """隶属公司（法人实体，软删除：is_active=False 为 Closed）。"""
     __tablename__ = "companies"
 
     id = Column(Integer, primary_key=True)
     name = Column(String(255), unique=True, nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True)  # True=opened, False=closed（软删除，id 保留）
 
 
 class Country(Base):
