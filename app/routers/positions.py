@@ -294,15 +294,16 @@ def list_transitions(position_id: int | None = None, db: Session = Depends(get_d
 
 
 @router.get("/positions/{pid}/cost-calculation")
-def get_position_cost(pid: int, db: Session = Depends(get_db)):
+def get_position_cost(pid: int, salary_before_tax: float | None = None, db: Session = Depends(get_db)):
     """按国家用工税额计算公司份额/用工成本（只读，不落库）。
 
     公司份额 = 税前薪资 × Σ(有效科目税率)；用工成本 = 税前薪资 + 公司份额。
+    支持传入 salary_before_tax 查询参数以使用前端输入值（未落库）计算，避免双重 PATCH。
     """
     pn = get_or_404(db, PositionNumber, pid, "岗位不存在")
-    if pn.cost_mode != CostMode.AUTO:
-        raise HTTPException(400, "仅「自动计算」模式可重算（当前为手动输入）")
-    if pn.salary_before_tax is None:
+    # 优先使用查询参数中的薪资（前端未落库输入），否则使用 DB 已保存值
+    salary = salary_before_tax if salary_before_tax is not None else pn.salary_before_tax
+    if salary is None:
         raise HTTPException(400, "请先填写税前薪资（人工）")
     if not pn.country_id:
         raise HTTPException(400, "该岗位无国家/地区，无法按国家税率计算（请切换为手动输入）")
@@ -310,14 +311,14 @@ def get_position_cost(pid: int, db: Session = Depends(get_db)):
         EmploymentTaxItem.country_id == pn.country_id, EmploymentTaxItem.is_active.is_(True)
     ).all()
     rate = sum(float(it.tax_rate or 0) for it in items) / 100.0
-    share = round(float(pn.salary_before_tax) * rate, 2)
+    share = round(float(salary) * rate, 2)
     return {
         "position_id": pn.id,
-        "salary_before_tax": float(pn.salary_before_tax),
+        "salary_before_tax": float(salary),
         "tax_rate_total": round(rate * 100, 2),
         "tax_items": [{"item_name": it.item_name, "tax_rate": float(it.tax_rate or 0)} for it in items],
         "company_share": share,
-        "labor_cost": round(float(pn.salary_before_tax) + share, 2),
+        "labor_cost": round(float(salary) + share, 2),
     }
 
 

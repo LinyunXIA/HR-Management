@@ -23,7 +23,7 @@ from app.models import (
 )
 
 EXPECTED_HEADERS = [
-    "职位", "岗位编号", "隶属公司", "级别", "国家或地区", "职位开启日", "职位关闭日",
+    "职位", "职位类型", "岗位编号", "隶属公司", "级别", "国家或地区", "职位开启日", "职位关闭日",
     "工作地点", "工作职责描述", "直线经理", "虚线经理", "法律强制/可选",
     "Org-Chart中的显示", "之前的职位", "之前的公司", "备注",
 ]
@@ -138,15 +138,14 @@ def import_csv(db, rows):
         legal = None
         lc = (raw.get("法律强制/可选") or "").strip()
         if lc:
-            # 校验 against LegalCategoryDef 字典，兼容旧 enum 值
-            try:
-                legal = LegalCategory(lc).value
-            except ValueError:
-                # 非 enum 值：检查字典表中是否存在，存在则按字符串入库
-                exists = db.query(LegalCategoryDef).filter(LegalCategoryDef.name == lc).first()  # type: ignore  # noqa: F821
-                if exists:
-                    legal = lc
-                else:
+            # P2：优先以 LegalCategoryDef 字典表为准，枚举仅作历史兼容
+            exists = db.query(LegalCategoryDef).filter(LegalCategoryDef.name == lc).first()  # type: ignore  # noqa: F821
+            if exists:
+                legal = lc
+            else:
+                try:
+                    legal = LegalCategory(lc).value
+                except ValueError:
                     report["warnings"].append(f"{number}: 未知法律分类「{lc}」")
                     legal = lc  # 仍入库为字符串，允许运行时通过字典扩展
 
