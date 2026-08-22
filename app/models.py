@@ -46,7 +46,11 @@ class PositionStatus(str, enum.Enum):
 
 
 class LegalCategory(str, enum.Enum):
-    """法律强制/可选（仅用于 CSV 导入映射，运行时以 LegalCategoryDef 字典为准）。"""
+    """法律强制/可选（仅用于 CSV 导入兼容历史值，运行时以 LegalCategoryDef 字典为准）。
+
+    P2 技术债：此枚举为历史遗留，新增逻辑应直接查询 LegalCategoryDef 字典表，
+    枚举仅保留用于兼容旧 CSV 中的枚举名（如 MANDATORY_INTERNAL）。
+    """
     MANDATORY_INTERNAL = "法律强制·内部全职不可外包"
     MANDATORY_OUTSOURCEABLE = "法律强制·允许第三方外包"
     OPTIONAL = "可选（集团内控推荐）"
@@ -188,6 +192,8 @@ class PositionNumber(Base):
     number = Column(String(20), unique=True, nullable=False)  # P{seq}-{scope}
 
     position_id = Column(Integer, ForeignKey("positions.id"), nullable=False)
+    # 双外键指向 companies：company_id（当前隶属）+ prev_company_id（转岗前公司），
+    # 需在 relationship 上显式 foreign_keys 避免 AmbiguousForeignKeys（见 P0-12 / P2-1）
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     level = Column(String(20), nullable=True)
     scope = Column(SAEnum(Scope, native_enum=False, length=20), nullable=False)
@@ -228,6 +234,7 @@ class PositionNumber(Base):
 
     position = relationship("Position", back_populates="numbers")
     company = relationship("Company", foreign_keys=[company_id])
+    prev_company = relationship("Company", foreign_keys=[prev_company_id])
     country = relationship("Country")
 
 
@@ -265,11 +272,12 @@ class Employee(Base):
     __tablename__ = "employees"
     __table_args__ = (
         # PRD §5 要求「必须挂岗」：在职/试用期/休假时 position_number_id 必须非空，
-        # 仅离职（离职）允许解绑为 NULL。DB 层强制，防止绕过应用逻辑产生孤儿记录。
+        # 仅离职允许解绑为 NULL。DB 层强制，防止绕过应用逻辑产生孤儿记录。
         # 保持 nullable=True 以支持离职解绑流程（app/routers/employees.py:_vacate），
-        # 但用 CHECK 约束保证在职员工不为 NULL（issue #1，Option B）。
+        # 但用 CHECK 约束保证在职员工不为 NULL。
+        # 约束值派生自 EmploymentStatus.TERMINATED（值为“离职”），兼容历史英文值 'TERMINATED'。
         CheckConstraint(
-            "employment_status IN ('TERMINATED', '离职') OR position_number_id IS NOT NULL",
+            f"employment_status IN ('{EmploymentStatus.TERMINATED.name}', '{EmploymentStatus.TERMINATED.value}') OR position_number_id IS NOT NULL",
             name="ck_employees_position_required_if_active",
         ),
     )

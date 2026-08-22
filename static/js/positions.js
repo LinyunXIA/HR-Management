@@ -350,11 +350,12 @@ const Positions = {
     applyEditCost();
     modal.querySelector('#pe-calccost').onclick = async () => {
       try {
-        await patch(`/positions/${p.id}`, { version: p.version, cost_mode: 'auto', salary_before_tax: val('#pe-salary') ? +val('#pe-salary') : null });
-        const c = await get(`/positions/${p.id}/cost-calculation`);
-        // cost 重算后需带最新 version
+        const salary = val('#pe-salary') ? +val('#pe-salary') : null;
+        if (salary == null) { toast('请先填写税前薪资'); return; }
+        // 单次 PATCH：先取最新 version，再计算，最后一次性保存（避免双重 PATCH 导致 409）
         const fresh = await get('/positions/' + p.id);
-        await patch(`/positions/${p.id}`, { version: fresh.version, company_share: c.company_share, labor_cost: c.labor_cost });
+        const c = await get(`/positions/${p.id}/cost-calculation?salary_before_tax=${salary}`);
+        await patch(`/positions/${p.id}`, { version: fresh.version, cost_mode: 'auto', salary_before_tax: salary, company_share: c.company_share, labor_cost: c.labor_cost });
         modal.querySelector('#pe-salary').value = c.salary_before_tax ?? '';
         modal.querySelector('#pe-share').value = c.company_share ?? '';
         modal.querySelector('#pe-labor').value = c.labor_cost ?? '';

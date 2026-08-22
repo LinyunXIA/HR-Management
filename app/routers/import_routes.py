@@ -2,10 +2,10 @@
 import csv
 import io
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-from app.db import get_db
+from app.db import APP_ENV, get_db
 from app.import_csv import import_csv
 
 router = APIRouter(prefix="/api/v1", tags=["import"])
@@ -13,7 +13,9 @@ router = APIRouter(prefix="/api/v1", tags=["import"])
 
 @router.post("/imports", status_code=201)
 async def create_import(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    """创建导入作业：上传 Position.csv 并幂等入库。"""
+    """创建导入作业：上传 Position.csv 并幂等入库。prod 环境需走受控迁移。"""
+    if APP_ENV == "prod":
+        raise HTTPException(400, "生产环境禁止通过 Web 直接导入，请走受控迁移（pg_dump 后手工操作）")
     content = await file.read()
     try:
         text = content.decode("utf-8-sig")
