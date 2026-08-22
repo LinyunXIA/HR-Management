@@ -95,6 +95,18 @@ def _migrate_legal_category_values():
 
 _migrate_legal_category_values()
 
+# 轻量迁移：companies 增加 is_active 软删除标记（opened/closed，id 保留）
+def _ensure_company_is_active():
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE companies ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE"))
+            conn.execute(text("UPDATE companies SET is_active=TRUE WHERE is_active IS NULL"))
+            # 兼容旧库：若列已存在但无默认值，补默认值
+    except Exception as e:
+        print(f"[migrate] companies.is_active skipped: {e}", file=sys.stderr)
+
+_ensure_company_is_active()
+
 with SessionLocal() as db:
     seed_master_data(db)
 

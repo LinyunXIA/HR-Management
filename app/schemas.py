@@ -18,6 +18,7 @@ class CompanyOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     name: str
+    is_active: bool
 
 
 class CountryOut(BaseModel):
@@ -154,10 +155,12 @@ class TransferCreate(BaseModel):
 # ---------------------------------------------------------------- 主数据（F0）
 class CompanyCreate(BaseModel):
     name: str
+    is_active: bool | None = True
 
 
 class CompanyUpdate(BaseModel):
     name: str | None = None
+    is_active: bool | None = None
 
 
 class CountryCreate(BaseModel):
