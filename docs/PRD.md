@@ -166,7 +166,7 @@ Position.csv 模版文件
 - 职位列表：职位名、关联岗位数、各岗位编号与范围。
 
 #### F1.2 岗位维护（岗位编号维度）
-岗位编号为管理主体，字段对齐 Position.csv 16 列：
+岗位编号为管理主体，字段对齐 Position.csv 17 列（含「职位类型」）：
 
 | 字段 | 说明 | 必填 |
 | --- | --- | --- |
@@ -301,7 +301,7 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 - 前端生成 `.md` 文本下载；后端提供等价导出接口（可选）。
 
 ### F4 数据导入（Position.csv）
-- V1 支持导入 `Position.csv`（16 列 91 行）作为初始数据，含全部 16 字段。
+- V1 支持导入 `Position.csv`（17 列 91 行）作为初始数据，含全部 17 字段（含「职位类型」）。
 - 校验规则：
   - 岗位编号唯一且格式合法（`P{序号}-{范围}`，Country 级必须 `-4-{编号}`）。
   - **CSV 文件内岗位编号重复 → 报错**（返回错误明细，该行不导入），不再静默忽略/覆盖。
@@ -453,7 +453,7 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 - 启动自检：打印 `APP_ENV` 与脱敏后库名；若 `DATABASE_URL` 库名与 `APP_ENV` 不一致则拒绝启动。
 
 ### 7D.3 生产护栏（仅 prod 禁止破坏性操作）
-- 禁止：`prod` 下执行 `Base.metadata.drop_all` / `scripts/import_csv --reset` / 任何清空库操作，直接报错退出；`dev`/`test` 无限制（`test` 允许 `--reset`）。
+- 禁止：`prod` 下执行 `Base.metadata.drop_all` / `scripts/import_csv --reset` / 任何清空库操作，直接报错退出；`dev`/`test` 无限制（`test` 允许 `--reset`）。另 `POST /imports` 与 `POST /data-clean-jobs/{id}/imports` 在 `prod` 直接返回 400（#14），需走受控迁移。
 - 仅 `prod` 需拦截，默认一律拦截；如确需重置生产，需走线下备份+受控迁移（`pg_dump hr_db_prod` 后手工操作，不经本系统 `--reset`）。
 - 应用启动 `main.py` 的 `create_all` 在 `prod` 仅建缺失表，不删改已有数据。
 

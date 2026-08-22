@@ -160,7 +160,7 @@
 | POST | `/positions/{id}/transitions` | 状态流转（201，创建一条事件并变更状态） |
 | GET | `/positions/{id}/transitions` | 该岗位的流转事件列表 |
 | GET | `/transitions?positionId=` | 全局流转事件列表（可按岗位过滤） |
-| GET | `/positions/{id}/cost-calculation` | 按国家用工税额计算成本（只读派生资源） |
+| GET | `/positions/{id}/cost-calculation?salary_before_tax=` | 按国家用工税额计算成本（只读派生资源，支持 `?salary_before_tax=` 传入未落库薪资避免双重 PATCH，#15） |
 | DELETE | `/positions/{id}` | 删除（有在职员工或已有事件时禁止） |
 
 **GET /positions 查询参数**
@@ -217,7 +217,9 @@
 
 响应（201）：`{ "id", "position_number_id", "from_status", "to_status", "changed_at", "note" }`。非法流转返回 422。不受乐观锁约束（`lifecycle.transition` 原子）。
 
-**GET /positions/{id}/cost-calculation（自动模式成本计算，只读派生资源）**
+**GET /positions/{id}/cost-calculation?salary_before_tax=（自动模式成本计算，只读派生资源，#15）**
+
+- 支持 `?salary_before_tax=` 查询参数：传入前端输入的未落库薪资值直接计算，避免编辑页双重 `PATCH` 导致的 409 冲突；不传则使用 DB 已保存的 `salary_before_tax`。
 
 响应：
 
@@ -232,7 +234,7 @@
 }
 ```
 
-> 计算规则：公司份额 = 税前薪资 × Σ(该岗位国家全部启用科目税率)；用工成本 = 税前薪资 + 公司份额。手动模式/无税前薪资/无国家 → 400。保存计算值请 `PATCH /positions/{id}`（`company_share` / `labor_cost` + `version`）。
+> 计算规则：公司份额 = 税前薪资（优先取 `?salary_before_tax=`，否则取 DB 值）× Σ(该岗位国家全部启用科目税率)；用工成本 = 税前薪资 + 公司份额。无税前薪资/无国家 → 400。保存计算值请 `PATCH /positions/{id}`（`company_share` / `labor_cost` + `version`），建议单次 PATCH 完成 `cost_mode`/`salary_before_tax`/`company_share`/`labor_cost` 批量保存。
 
 ### 3.3 岗位对象字段
 
@@ -339,7 +341,7 @@
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/imports` | 上传 Position.csv（multipart，字段名 `file`），幂等 upsert |
+| POST | `/imports` | 上传 Position.csv（multipart，字段名 `file`），幂等 upsert（`prod` 直接返回 400，#14） |
 
 响应：
 
@@ -349,6 +351,7 @@
 
 - 校验：编号唯一且格式合法；**文件内编号重复 → 报错（该行不导入）**；Country 级必须 `-4-{编号}`；直线/虚线引用必须存在；关闭日不早于开启日。
 - 幂等：与库内已有编号重复按更新处理。
+- 生产护栏：`APP_ENV=prod` 时 Web 导入直接 400，需走受控迁移（`pg_dump` 后手工操作）。
 
 ---
 
@@ -419,7 +422,7 @@ multipart/form-data，字段 `orgchart`：Org-Chart.md 文件。
 | POST | /positions/{id}/transitions | positions | 无 | 全局 |
 | GET | /positions/{id}/transitions | positions | 无 | 全局 |
 | GET | /transitions | positions | 无 | 全局 |
-| GET | /positions/{id}/cost-calculation | positions | 无 | 全局 |
+| GET | /positions/{id}/cost-calculation?salary_before_tax= | positions | 无 | 全局 |
 | GET/POST, GET/PATCH/DELETE | /employees、/employees/{id} | employees | 无 | 全局（PATCH 需 `version`） |
 | POST | /transfers | transfers | 无 | 全局 |
 | GET | /transfers | transfers | 无 | 全局 |

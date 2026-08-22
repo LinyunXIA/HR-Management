@@ -165,7 +165,7 @@ class PositionNumber(Base):        # 岗位编号（管理主体）
     legal_category String(名称)    # 来自 legal_categories 字典
     position_type  String(名称)    # 职位类型：Consultant/Employee/External Employee
     solid_line_manager_id  FK self, nullable   # 直线经理（仅管理岗可选）
-    org_chart_display, prev_position_id, prev_company_id, remark
+    org_chart_display, prev_position_id, prev_company_id FK companies, remark
     status        Enum(planned|open|offered|filled|vacant|frozen|closed)
     # ---- v1.1 成本字段 ----
     cost_mode     Enum(auto|manual), default manual   # 两种模式互斥
@@ -195,9 +195,11 @@ class Employee(Base):              # 人员档案
     created_at, updated_at
 ```
 
-> 实现说明：`level / work_location / legal_category` 在 `position_numbers` 上保留**字符串**（与 CSV 一致），由字典表提供下拉选项并在创建/更新时校验；`scope` 保留枚举，由 `scopes` 字典驱动下拉展示与编号。成本字段为新增列，导入时置空（人工模式默认）。`version` 存量库由 `main.py:1` 的 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 轻量迁移补齐。
+> 实现说明：`level / work_location / legal_category` 在 `position_numbers` 上保留**字符串**（与 CSV 一致），由字典表提供下拉选项并在创建/更新时校验；`scope` 保留枚举，由 `scopes` 字典驱动下拉展示与编号。成本字段为新增列，导入时置空（人工模式默认）。`version` 存量库由 `main.py:1` 的 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 轻量迁移补齐。`company_id` / `prev_company_id` 双外键需在 `relationship` 上显式 `foreign_keys`（`prev_company = relationship(Company, foreign_keys=[prev_company_id])`）避免 `AmbiguousForeignKeys`（#12）。
 
-> 创建校验：`PositionNumberCreate` **不接收 `number`**（新建只能自动生成，编辑不改编号）；`EmployeeCreate` 中 `birth_date / phone / email / remark` 可空。`PATCH` 需携带 `version`，`app/helpers.py:1` 的 `assert_version` 负责 409。
+> 创建校验：`PositionNumberCreate` **不接收 `number`**（新建只能自动生成，编辑不改编号）；`EmployeeCreate` 中 `birth_date / phone / email / remark` 可空。`PATCH` 需携带 `version`，`app/helpers.py:1` 的 `assert_version` 负责 409。`LegalCategory` 枚举为历史兼容，运行时以 `legal_categories` 字典表为准（#16）。
+
+> `employees` 的 `CHECK (employment_status IN (...) OR position_number_id IS NOT NULL)` 约束值派生自 `EmploymentStatus.TERMINATED` 枚举（兼容历史 `'TERMINATED'`），迁移脚本 `main.py` 同步派生（#13）。
 
 ### 4.2 约束与索引
 
@@ -215,7 +217,7 @@ class Employee(Base):              # 人员档案
 - 加载后按 `APP_ENV` 选择 `DATABASE_URL_{env}`，否则拼默认 `postgresql://.../hr_db_{env}`。
 - 校验库名 == `hr_db_{env}`，不一致拒绝启动；启动打印脱敏库名。
 - 旧的 `.env.test`/`.env.prod` 仍兼容（按 `APP_ENV` 追加加载）。
-- `assert_writable()` 在 `prod` 拦截 `drop_all`/`--reset`（`scripts/import_csv.py`）。
+- `assert_writable()` 在 `prod` 拦截 `drop_all`/`--reset`（`scripts/import_csv.py`）；`POST /imports` 与 `POST /data-clean-jobs/{id}/imports` 在 `prod` 直接返回 400（#14）。
 
 ## 5. 生命周期状态机（app/lifecycle.py）
 
@@ -281,7 +283,7 @@ REST 规范：名词复数资源、HTTP 方法映射 CRUD（GET 查 / POST 建 /
 | POST | /positions/{id}/transitions | 状态流转（201，创建一条事件并变更状态；不受 `version` 约束） |
 | GET | /positions/{id}/transitions | 该岗位的流转事件列表 |
 | GET | /transitions?positionId= | 全局流转事件列表（可按岗位过滤） |
-| GET | /positions/{id}/cost-calculation | 按国家用工税额计算成本（只读派生资源） |
+| GET | /positions/{id}/cost-calculation?salary_before_tax= | 按国家用工税额计算成本（只读派生资源，支持 `?salary_before_tax=` 传入未落库薪资避免双重 PATCH，#15） |
 | DELETE | /positions/{id} | 仅无占用员工且无事件时允许 |
 | GET | /employees | 员工列表：filter company_id/employee_type/employment_status/search，分页 |
 | POST | /employees | 创建（201，必须挂岗 → 岗位自动 Filled） |
@@ -374,7 +376,7 @@ REST 规范：名词复数资源、HTTP 方法映射 CRUD（GET 查 / POST 建 /
 ## 8. Position.csv 导入（app/import_csv.py + 路由 + CLI）
 
 - 标准库 `csv` 解析（自动处理引号逗号，如 `"Peeters Shanghai IT Services Co., Ltd."`）。
-- 字段映射 16 列 → `position_numbers`；自动建 company / position(职能) / country。
+- 字段映射 17 列（含「职位类型」）→ `position_numbers`；自动建 company / position(职能) / country。
 - 直线/虚线经理按正则 `\(P[\d\-]+\)` 解析编号 → 外键；`N/A` → 空；虚线列按 `;`/`、` 分割支持多值。
 - 状态映射：`closing_date` 有值 → `closed`；否则 → `open`。已关闭岗写一条关闭事件。
 - 年份解析：`1982` → `1982-01-01`。
