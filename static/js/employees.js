@@ -5,6 +5,36 @@ const Employees = {
   pageSize: 20,
   result: null,
 
+  async fetchCalc(empId, salary) {
+    const q = salary != null ? `?salary_before_tax=${salary}` : '';
+    const c = await get(`/employees/${empId}/cost-calculation${q}`);
+    if (c.configured === false) throw new Error(c.message || '该税区未配置税率，无法自动计算');
+    return c;
+  },
+
+  async saveCalc(empId, patchBody) {
+    const fresh = await get('/employees/' + empId);
+    return patch('/employees/' + empId, { ...patchBody, version: fresh.version });
+  },
+
+  applyCostMode(modal, emp) {
+    const mode = modal.querySelector('input[name="emp-costmode"]:checked').value;
+    const salary = modal.querySelector('#emp-salary');
+    const share = modal.querySelector('#emp-share');
+    const labor = modal.querySelector('#emp-labor');
+    const hint = modal.querySelector('#emp-costhint');
+    const recalcBtn = modal.querySelector('#emp-calccost');
+    if (mode === 'auto') {
+      salary.disabled = false; share.disabled = true; labor.disabled = true;
+      hint.textContent = '自动模式：公司份额 = 税前薪资 × Σ(该员工归属税区全部有效科目税率)，用工成本 = 税前 + 份额；城市级分拆后无国家兜底，未配置税率将提示「未配置」。';
+      recalcBtn.style.display = '';
+    } else {
+      salary.disabled = false; share.disabled = false; labor.disabled = false;
+      hint.textContent = '手动模式：三个字段均可填写。';
+      recalcBtn.style.display = 'none';
+    }
+  },
+
   async render() {
     const qs = new URLSearchParams({ page: this.page, page_size: this.pageSize });
     Object.entries(this.filters).forEach(([k, v]) => { if (v) qs.set(k, v); });
@@ -128,6 +158,8 @@ const Employees = {
 
   async openDetail(id) {
     const e = await get('/employees/' + id);
+    const hasActual = e.actual_salary_before_tax != null || e.actual_company_share != null || e.actual_labor_cost != null;
+    const isAuto = e.actual_cost_mode === 'auto';
     const modal = openModal(`
       <header><h2>${esc(e.name)} · ${esc(e.employee_no)}</h2><button class="btn small" onclick="closeModal()">✕</button></header>
       <div class="body">
@@ -140,6 +172,18 @@ const Employees = {
           ${ditem('直线经理', e.solid_line_number ? `${e.solid_line_number} ${e.solid_line_manager_name || ''}` : '—')}
           ${ditem('虚线经理', (e.dotted_manager_numbers || []).join('、') || '—')}
         </div>
+        <div class="section-title">实际成本（跟人走） <button class="btn small" id="ed-cost-edit" style="margin-left:8px">编辑</button></div>
+        <div class="cost-toggle" style="margin-bottom:8px">
+          <label class="cost-mode"><input type="radio" name="emp-costmode" value="manual" ${!isAuto ? 'checked' : ''}> 手动输入</label>
+          <label class="cost-mode"><input type="radio" name="emp-costmode" value="auto" ${isAuto ? 'checked' : ''}> 自动计算（按税区用工税额）</label>
+          <button class="btn" id="emp-calccost" style="${isAuto && hasActual ? '' : 'display:none'}">重算</button>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px" id="emp-costfields">
+          <div class="cost-field"><label>税前薪资（实际）</label><input type="number" step="0.01" id="emp-salary" value="${e.actual_salary_before_tax != null ? e.actual_salary_before_tax : ''}" ${isAuto ? 'disabled' : ''}></div>
+          <div class="cost-field"><label>公司份额（实际）</label><input type="number" step="0.01" id="emp-share" value="${e.actual_company_share != null ? e.actual_company_share : ''}" ${isAuto ? 'disabled' : ''}></div>
+          <div class="cost-field"><label>用工成本（实际）</label><input type="number" step="0.01" id="emp-labor" value="${e.actual_labor_cost != null ? e.actual_labor_cost : ''}" ${isAuto ? 'disabled' : ''}></div>
+        </div>
+        <div class="hint" id="emp-costhint"></div>
         ${e.remark ? `<div class="section-title">备注</div><div style="font-size:13px">${esc(e.remark)}</div>` : ''}
         ${e.employment_status !== '离职' ? `
           <div class="section-title">操作</div>
@@ -150,6 +194,41 @@ const Employees = {
             <button class="btn danger" id="ed-offboard">离职</button>
           </div>` : ''}
       </div>`);
+    // 实际成本模式切换
+    modal.querySelectorAll('input[name="emp-costmode"]').forEach((r) => r.onchange = () => this.applyCostMode(modal, e));
+    this.applyCostMode(modal, e);
+    modal.querySelector('#emp-calccost').onclick = async () => {
+      try {
+        const salary = val('#emp-salary') ? +val('#emp-salary') : null;
+        if (salary == null) { toast('请先填写税前薪资'); return; }
+        const c = await this.fetchCalc(id, salary);
+        await this.saveCalc(id, { actual_cost_mode: 'auto', actual_salary_before_tax: salary, actual_company_share: c.company_share, actual_labor_cost: c.labor_cost });
+        modal.querySelector('#emp-salary').value = c.salary_before_tax ?? '';
+        modal.querySelector('#emp-share').value = c.company_share ?? '';
+        modal.querySelector('#emp-labor').value = c.labor_cost ?? '';
+        toast(`已重算并保存：公司份额 ${fmtMoney(c.company_share)} · 用工成本 ${fmtMoney(c.labor_cost)}`, 'ok');
+      } catch (err) { toast(err.message); }
+    };
+    modal.querySelector('#ed-cost-edit').onclick = async () => {
+      // 保存手动模式下的修改
+      const mode = modal.querySelector('input[name="emp-costmode"]:checked').value;
+      const body = {
+        version: e.version,
+        actual_cost_mode: mode,
+      };
+      if (mode === 'manual') {
+        body.actual_salary_before_tax = val('#emp-salary') ? +val('#emp-salary') : null;
+        body.actual_company_share = val('#emp-share') ? +val('#emp-share') : null;
+        body.actual_labor_cost = val('#emp-labor') ? +val('#emp-labor') : null;
+      }
+      try {
+        await patch(`/employees/${id}`, body);
+        toast('实际成本已保存', 'ok');
+      } catch (err) {
+        if (err.status === 409) toast('数据已被他人修改，请刷新后重试', 'error');
+        else toast(err.message);
+      }
+    };
     if (e.employment_status !== '离职') {
       modal.querySelector('#ed-transfer').onclick = () => this.openTransfer(e);
       modal.querySelector('#ed-transfer-initiate').onclick = () => this.openTransferInitiate(e);
