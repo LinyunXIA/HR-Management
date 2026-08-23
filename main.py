@@ -18,6 +18,12 @@ from app.routers import auth, data_clean, employees, import_routes, master_data,
 # 启动时打印三环境自检日志（PRD §7D.2）
 print(startup_banner(), file=sys.stderr, flush=True)
 
+# 生产安全配置显式校验（issue #70）：prod 下 JWT_SECRET_KEY 未覆盖/过短直接 FATAL，
+# 于启动最早期执行，不再依赖 app.auth 模块导入顺序
+from app.auth import validate_prod_config
+
+validate_prod_config()
+
 # 启动时建表（幂等）+ 初始化主数据字典
 # create_all 本身不会删除已有表（非破坏性），无需按 env 区分
 Base.metadata.create_all(bind=engine)

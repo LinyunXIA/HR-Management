@@ -22,22 +22,26 @@ JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", _DEFAULT_JWT_SECRET)
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_MINUTES = int(os.environ.get("JWT_EXPIRE_MINUTES", "720"))  # 默认 12h
 
-# 生产环境必须覆盖默认密钥（PRD §10 Item 6）
-try:
-    from app.db import APP_ENV as _APP_ENV  # 延迟导入，避免循环
-    if _APP_ENV == "prod":
-        if JWT_SECRET_KEY == _DEFAULT_JWT_SECRET:
-            raise RuntimeError(
-                "[FATAL] JWT_SECRET_KEY 未覆盖：生产环境必须设置强随机 JWT_SECRET_KEY（≥32字符），"
-                "参见 .env.example"
-            )
-        if len(JWT_SECRET_KEY) < 32:
-            raise RuntimeError("[FATAL] JWT_SECRET_KEY 过短：生产环境要求 ≥32 字符")
-except RuntimeError:
-    raise
-except Exception:
-    # 非 prod 或 APP_ENV 尚未就绪时跳过校验（测试/dev 不拦截）
-    pass
+
+def validate_prod_config(env: str | None = None) -> None:
+    """生产环境安全配置校验（PRD §10 Item 6，issue #70）。
+
+    由 main.py 启动时**显式调用**（而非模块导入期隐式触发），
+    消除对 app.db.APP_ENV 导入顺序的耦合——重构导入顺序不再可能
+    静默跳过生产安全校验。校验失败抛 RuntimeError 阻断启动。
+    """
+    if env is None:
+        from app.db import APP_ENV  # 函数内导入：无循环依赖、无顺序要求
+        env = APP_ENV
+    if env != "prod":
+        return
+    if JWT_SECRET_KEY == _DEFAULT_JWT_SECRET:
+        raise RuntimeError(
+            "[FATAL] JWT_SECRET_KEY 未覆盖：生产环境必须设置强随机 JWT_SECRET_KEY（≥32字符），"
+            "参见 .env.example"
+        )
+    if len(JWT_SECRET_KEY) < 32:
+        raise RuntimeError("[FATAL] JWT_SECRET_KEY 过短：生产环境要求 ≥32 字符")
 
 # 形如 Authorization: Bearer <token>  或  X-Token: <token>（兼容内部 Token 头）
 BEARER_PREFIX = "Bearer "
