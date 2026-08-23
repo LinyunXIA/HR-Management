@@ -196,7 +196,7 @@ const MasterData = {
         <table><thead><tr><th>科目</th><th>税率 %</th><th>启用</th><th></th></tr></thead>
           <tbody id="zi-rows">${(zone.items || []).map((it) => `
             <tr data-item="${it.id}"><td>${esc(it.item_name)}</td><td class="num">${it.tax_rate}</td><td>${it.is_active ? '✔' : '—'}</td>
-            <td><button class="btn small danger" onclick="Users_delItem(this)" data-id="${it.id}">删</button></td></tr>`).join('')
+            <td><button class="btn small danger" data-idel="${it.id}">删</button></td></tr>`).join('')
             || '<tr><td colspan="4" class="empty">暂无科目</td></tr>'}</tbody></table>
         <div class="form-grid" style="margin-top:10px">
           <div class="field"><label>新科目 *</label><input type="text" id="zi-name"></div>
@@ -204,6 +204,8 @@ const MasterData = {
           <div class="field" style="align-self:end"><button class="btn" id="zi-add">＋ 添加科目</button></div>
         </div>
       </div>`);
+    modal.querySelectorAll('[data-idel]').forEach((b) => b.onclick = () =>
+      this.delTax(+b.dataset.idel));
     modal.querySelector('#zi-add').onclick = async () => {
       const name = modal.querySelector('#zi-name').value.trim();
       const rate = parseFloat(modal.querySelector('#zi-rate').value);
@@ -217,13 +219,7 @@ const MasterData = {
 
   async delTax(id) {
     if (!confirm('确认删除该税务科目？')) return;
-    try { await del('/employment-tax-items/' + id); toast('已删除', 'ok'); this.render(); }
+    try { await del('/employment-tax-items/' + id); toast('已删除', 'ok'); closeModal(); this.render(); }
     catch (e) { toast(e.message); }
   },
 };
-
-async function Users_delItem(btn) {
-  if (!confirm('确认删除该税务科目？')) return;
-  try { await del('/employment-tax-items/' + btn.dataset.id); toast('已删除', 'ok'); MasterData.render(); }
-  catch (e) { toast(e.message); }
-}
