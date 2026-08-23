@@ -321,6 +321,8 @@ class EmploymentTaxItemCreate(BaseModel):
     def check_zone_or_country(self):
         if self.tax_zone_id is None and self.country_id is None:
             raise ValueError("tax_zone_id 与 country_id 必须二选一填写")
+        if self.tax_zone_id is not None and self.country_id is not None:
+            raise ValueError("tax_zone_id 与 country_id 互斥，仅允许填写其一（推荐使用 tax_zone_id）")
         return self
 
 

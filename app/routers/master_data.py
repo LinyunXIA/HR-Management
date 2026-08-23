@@ -205,12 +205,15 @@ def create_tax_item(payload: EmploymentTaxItemCreate, response: Response,
                     _admin=Depends(require_admin), db: Session = Depends(get_db)):
     if not payload.tax_zone_id and not payload.country_id:
         raise HTTPException(400, "必须指定税区（tax_zone_id）")
+    if payload.tax_zone_id and payload.country_id:
+        raise HTTPException(400, "tax_zone_id 与 country_id 互斥，仅允许填写其一（推荐 tax_zone_id）")
     if payload.tax_zone_id:
         get_or_404(db, TaxZone, payload.tax_zone_id, "税区不存在")
     else:
         get_or_404(db, Country, payload.country_id, "国家不存在")
+    # 互斥：新口径仅用 tax_zone_id，country_id 置空防脏数据
     it = EmploymentTaxItem(
-        tax_zone_id=payload.tax_zone_id, country_id=payload.country_id,
+        tax_zone_id=payload.tax_zone_id, country_id=None if payload.tax_zone_id else payload.country_id,
         item_name=payload.item_name, tax_rate=payload.tax_rate, is_active=payload.is_active,
     )
     db.add(it)
@@ -274,7 +277,7 @@ def list_tax_zones(country_id: int | None = None, db: Session = Depends(get_db))
 @router.post("/tax-zones", response_model=TaxZoneOut, status_code=201)
 def create_tax_zone(payload: TaxZoneCreate, response: Response,
                     _admin=Depends(require_admin), db: Session = Depends(get_db)):
-    """创建税区（国家级或城市级；城市级分拆后该国无国家兜底）。"""
+    """创建税区（国家级或城市级；城市级分拆后该国无国家兜底，同一国家不可同时存在两级）。"""
     if payload.level not in ("country", "city"):
         raise HTTPException(400, "level 仅支持 country / city")
     if payload.level == "city" and not (payload.city or "").strip():
@@ -288,6 +291,13 @@ def create_tax_zone(payload: TaxZoneCreate, response: Response,
     )
     if dup:
         raise HTTPException(400, f"该税区已存在 (id={dup.id})")
+    # PRD §4 F1.6：城市级分拆后该国无国家兜底 — 同一国家不可同时存在 country 与 city 两级
+    if payload.level == "country":
+        if db.query(TaxZone).filter(TaxZone.country_id == payload.country_id, TaxZone.level == "city").first():
+            raise HTTPException(400, "该国家已存在城市级税区，按「城市级分拆后无国家兜底」规则，禁止再建国家级税区（请先删除城市级税区）")
+    else:  # city
+        if db.query(TaxZone).filter(TaxZone.country_id == payload.country_id, TaxZone.level == "country").first():
+            raise HTTPException(400, "该国家已存在国家级税区，按「城市级分拆后无国家兜底」规则，禁止再建城市级税区（请先删除国家级税区）")
     z = TaxZone(level=payload.level, country_id=payload.country_id,
                 city=(payload.city or None), sort_order=payload.sort_order or 0)
     db.add(z)
@@ -301,6 +311,15 @@ def create_tax_zone(payload: TaxZoneCreate, response: Response,
 def update_tax_zone(zone_id: int, payload: TaxZoneUpdate,
                     _admin=Depends(require_admin), db: Session = Depends(get_db)):
     z = get_or_404(db, TaxZone, zone_id)
+    # 若更新涉及 city/level 变更，需同步校验「同一国家不可两级并存」
+    # 目前 TaxZoneUpdate 仅含 city/sort_order，level 不可改；city 变更时仍需校验
+    if payload.city is not None:
+        new_city = payload.city
+        # 若从 country 改为 city 语义或 city 名称变更，检查冲突
+        if z.level == "country" and new_city:
+            raise HTTPException(400, "国家级税区不可设置 city")
+        if z.level == "city" and not (new_city or "").strip():
+            raise HTTPException(400, "城市级税区必须填写 city")
     for k, v in payload.model_dump(exclude_unset=True).items():
         setattr(z, k, v)
     db.commit()
