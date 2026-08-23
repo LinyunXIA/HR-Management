@@ -43,9 +43,20 @@ FALLBACK_LEVELS = [
 ]
 
 # 工作地点：按 Position.md §3.3（12 个）
+# 工作地点：v2.3 两级（国家 + 城市）；name 保持与源数据一致
 WORK_LOCATIONS = [
-    "比利时布鲁塞尔", "比利时Spa", "丹麦", "瑞典", "荷兰", "卢森堡",
-    "英国伦敦", "美国特拉华", "美国纽约", "美国洛杉矶", "中国香港", "中国上海",
+    ("比利时布鲁塞尔", "比利时", "布鲁塞尔"),
+    ("比利时Spa", "比利时", "Spa"),
+    ("丹麦", "丹麦", None),
+    ("瑞典", "瑞典", None),
+    ("荷兰", "荷兰", None),
+    ("卢森堡", "卢森堡", None),
+    ("英国伦敦", "英国", "伦敦"),
+    ("美国特拉华", "美国", "特拉华"),
+    ("美国纽约", "美国", "纽约"),
+    ("美国洛杉矶", "美国", "洛杉矶"),
+    ("中国香港", "中国香港", None),
+    ("中国上海", "中国", "上海"),
 ]
 
 # 工作范围：Family/Global/Regional/Country（suffix_code 驱动编号）
@@ -145,13 +156,19 @@ def seed_master_data(db: Session):
             if code not in existing_codes:
                 db.add(Level(code=code, label=label, is_management=is_mgmt, sort_order=len(existing_codes) + i))
     if db.query(WorkLocation).count() == 0:
-        for i, name in enumerate(WORK_LOCATIONS):
-            db.add(WorkLocation(name=name, sort_order=i))
+        for i, (name, country, city) in enumerate(WORK_LOCATIONS):
+            db.add(WorkLocation(name=name, country=country, city=city, sort_order=i))
     else:
         existing = {r[0] for r in db.query(WorkLocation.name).all()}
-        for i, name in enumerate(WORK_LOCATIONS):
+        for i, (name, country, city) in enumerate(WORK_LOCATIONS):
             if name not in existing:
-                db.add(WorkLocation(name=name, sort_order=len(existing) + i))
+                db.add(WorkLocation(name=name, country=country, city=city,
+                                    sort_order=len(existing) + i))
+            else:
+                # v2.3 兜底：补齐存量地点的 country/city 两级字段
+                db.query(WorkLocation).filter(WorkLocation.name == name).update(
+                    {"country": country, "city": city}
+                )
     if db.query(ScopeDef).count() == 0:
         for i, (code, label, suffix) in enumerate(SCOPES):
             db.add(ScopeDef(code=code, label=label, suffix_code=suffix, sort_order=i))
@@ -178,7 +195,7 @@ def seed_master_data(db: Session):
 
 def _seed_admin(db: Session):
     """种子管理员：admin / admin123（幂等，仅首次创建）。"""
-    from app.models import User
+    from app.models import User, UserRole
     if db.query(User).count() > 0:
         return
     try:
@@ -190,6 +207,6 @@ def _seed_admin(db: Session):
     db.add(User(
         username=default_user,
         hashed_password=hash_password(default_pwd),
-        role="admin",
+        role=UserRole.ADMIN,
         is_active=True,
     ))

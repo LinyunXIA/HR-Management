@@ -13,7 +13,7 @@ from app.limiter import limiter
 from app import models  # noqa: F401  确保模型注册到 Base.metadata
 from app.db import APP_ENV, Base, SessionLocal, engine, startup_banner
 from app.seed import seed_master_data
-from app.routers import auth, data_clean, employees, import_routes, master_data, orgchart, positions, transfers
+from app.routers import auth, data_clean, employees, import_routes, master_data, orgchart, positions, transfers, users
 
 # 启动时打印三环境自检日志（PRD §7D.2）
 print(startup_banner(), file=sys.stderr, flush=True)
@@ -111,6 +111,48 @@ def _ensure_company_is_active():
 
 _ensure_company_is_active()
 
+# 轻量迁移：v2.3 新增列（转调 / 实际成本 / 工作地点两级 / 税区）
+def _ensure_v23_columns():
+    stmts = [
+        # 员工：转调中目标公司 + 实际成本四字段
+        "ALTER TABLE employees ADD COLUMN IF NOT EXISTS target_company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL",
+        "ALTER TABLE employees ADD COLUMN IF NOT EXISTS actual_cost_mode VARCHAR(10) NOT NULL DEFAULT 'manual'",
+        "ALTER TABLE employees ADD COLUMN IF NOT EXISTS actual_salary_before_tax NUMERIC(14,2)",
+        "ALTER TABLE employees ADD COLUMN IF NOT EXISTS actual_company_share NUMERIC(14,2)",
+        "ALTER TABLE employees ADD COLUMN IF NOT EXISTS actual_labor_cost NUMERIC(14,2)",
+        # 工作地点：国家+城市 两级（税区挂载用）
+        "ALTER TABLE work_locations ADD COLUMN IF NOT EXISTS country VARCHAR(100)",
+        "ALTER TABLE work_locations ADD COLUMN IF NOT EXISTS city VARCHAR(100)",
+        # 用工税额：挂载到税区（旧 country_id 保留兼容，放开非空约束）
+        "ALTER TABLE employment_tax_items ADD COLUMN IF NOT EXISTS tax_zone_id INTEGER REFERENCES tax_zones(id) ON DELETE CASCADE",
+        "ALTER TABLE employment_tax_items ALTER COLUMN country_id DROP NOT NULL",
+    ]
+    try:
+        with engine.begin() as conn:
+            for sql in stmts:
+                try:
+                    conn.execute(text(sql))
+                except Exception as e:
+                    print(f"[migrate] skipped: {sql[:60]}...: {e}", file=sys.stderr)
+    except Exception as e:
+        print(f"[migrate] v23 columns ensure failed: {e}", file=sys.stderr)
+
+_ensure_v23_columns()
+# 轻量迁移：users.role 由旧 String 值('admin'/'hr') → 枚举名('ADMIN'/'HR')
+def _migrate_user_role_values():
+    try:
+        with engine.begin() as conn:
+            for old, new in (("admin", "ADMIN"), ("hr", "HR")):
+                res = conn.execute(text(
+                    f"UPDATE users SET role='{new}' WHERE role='{old}'"
+                ))
+                if res.rowcount:
+                    print(f"[migrate] users.role {old} -> {new} ({res.rowcount} 行)", file=sys.stderr)
+    except Exception as e:
+        print(f"[migrate] users.role migration skipped: {e}", file=sys.stderr)
+
+_migrate_user_role_values()
+
 with SessionLocal() as db:
     seed_master_data(db)
 
@@ -125,6 +167,7 @@ def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
 app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 
 app.include_router(auth.router)
+app.include_router(users.router)
 app.include_router(master_data.router)
 app.include_router(data_clean.router)
 app.include_router(positions.router)

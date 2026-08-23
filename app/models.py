@@ -74,7 +74,14 @@ class EmploymentStatus(str, enum.Enum):
     PROBATION = "试用期"
     ACTIVE = "在职"
     LEAVE = "休假"
+    TRANSFERRING = "转调中"  # v2.3 转调交接：人仍挂原岗（原岗保持 Filled 锁定）
     TERMINATED = "离职"
+
+
+class UserRole(str, enum.Enum):
+    """系统角色（PRD §7B.2）：admin=集团 full admin / hr=子公司 HR。"""
+    ADMIN = "admin"
+    HR = "hr"
 
 
 class CostMode(str, enum.Enum):
@@ -114,12 +121,35 @@ class Level(Base):
 
 
 class WorkLocation(Base):
-    """工作地点字典。"""
+    """工作地点字典（v2.3：国家+城市 两级，用于税区挂载）。"""
     __tablename__ = "work_locations"
 
     id = Column(Integer, primary_key=True)
     name = Column(String(100), unique=True, nullable=False)
+    country = Column(String(100), nullable=True)   # 国家/地区（如 比利时）
+    city = Column(String(100), nullable=True)      # 城市（如 布鲁塞尔；国家级地点可空）
     sort_order = Column(Integer, nullable=False, default=0)
+
+
+class TaxZone(Base):
+    """税区挂载点配置（v2.3 F1.6）：税率集合挂到国家级或城市级。
+
+    城市级分拆后**无国家兜底**——未配置税率的地区成本无法自动计算。
+    """
+    __tablename__ = "tax_zones"
+    __table_args__ = (
+        CheckConstraint("level IN ('country', 'city')", name="ck_tax_zones_level"),
+        UniqueConstraint("level", "country_id", "city", name="uq_tax_zone_scope"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    level = Column(String(10), nullable=False)               # country | city
+    country_id = Column(Integer, ForeignKey("countries.id"), nullable=False)
+    city = Column(String(100), nullable=True)                # level=city 时必填
+    sort_order = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=_now)
+
+    country = relationship("Country")
 
 
 class ScopeDef(Base):
@@ -152,15 +182,18 @@ class PositionType(Base):
 
 
 class EmploymentTaxItem(Base):
-    """员工用工税额（按国家；科目 + 税率）。"""
+    """员工用工税额（v2.3：按税区 TaxZone 挂载；科目 + 税率）。"""
     __tablename__ = "employment_tax_items"
 
     id = Column(Integer, primary_key=True)
-    country_id = Column(Integer, ForeignKey("countries.id"), nullable=False)
+    tax_zone_id = Column(Integer, ForeignKey("tax_zones.id"), nullable=True)  # v2.3 税区
+    country_id = Column(Integer, ForeignKey("countries.id"), nullable=True)  # 旧口径保留兼容
     item_name = Column(String(100), nullable=False)
     tax_rate = Column(Numeric(6, 2), nullable=False, default=0)  # 百分比 %
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=_now)
+
+    tax_zone = relationship("TaxZone")
 
 
 class Position(Base):
@@ -179,9 +212,30 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     username = Column(String(100), unique=True, nullable=False)
     hashed_password = Column(String(255), nullable=False)
-    role = Column(String(50), nullable=False, default="admin")
+    role = Column(SAEnum(UserRole, native_enum=False, length=10),
+                  nullable=False, default=UserRole.ADMIN)
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=_now)
+
+    companies = relationship("UserCompany", back_populates="user",
+                             cascade="all, delete-orphan")
+
+
+class UserCompany(Base):
+    """hr 用户 ↔ 可管法人实体 多对多（v2.3 行级隔离，PRD §7B.2）。
+
+    admin 自带全司（无需记录）；hr 无记录则无任何可管实体。
+    """
+    __tablename__ = "user_companies"
+    __table_args__ = (UniqueConstraint("user_id", "company_id"),)
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, default=_now)
+
+    user = relationship("User", back_populates="companies")
+    company = relationship("Company")
 
 
 class PositionNumber(Base):
@@ -222,12 +276,12 @@ class PositionNumber(Base):
         nullable=False,
         default=PositionStatus.PLANNED,
     )
-    # ---- 成本字段（人工成本口径）----
+    # ---- 预算成本字段（v2.3 双口径：岗位预算，空岗可录、不随人走、按岗位税区计算）----
     cost_mode = Column(SAEnum(CostMode, native_enum=False, length=10),
                        nullable=False, default=CostMode.MANUAL)
-    salary_before_tax = Column(Numeric(14, 2), nullable=True)   # 税前薪资
-    company_share = Column(Numeric(14, 2), nullable=True)       # 公司份额
-    labor_cost = Column(Numeric(14, 2), nullable=True)          # 用工成本
+    salary_before_tax = Column(Numeric(14, 2), nullable=True)   # 预算·税前薪资
+    company_share = Column(Numeric(14, 2), nullable=True)       # 预算·公司份额
+    labor_cost = Column(Numeric(14, 2), nullable=True)          # 预算·用工成本
     version = Column(Integer, nullable=False, default=1)        # 乐观锁版本号（PRD §7C）
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
@@ -267,6 +321,42 @@ class PositionEvent(Base):
     note = Column(Text, nullable=True)
 
 
+class Transfer(Base):
+    """转调交接记录（v2.3 F1.5b）：转出 → 待认领 → 认领分配 / 退回。人永不脱岗。
+
+    - initiate：原 HR 转出到目标公司；人仍挂原岗、原岗保持 Filled 锁定；
+      员工标记「转调中」+ target_company_id。
+    - claim：仅目标公司 HR 认领 + 分配空闲目标岗（单事务：目标岗 Filled +
+      原岗 Vacant + 人挂新岗 + prev_*）。
+    - reject：目标公司 HR 拒绝 → 退回原公司、原岗继续。
+    """
+    __tablename__ = "transfers"
+
+    id = Column(Integer, primary_key=True)
+    employee_id = Column(Integer, ForeignKey("employees.id", ondelete="CASCADE"), nullable=False)
+    from_position_id = Column(
+        Integer, ForeignKey("position_numbers.id", ondelete="SET NULL"), nullable=True
+    )
+    target_company_id = Column(Integer, ForeignKey("companies.id", ondelete="SET NULL"),
+                               nullable=False)  # 目标公司（认领池过滤键）
+    to_position_id = Column(
+        Integer, ForeignKey("position_numbers.id", ondelete="SET NULL"), nullable=True
+    )  # 认领时分配的目标岗
+    status = Column(String(20), nullable=False, default="initiated")  # initiated|claimed|rejected
+    timing = Column(String(20), nullable=True)  # 预留：month_end | immediate（升职时节）
+    kind = Column(String(20), nullable=False, default="transfer")  # transfer | promotion
+    initiated_by = Column(String(100), nullable=True)  # 发起人用户名
+    claimed_by = Column(String(100), nullable=True)    # 认领/退回操作人
+    note = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=_now)
+    claimed_at = Column(DateTime, nullable=True)
+
+    employee = relationship("Employee")
+    from_position = relationship("PositionNumber", foreign_keys=[from_position_id])
+    to_position = relationship("PositionNumber", foreign_keys=[to_position_id])
+    target_company = relationship("Company")
+
+
 class Employee(Base):
     """人员档案（必须挂岗 — 在职 NOT NULL，离职解绑可为 NULL）。"""
     __tablename__ = "employees"
@@ -298,10 +388,20 @@ class Employee(Base):
     )
     position_number_id = Column(
         Integer, ForeignKey("position_numbers.id"), unique=True, nullable=True
-    )  # 在职必须挂岗；离职解绑后为 NULL（档案保留）
+    )  # 在职必须挂岗（含转调中——人永不脱岗）；仅离职解绑后为 NULL
+    target_company_id = Column(
+        Integer, ForeignKey("companies.id", ondelete="SET NULL"), nullable=True
+    )  # v2.3 转调中：目标公司（认领前原岗保持 Filled）
+    # ---- 实际成本字段（v2.3 双口径：跟人走、按人属税区计算、升职转调不丢、离职留档）----
+    actual_cost_mode = Column(SAEnum(CostMode, native_enum=False, length=10),
+                              nullable=False, default=CostMode.MANUAL)
+    actual_salary_before_tax = Column(Numeric(14, 2), nullable=True)   # 实际·税前薪资
+    actual_company_share = Column(Numeric(14, 2), nullable=True)       # 实际·公司份额
+    actual_labor_cost = Column(Numeric(14, 2), nullable=True)          # 实际·用工成本
     remark = Column(Text, nullable=True)
     version = Column(Integer, nullable=False, default=1)        # 乐观锁版本号（PRD §7C）
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
     position = relationship("PositionNumber")
+    target_company = relationship("Company")
