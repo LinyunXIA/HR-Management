@@ -235,7 +235,7 @@ class Employee(Base):              # 人员档案
 - 编号规则校验（v2.3）：编号由系统分配，格式仅校验 `P{seq}` / `PA{seq}` 纯序号；与 scope/country **解耦**（范围/国家存独立字段）。
 - **管理岗限定**：设置直线/虚线经理时，目标岗位级别必须 `is_management=True`（M 开头）。
 - **乐观锁**：`position_numbers.version`、`employees.version`（`main.py` 兜底迁移；`PATCH` 携带 `version`，`app/helpers.py:assert_version`）。
-- **挂编联动**：员工 `employee_type` 必须匹配所挂岗位的 `position_type`（Consultant→正式 / External Employee→外包 / Employee→正式·实习·劳务），应用层校验 + 数据层约束兜底（防四不像）。
+- **挂编联动**：员工 `employee_type` 必须匹配所挂岗位的 `position_type`（Consultant→正式 / External Employee→外包 / Employee→正式·实习·劳务），应用层校验 + 数据层约束兜底（防四不像）。**#50 落地：`trg_employees_attach_type` 触发器（BEFORE INSERT/UPDATE ON employees）为 DB 层硬兜底，绕过 API 直写库同样拦截；claim/promote/transfer 路径补应用层校验返回 400。**
 - 索引：`position_numbers(status)`、`position_numbers(solid_line_manager_id)`、`position_events(position_number_id, changed_at)`、`employees(position_number_id)`、`employment_tax_items(tax_zone_id)`。
 
 ### 4.3 三环境 DB 隔离（`app/db.py:1`，PRD §7D 合并版）
@@ -512,7 +512,7 @@ CLI：`python -m scripts.import_csv data/Position.csv`（首次 `--reset` 语义
 - [x] `PositionNumber` 成本字段 `cost_mode/salary_before_tax/company_share/labor_cost` 语义标注为**预算口径**（字段不变）。
 - [x] `WorkLocation` 加 `country/city` 两级；新增 `TaxZone`（`level=country|city`、`country_id`、`city`）；`EmploymentTaxItem.tax_zone_id`（替换 `country_id`）。
 - [x] 新增 `transfers` 表（独立表，含 kind=transfer|promotion、status、target_company_id 等）。
-- [x] 数据层硬约束：①挂编联动 Check（`position_type`↔`employee_type`）→ **应用层实现**（PG CHECK 无法跨表，见 `employees._assert_type_match`）；②在职含转调中必挂岗 Check（沿用既有 `ck_employees_position_required_if_active`）；③乐观锁 `version` 兜底 `ALTER`（既有）。
+- [x] 数据层硬约束：①挂编联动 Check（`position_type`↔`employee_type`）→ **应用层实现**（PG CHECK 无法跨表，见 `employees._assert_type_match`）；②在职含转调中必挂岗 Check（沿用既有 `ck_employees_position_required_if_active`）；③乐观锁 `version` 兜底 `ALTER`（既有）。（①已于 #50 升级为触发器 `trg_employees_attach_type` 硬兜底）
 - [x] 清理 `Employee` 旧 CHECK 与转调/升职语义合并（旧 CHECK 语义已覆盖转调中必挂岗，无需重建）。
 
 ### S2 认证与账号管理（`app/auth.py` + `routers/auth.py` + 新增 `routers/users.py`）

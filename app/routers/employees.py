@@ -256,6 +256,8 @@ def promote_employee(eid: int, payload: PromoteRequest,
     if not new_pn:
         raise HTTPException(404, "目标岗位不存在")
     _assert_attachable(db, new_pn)
+    # 挂编联动（#50）：新岗类型须匹配员工合同属性（DB 触发器兜底前先给 400）
+    _assert_type_match(new_pn, emp.employee_type)
 
     timing_cn = "月末升职" if payload.timing == "month_end" else "即时升职"
     if old_pn and old_pn.id != new_pn.id:

@@ -31,7 +31,7 @@ from app.models import (
     PositionStatus,
     Transfer,
 )
-from app.routers.employees import _assert_attachable, serialize_employee
+from app.routers.employees import _assert_attachable, _assert_type_match, serialize_employee
 from app.schemas import TransferClaim, TransferCreate, TransferInitiate
 
 router = APIRouter(prefix="/api/v1", tags=["transfers"])
@@ -173,6 +173,8 @@ def claim_transfer(transfer_id: int, payload: TransferClaim,
         raise HTTPException(400, f"目标岗位状态为 {new_pn.status.value}，非空闲编制")
     if db.query(Employee).filter(Employee.position_number_id == new_pn.id).first():
         raise HTTPException(400, "目标岗位已被其他员工占用")
+    # 挂编联动（#50）：目标岗类型须匹配员工合同属性（触发器兜底前先给 400）
+    _assert_type_match(new_pn, emp.employee_type)
 
     old_pn = db.get(PositionNumber, emp.position_number_id)
 
@@ -255,6 +257,8 @@ def create_transfer(payload: TransferCreate, response: Response,
     if not new_pn:
         raise HTTPException(404, "目标岗位不存在")
     _assert_attachable(db, new_pn)
+    # 挂编联动（#50）：目标岗类型须匹配员工合同属性
+    _assert_type_match(new_pn, emp.employee_type)
     if old_pn and old_pn.id != new_pn.id:
         if old_pn.status == PositionStatus.FILLED:
             lifecycle.transition(db, old_pn, PositionStatus.VACANT,
