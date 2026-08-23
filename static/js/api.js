@@ -89,3 +89,10 @@ function toast(msg, type = 'error') {
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 3200);
 }
+
+/* 乐观锁冲突统一文案（后端 409 detail 已含版本信息时优先展示后端消息） */
+const VERSION_CONFLICT_MSG = '数据已被他人修改，请刷新后重试';
+function handleApiError(e, fallback) {
+  if (e && e.status === 409) toast(VERSION_CONFLICT_MSG, 'error');
+  else toast((e && e.message) || fallback || '操作失败');
+}
