@@ -55,14 +55,19 @@ def number_series(position_type: str | None) -> str:
 
 
 def next_sequence(db: Session, prefix: str) -> int:
-    """取库内指定编号系列的下一个序号（当前最大值 +1；空库从 1 起）。"""
-    pattern = NUMBER_RE_PA if prefix == "PA" else NUMBER_RE_P
-    seqs = []
-    for (num,) in db.query(PositionNumber.number).all():
-        m = pattern.match(num or "")
-        if m:
-            seqs.append(int(m.group(1)))
-    return (max(seqs) + 1) if seqs else 1
+    """取库内指定编号系列的下一个序号（当前最大值 +1；空库从 1 起）。
+
+    最大值在 DB 侧聚合计算：正则过滤系列 + 剥离前缀转整数取 max，
+    避免全表加载到 Python 逐条正则匹配。
+    """
+    from sqlalchemy import cast, func, Integer
+    digits = func.regexp_replace(PositionNumber.number, r"^PA?", "")
+    max_seq = (
+        db.query(func.max(cast(digits, Integer)))
+        .filter(PositionNumber.number.op("~")(rf"^{prefix}\d+$"))
+        .scalar()
+    )
+    return (max_seq or 0) + 1
 
 
 def generate_number(db: Session, position_type: str | None = None, *args) -> str:
