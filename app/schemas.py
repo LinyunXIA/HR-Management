@@ -135,7 +135,7 @@ class EmployeeCreate(BaseModel):
 class EmployeeUpdate(BaseModel):
     name: str | None = None
     gender: Gender | None = None
-    birth_date: str | date | None = None
+    birth_date: date | None = None
     phone: str | None = None
     email: str | None = None
     hire_date: date | None = None
@@ -143,7 +143,7 @@ class EmployeeUpdate(BaseModel):
     employment_status: EmploymentStatus | None = None
     target_company_id: int | None = None  # v2.3 转调中目标公司（常规流程走 /transfers/initiate）
     # 实际成本（v2.3 双口径：跟人走）
-    actual_cost_mode: str | None = None       # auto | manual
+    actual_cost_mode: CostMode | None = None
     actual_salary_before_tax: float | None = None
     actual_company_share: float | None = None
     actual_labor_cost: float | None = None
