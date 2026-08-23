@@ -54,6 +54,7 @@ class PositionNumberCreate(BaseModel):
     legal_category: str | None = None
     solid_line_manager_id: int | None = None
     dotted_manager_ids: list[int] = []
+    dotted_manager_labels: list[str] = []  # 对应虚线经理的标签
     org_chart_display: str | None = None
     prev_position_id: int | None = None
     prev_company_id: int | None = None
@@ -70,7 +71,7 @@ class PositionNumberCreate(BaseModel):
         has_id = self.position_id is not None
         has_name = self.position_name is not None and str(self.position_name).strip() != ""
         if not (has_id ^ has_name):
-            raise ValueError("Exactly one of position_id or position_name required")
+            raise ValueError("必须且只能提供 position_id 或 position_name 其中之一")
         return self
 
 
@@ -88,6 +89,7 @@ class PositionNumberUpdate(BaseModel):
     legal_category: str | None = None
     solid_line_manager_id: int | None = None
     dotted_manager_ids: list[int] | None = None
+    dotted_manager_labels: list[str] | None = None  # 对应虚线经理的标签
     org_chart_display: str | None = None
     prev_position_id: int | None = None
     prev_company_id: int | None = None

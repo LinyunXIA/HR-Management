@@ -1,16 +1,19 @@
 """组织架构导出 MD（3 格式）。
 
-- `org`   ：公司 + 岗位（不含汇报线，按公司分组）
-- `solid` ：直线汇报线（按 solid_line_manager_id 层级树）
-- `dotted`：虚线汇报线（岗位 → 虚线经理）
+- `org`   ：公司 + 岗位（不含汇报线，按公司分组，含占用员工）
+- `solid` ：直线汇报线（按 solid_line_manager_id 层级树，含占用员工）
+- `dotted`：虚线汇报线（岗位 → 虚线经理，含占用员工）
 """
 from sqlalchemy.orm import Session
 
-from app.models import Company, PositionNumber, PositionNumberDottedLine
+from app.models import Company, Employee, PositionNumber, PositionNumberDottedLine
 
 
 def _display(pn: PositionNumber) -> str:
     name = pn.org_chart_display or (pn.position.name if pn.position else pn.number)
+    inc = pn.incumbent
+    if inc:
+        return f"{name} ({pn.number}) · 👤 {inc.name}"
     return f"{name} ({pn.number})"
 
 

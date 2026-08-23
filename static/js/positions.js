@@ -134,9 +134,11 @@ const Positions = {
           <div class="field"><label>直线经理（仅管理岗）</label>
             <select id="pc-solid"><option value="">无</option>${this.mgrOptions()}</select>
           </div>
-          <div class="field"><label>虚线经理（仅管理岗，可多选）</label>
-            <select id="pc-dotted" multiple size="3">${this.mgrOptions()}</select>
-          </div>
+<div class="field"><label>虚线经理（仅管理岗，可多选）</label>
+             <select id="pc-dotted" multiple size="3">${this.mgrOptions()}</select>
+             <div class="hint">每行一个标签，与上方选择顺序对应（如 AML、IT、合规）</div>
+             <textarea id="pc-dotted-labels" rows="3" placeholder="虚线标签，每行一个，顺序对应上方选择&#10;示例：&#10;AML 虚线&#10;IT 虚线"></textarea>
+           </div>
           <div class="field"><label>法律强制/可选（可留空）</label>
             <select id="pc-legal"><option value="">—</option>${App.legalCategories.map((l) => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join('')}</select>
           </div>
@@ -153,6 +155,8 @@ const Positions = {
     modal.querySelectorAll('input[name="pc-costmode"]').forEach((r) => r.onchange = () => this.applyCostMode(modal, 'pc'));
     modal.querySelector('#pc-save').onclick = async () => {
       if (!val('#pc-posname')) { toast('请填写职位'); return; }
+      const dottedIds = [...modal.querySelector('#pc-dotted').selectedOptions].map((o) => +o.value);
+      const dottedLabels = val('#pc-dotted-labels').split('\n').map(s => s.trim()).filter(s => s);
       const body = {
         position_name: val('#pc-posname'),
         company_id: +val('#pc-company'),
@@ -166,7 +170,8 @@ const Positions = {
         job_responsibility: val('#pc-desc') || null,
         legal_category: val('#pc-legal') || null,
         solid_line_manager_id: val('#pc-solid') ? +val('#pc-solid') : null,
-        dotted_manager_ids: [...modal.querySelector('#pc-dotted').selectedOptions].map((o) => +o.value),
+        dotted_manager_ids: dottedIds,
+        dotted_manager_labels: dottedLabels,
         org_chart_display: val('#pc-display') || null,
         remark: val('#pc-remark') || null,
         ...readCostBody('pc'),
@@ -274,6 +279,8 @@ const Positions = {
 
   async openEdit(p) {
     this._managers = await this.managerOptions();
+    // 预填虚线标签
+    const dottedLabels = (p.dotted_manager_labels || []).join('\n');
     const modal = openModal(`
       <header><h2>编辑岗位 ${esc(p.number)}</h2><button class="btn small" onclick="closeModal()">✕</button></header>
       <div class="body">
@@ -308,9 +315,11 @@ const Positions = {
           <div class="field"><label>直线经理（仅管理岗）</label>
             <select id="pe-solid"><option value="">无</option>${this._managers.map((m) => `<option value="${m.id}" ${m.id === p.solid_line_manager_id ? 'selected' : ''}>${esc(m.number)} ${esc(m.position_name || '')}（${esc(m.level || '')}）</option>`).join('')}</select>
           </div>
-          <div class="field"><label>虚线经理（仅管理岗，可多选）</label>
-            <select id="pe-dotted" multiple size="3">${this.mgrOptions()}</select>
-          </div>
+<div class="field"><label>虚线经理（仅管理岗，可多选）</label>
+             <select id="pe-dotted" multiple size="3">${this._managers.map((m) => `<option value="${m.id}" ${(p.dotted_manager_ids || []).includes(m.id) ? 'selected' : ''}>${esc(m.number)} ${esc(m.position_name || '')}（${esc(m.level || '')}）</option>`).join('')}</select>
+             <div class="hint">每行一个标签，与上方选择顺序对应（如 AML、IT、合规）</div>
+             <textarea id="pe-dotted-labels" rows="3" placeholder="虚线标签，每行一个，顺序对应上方选择&#10;示例：&#10;AML 虚线&#10;IT 虚线">${esc(dottedLabels)}</textarea>
+           </div>
           <div class="field full"><label>工作职责描述</label><textarea id="pe-desc" rows="2">${esc(p.job_responsibility || '')}</textarea></div>
           <div class="field full"><label>Org-Chart 显示名</label><input type="text" id="pe-display" value="${esc(p.org_chart_display || '')}"></div>
           <div class="field full"><label>备注</label><textarea id="pe-remark" rows="2">${esc(p.remark || '')}</textarea></div>
@@ -341,6 +350,8 @@ const Positions = {
       } catch (e) { handleApiError(e, '重算失败'); }
     };
     modal.querySelector('#pe-save').onclick = async () => {
+      const dottedIds = [...modal.querySelector('#pe-dotted').selectedOptions].map((o) => +o.value);
+      const dottedLabels = val('#pe-dotted-labels').split('\n').map(s => s.trim()).filter(s => s);
       const body = {
         version: p.version,
         position_id: App.functions.find((f) => f.name === val('#pe-posname'))?.id || null,
@@ -356,7 +367,8 @@ const Positions = {
         job_responsibility: val('#pe-desc') || null,
         legal_category: val('#pe-legal') || null,
         solid_line_manager_id: val('#pe-solid') ? +val('#pe-solid') : null,
-        dotted_manager_ids: [...modal.querySelector('#pe-dotted').selectedOptions].map((o) => +o.value),
+        dotted_manager_ids: dottedIds,
+        dotted_manager_labels: dottedLabels,
         org_chart_display: val('#pe-display') || null,
         remark: val('#pe-remark') || null,
         ...readCostBody('pe'),
