@@ -2,13 +2,15 @@
 
 编号策略（v3）：**源文件「岗位编号」列一律忽视**，由系统在导入时自动分配：
   正式岗（Employee / Consultant）→ P{seq}；外包岗（External Employee）→ PA{seq}。
-幂等键 = （职位名, 隶属公司, 国家或地区, 开启日）（PRD §3.1 v2.3，4 列）：
-与库内已有岗位匹配则更新，否则建档分配新号。
+迭代识别（DESIGN §8 两段式，#49 定稿）：
+  可选「岗位ID」列 → 带 ID 且库内存在按正式 ID 认老更新（updated_by_id）；
+  无 ID / 未携带 → 回退幂等键（职位名, 隶属公司, 国家或地区, 开启日）认老（updated_by_key）；
+  均未命中 → 新建分配编号。带 ID 不存在 → 报错该行不导入。
 
 分三趟：
   1) 解析校验行数据（级别须在 levels 字典、strict 模式法律分类须在字典），
      建公司/职位/国家基础字典；
-  2) 按幂等键 upsert 岗位（新行自动分配编号、写生命周期事件）；
+  2) 按 ID 优先、幂等键回退 upsert 岗位（新行自动分配编号、写生命周期事件）；
   3) 直线/虚线经理、之前的职位按**职位名**解析为外键，并做环检测。
 """
 import csv
@@ -122,7 +124,8 @@ def import_csv(db, rows, *, strict_legal: bool = False):
     strict_legal=True：法律分类不在 legal_categories 字典（且非历史枚举值）时
     记入 errors 且该行不导入；False（默认）维持告警后照常入库，兼容历史 CSV。
     """
-    report = {"total": 0, "imported": 0, "updated": 0, "errors": [], "warnings": []}
+    report = {"total": 0, "imported": 0, "updated": 0, "updated_by_id": 0,
+              "updated_by_key": 0, "errors": [], "warnings": []}
 
     companies = {c.name: c for c in db.query(Company).all()}
     functions = {p.name: p for p in db.query(Position).all()}
@@ -143,8 +146,9 @@ def import_csv(db, rows, *, strict_legal: bool = False):
     # ---- 编号系列计数器（正式 P / 外包 PA），取库内当前最大序号 +1 起 ----
     seq_counters = {"P": next_sequence(db, "P"), "PA": next_sequence(db, "PA")}
 
-    parsed = []  # {key, label, data, solid_refs, dotted_refs, prev_refs, prev_company_name}
+    parsed = []  # {key, label, data, solid_refs, dotted_refs, prev_refs, prev_company_name, ref_id}
     seen_keys = set()
+    seen_ref_ids = set()  # 同文件两行引用同一岗位ID → 报错（#49）
 
     # ---- 第 1 趟：读取并构建基础数据（编号列一律忽视）----
     for raw in rows:
@@ -225,6 +229,20 @@ def import_csv(db, rows, *, strict_legal: bool = False):
             continue
         seen_keys.add(key)
 
+        # 可选「岗位ID」列（#49）：迭代导入按正式 ID 优先认老；非法/重复引用报错该行
+        ref_id = None
+        raw_id = (raw.get("岗位ID") or "").strip()
+        if raw_id and raw_id.upper() != "N/A":
+            if not raw_id.isdigit():
+                report["errors"].append(f"{label}: 岗位ID「{raw_id}」非法（须为正整数），该行不导入")
+                continue
+            ref_id = int(raw_id)
+            if ref_id in seen_ref_ids:
+                report["errors"].append(
+                    f"{label}: 岗位ID {ref_id} 被文件内多行引用，该行不导入")
+                continue
+            seen_ref_ids.add(ref_id)
+
         data = {
             "position_id": functions[function_name].id,
             "company_id": companies[company_name].id,
@@ -251,16 +269,30 @@ def import_csv(db, rows, *, strict_legal: bool = False):
             "dotted_refs": extract_refs(raw.get("虚线经理")),
             "prev_refs": extract_refs(raw.get("之前的职位")),
             "prev_company_name": prev_company_name,
+            "ref_id": ref_id,
         })
 
     db.flush()
 
-    # ---- 第 2 趟：按幂等键 upsert（新行由系统分配编号）----
+    # ---- 第 2 趟：按 ID 优先、幂等键回退 upsert（新行由系统分配编号，#49）----
     file_refs_by_name: dict[str, list] = {}  # 本文件职位名 → [岗位]（同文件经理引用优先）
     for item in parsed:
         key = item["key"]
         data = item["data"]
-        pn = existing_by_key.get(key)
+        label = item["label"]
+        pn = None
+        matched_via = None
+        if item["ref_id"] is not None:
+            pn = db.get(PositionNumber, item["ref_id"])
+            if pn is None:
+                report["errors"].append(
+                    f"{label}: 岗位ID {item['ref_id']} 库内不存在，该行不导入")
+                continue
+            matched_via = "id"
+        else:
+            pn = existing_by_key.get(key)
+            matched_via = "key" if pn is not None else None
+
         if pn is None:
             prefix = number_series(data["position_type"])
             number = f"{prefix}{seq_counters[prefix]}"
@@ -280,6 +312,10 @@ def import_csv(db, rows, *, strict_legal: bool = False):
             for k, v in data.items():
                 setattr(pn, k, v)
             report["updated"] += 1
+            if matched_via == "id":
+                report["updated_by_id"] += 1
+            else:
+                report["updated_by_key"] += 1
         file_refs_by_name.setdefault(item["label"], []).append(pn)
 
     db.flush()
