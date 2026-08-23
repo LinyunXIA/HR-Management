@@ -153,6 +153,56 @@ def _migrate_user_role_values():
 
 _migrate_user_role_values()
 
+# 轻量迁移：挂编联动 DB 层兜底触发器（issue #50，PRD §4 F1.5）
+# 应用层 _assert_type_match 之外的硬保证：绕过 API 直写库 / 并发窗口均被拦截。
+# 注意：SAEnum(native_enum=False) 持久化枚举「名」（如 REGULAR/OUTSOURCED），
+# 故此处由 Python 枚举派生存储值，与 models.EmployeeType 保持单一事实源。
+from app.models import EmployeeType as _ET
+
+ATTACH_TYPE_TRIGGER_FN_SQL = f"""
+CREATE OR REPLACE FUNCTION fn_check_attach_type() RETURNS trigger AS $fn$
+DECLARE
+    v_ptype TEXT;
+BEGIN
+    IF NEW.position_number_id IS NOT NULL THEN
+        SELECT position_type INTO v_ptype FROM position_numbers WHERE id = NEW.position_number_id;
+        IF v_ptype = 'Consultant' AND NEW.employee_type <> '{_ET.REGULAR.name}' THEN
+            RAISE EXCEPTION '挂编联动校验失败：岗位为顾问编制（Consultant），仅允许「正式」员工';
+        END IF;
+        IF v_ptype = 'External Employee' AND NEW.employee_type <> '{_ET.OUTSOURCED.name}' THEN
+            RAISE EXCEPTION '挂编联动校验失败：岗位为外包编制（External Employee），仅允许「外包」员工';
+        END IF;
+        IF v_ptype = 'Employee'
+           AND NEW.employee_type NOT IN ('{_ET.REGULAR.name}', '{_ET.INTERN.name}', '{_ET.LABOR.name}') THEN
+            RAISE EXCEPTION '挂编联动校验失败：岗位为正式编制（Employee），仅允许「正式/实习/劳务」员工';
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$fn$ LANGUAGE plpgsql;
+"""
+
+ATTACH_TYPE_TRIGGER_DDL_SQL = """
+DROP TRIGGER IF EXISTS trg_employees_attach_type ON employees;
+CREATE TRIGGER trg_employees_attach_type
+    BEFORE INSERT OR UPDATE ON employees
+    FOR EACH ROW EXECUTE FUNCTION fn_check_attach_type();
+"""
+
+
+def _ensure_attach_type_trigger():
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(ATTACH_TYPE_TRIGGER_FN_SQL))
+            conn.execute(text(ATTACH_TYPE_TRIGGER_DDL_SQL))
+            print("[migrate] trg_employees_attach_type 已就绪（挂编联动 DB 兜底，#50）",
+                  file=sys.stderr)
+    except Exception as e:
+        print(f"[migrate] attach-type trigger skipped: {e}", file=sys.stderr)
+
+
+_ensure_attach_type_trigger()
+
 with SessionLocal() as db:
     seed_master_data(db)
 
