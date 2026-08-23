@@ -24,6 +24,7 @@ from app.models import (
     Employee,
     EmploymentTaxItem,
     LegalCategoryDef,
+    Level,
     Position,
     PositionEvent,
     PositionNumber,
@@ -49,6 +50,12 @@ def _assert_management(db: Session, mgr: PositionNumber, role: str):
         raise HTTPException(
             400, f"{role}必须是管理岗（级别以 M 开头），岗位 {mgr.number}（级别 {mgr.level or '未设置'}）不可作为经理"
         )
+
+
+def _assert_level(db: Session, level: str | None):
+    """岗位级别须在 levels 字典（PRD §3.6 / §4 F0）；空值允许留空。"""
+    if level and not db.query(Level).filter(Level.code == level).first():
+        raise HTTPException(400, f"级别「{level}」不存在，请先在主数据中维护")
 
 
 # ---------------------------------------------------------------- 基础字典
@@ -115,6 +122,8 @@ def create_position(payload: PositionNumberCreate, response: Response,
                     user=Depends(get_current_user), db: Session = Depends(get_db)):
     position = resolve_position(db, payload.position_id, payload.position_name)
     company = get_or_404(db, Company, payload.company_id, "隶属公司不存在")
+    level_val = (payload.level or "").strip() or None
+    _assert_level(db, level_val)
     country = None
     if payload.scope == Scope.COUNTRY:
         if not payload.country_id:
@@ -142,7 +151,7 @@ def create_position(payload: PositionNumberCreate, response: Response,
         number=number,
         position_id=position.id,
         company_id=company.id,
-        level=payload.level,
+        level=level_val,
         scope=payload.scope,
         country_id=country.id if country else None,
         position_type=payload.position_type,
@@ -229,7 +238,11 @@ def update_position(pid: int, payload: PositionNumberUpdate,
             raise HTTPException(400, f"法律强制/可选「{payload.legal_category}」不存在，请先在主数据中添加")
 
     old_position_type = pn.position_type
-    for field in ("level", "opening_date", "closing_date", "work_location",
+    if payload.level is not None:
+        level_upd = payload.level.strip()
+        _assert_level(db, level_upd)
+        pn.level = level_upd or None
+    for field in ("opening_date", "closing_date", "work_location",
                   "job_responsibility", "legal_category", "org_chart_display",
                   "prev_position_id", "prev_company_id", "remark", "position_type"):
         val = getattr(payload, field)

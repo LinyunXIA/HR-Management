@@ -104,7 +104,7 @@ def import_data_clean_job(job_id: str):
     reader = csv_mod.DictReader(io.StringIO(csv_text))
     db = SessionLocal()
     try:
-        import_report = import_csv(db, reader)
+        import_report = import_csv(db, reader, strict_legal=True)
         return {"clean_report": job["report"], "import_report": import_report, "job_id": job_id}
     finally:
         db.close()

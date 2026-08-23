@@ -22,7 +22,7 @@ async def create_import(file: UploadFile = File(...), db: Session = Depends(get_
     except UnicodeDecodeError:
         text = content.decode("utf-8", errors="replace")
     reader = csv.DictReader(io.StringIO(text))
-    report = import_csv(db, reader)
+    report = import_csv(db, reader, strict_legal=True)
     # 作业资源化：返回 201 时附带 Location，实际报告即资源表述
     return report
 
