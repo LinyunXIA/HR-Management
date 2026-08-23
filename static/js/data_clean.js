@@ -113,7 +113,7 @@ const DataClean = {
         <table>
           <thead><tr><th>岗位编号</th><th>职位</th><th>职位类型</th><th>隶属公司</th><th>直线经理</th><th>法律强制</th><th>开启日</th><th>备注</th></tr></thead>
           <tbody>${cleaned.map((p) => `<tr>
-            <td class="num">${esc(p.number || '')}</td>
+            <td class="num">${esc(p.number || '<导入时分配>')}</td>
             <td>${esc(p.position_name || p.name_en || '')}</td>
             <td>${esc((p.type || '').split(' - ')[0])}</td>
             <td>${esc(p.company || '')}</td>

@@ -50,21 +50,33 @@ def list_raw_files():
 
 
 @router.post("/data-clean-jobs", status_code=201)
-async def create_data_clean_job(orgchart: UploadFile | None = File(None)):
-    """创建清洗作业：上传 Org-Chart.md 或使用服务器原始文件。"""
+async def create_data_clean_job(
+    orgchart: UploadFile | None = File(None),
+    source_file: str | None = None,
+):
+    """创建清洗作业：上传 Org-Chart.md，或用 ?source_file= 指定服务器原始文件（仅限 testingdata/原始文件/ 下的 .md）。
+
+    未指定时默认使用服务器 Org-Chart.md。
+    """
+    rules_path = RAW_DIR / "Position.md"
+    if not rules_path.exists():
+        raise HTTPException(500, "规则文件 Position.md 不存在")
+    rules_text = rules_path.read_text(encoding="utf-8")
+
     if orgchart is not None:
         org_text = (await orgchart.read()).decode("utf-8")
-        rules_path = RAW_DIR / "Position.md"
-        if not rules_path.exists():
-            raise HTTPException(500, "规则文件 Position.md 不存在")
-        rules_text = rules_path.read_text(encoding="utf-8")
     else:
-        org_path = RAW_DIR / "Org-Chart.md"
-        rules_path = RAW_DIR / "Position.md"
-        if not org_path.exists() or not rules_path.exists():
-            raise HTTPException(400, "原始文件不存在")
+        filename = "Org-Chart.md"
+        if source_file:
+            # 防路径穿越：仅取文件名，且必须是 RAW_DIR 下已存在的 .md
+            filename = Path(source_file).name
+            if not filename.endswith(".md"):
+                raise HTTPException(400, "source_file 仅支持 .md 文件")
+        org_path = RAW_DIR / filename
+        if not org_path.exists():
+            available = [f.name for f in RAW_DIR.glob("*.md")]
+            raise HTTPException(400, f"原始文件不存在: {filename}（可用: {available}）")
         org_text = org_path.read_text(encoding="utf-8")
-        rules_text = rules_path.read_text(encoding="utf-8")
 
     result = run_clean(org_text, rules_text)
     job_id = uuid.uuid4().hex[:8]
