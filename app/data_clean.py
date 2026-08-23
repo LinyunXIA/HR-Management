@@ -53,13 +53,18 @@ COMPANY_DETAIL_RE = re.compile(r"(.+?)\s*\|\s*(\d{4})")
 TREE_START_MARK = "完整组织架构树"
 
 
-def _node_depth(line: str) -> int:
-    """树节点深度：首个 │ 的全局列位置 ÷ 4。"""
-    stripped = line.lstrip()
-    bar_pos = stripped.find("│")
-    if bar_pos >= 0:
-        return ((len(line) - len(stripped)) + bar_pos) // 4
-    return 0
+def _line_indent(line: str) -> int:
+    """行首树形缩进宽度：首个「非前缀字符」的位置。
+
+    前缀字符 = 空白 + 树干分支符（│ ├ └）；刻意**不含 ─**——
+    使 "├─"/"├──"/"└─" 等不同画法的同层节点宽度一致（首个 ─ 位置相同），
+    子层因多一级 "│   "/"    " 前缀而严格更大。仅做相对比较，
+    对固定 4 空格、Tab、混用等源文件均稳健。
+    """
+    for i, ch in enumerate(line):
+        if ch not in "│├└ \t":
+            return i
+    return len(line)
 
 
 def _clean_text(line: str) -> str:
@@ -80,7 +85,9 @@ def parse_orgchart(md_text: str) -> Tuple[List[Dict], Dict]:
 
     current_type: Optional[str] = None      # 最近类型标记行
     current_company: Optional[str] = None   # 最近公司节点（隶属公司）
-    ancestor_stack: Dict[int, dict] = {}    # depth -> 该深度最近的岗位（真实树祖先栈）
+    # 真实树祖先链：[(缩进宽度, 岗位)]，按缩进相对比较维护（不依赖固定步长）。
+    # 岗位入链前弹出缩进 ≥ 自身的残留项（兄弟/旧子树）；公司节点按其宽度清栈（跨公司不串报线）。
+    ancestor_chain: List[Tuple[int, Dict]] = []
     in_tree = False
     started = False                         # 是否已进入过树区（遇其他标题即结束）
 
@@ -124,8 +131,6 @@ def parse_orgchart(md_text: str) -> Tuple[List[Dict], Dict]:
             current_type = line_type
             continue
 
-        depth = _node_depth(raw_line)
-
         # ── 2. 公司节点（含 （...） 且非岗位行）──
         if "(Opening:" not in clean:
             cm = COMPANY_RE.search(clean)
@@ -140,8 +145,11 @@ def parse_orgchart(md_text: str) -> Tuple[List[Dict], Dict]:
                     "year": dm.group(2) if dm else None,
                 }
                 current_company = company_name
-                # 公司子树边界：清空该深度及以下的岗位祖先栈（跨公司不串报线）
-                ancestor_stack = {d: p for d, p in ancestor_stack.items() if d < depth}
+                # 公司子树边界：弹出缩进 ≥ 该公司宽度的岗位祖先链（跨公司不串报线；
+                # 即使公司行带树干前缀也能正确清栈）
+                w_company = _line_indent(raw_line)
+                while ancestor_chain and ancestor_chain[-1][0] >= w_company:
+                    ancestor_chain.pop()
                 continue
             # 权责说明续行 → 归属最近的岗位
             if stripped_line.startswith("权责说明") or clean.startswith("权责说明"):
@@ -169,12 +177,12 @@ def parse_orgchart(md_text: str) -> Tuple[List[Dict], Dict]:
         tm = POS_TRAIL_RE.search(after_opening)
         remark = tm.group(1).strip() if tm else None
 
-        # 直线经理 = 真实树祖先：最近的更浅深度岗位（兄弟不互挂）
-        line_manager = None
-        for shallower in range(depth - 1, -1, -1):
-            if shallower in ancestor_stack:
-                line_manager = ancestor_stack[shallower]
-                break
+        # 直线经理 = 真实树祖先：弹出缩进 ≥ 自身的残留项后取链顶（兄弟不互挂）
+        w_self = _line_indent(raw_line)
+        while ancestor_chain and ancestor_chain[-1][0] >= w_self:
+            ancestor_chain.pop()
+        line_manager = ancestor_chain[-1][1] if ancestor_chain else None
+        depth = len(ancestor_chain)
         entry = {
             "name_en": pos_name_en,
             "name_cn": pos_name_cn,
@@ -188,7 +196,7 @@ def parse_orgchart(md_text: str) -> Tuple[List[Dict], Dict]:
             "depth": depth,
         }
         positions.append(entry)
-        ancestor_stack[depth] = entry  # 更新该深度最近岗位，供更深节点挂靠
+        ancestor_chain.append((w_self, entry))  # 入链，供更深节点挂靠
 
     return positions, company_map
 
@@ -360,6 +368,11 @@ CSV_HEADERS = [
 ]
 
 
+# Org-Chart3 树无法表达跨公司虚线汇报（DESIGN §7.3 局限）：清洗期恒输出占位符，
+# 导入器将 N/A 视为空，导入后由用户在 UI 手动补线。
+DOTTED_MANAGER_PLACEHOLDER = "N/A"
+
+
 def _format_manager(manager_name: str, positions_map: Dict) -> str:
     """格式化直线经理字段：直接使用职位名（编号由系统分配，无法在清洗期引用）。"""
     if not manager_name or manager_name == "N/A":
@@ -451,7 +464,8 @@ def to_csv(cleaned: List[Dict], positions_map: Dict = None) -> str:
             "工作地点": pos.get("work_location", ""),
             "工作职责描述": pos.get("job_responsibility", ""),
             "直线经理": _format_manager(pos.get("line_manager"), pm),
-            "虚线经理": pos.get("dotted_manager", "N/A"),
+            "虚线经理": pos.get("dotted_managers") and ";".join(pos["dotted_managers"])
+            or DOTTED_MANAGER_PLACEHOLDER,
             "法律强制/可选": pos.get("legal_category", ""),
             "Org-Chart中的显示": pos.get("org_chart_display", ""),
             "之前的职位": pos.get("prev_position", "N/A"),
@@ -470,11 +484,22 @@ def run_clean(orgchart_md: str, rules_md: str) -> Dict:
     # 1. 解析 Org-Chart.md（Org-Chart3 格式）
     positions, company_map = parse_orgchart(orgchart_md)
 
-    # 2. 解析 Position.md 规则
+    # 2. 解析 Position.md 规则（解析不完整时显式写入报告，不静默回退）
     rules = parse_rules(rules_md)
+    rule_warnings: List[str] = []
+    n_levels = len(rules.get("levels") or {})
+    if n_levels == 0:
+        rule_warnings.append(
+            "规则文件未解析到「级别对照」（章节标题/表格格式变动？），级别推断退化为内置关键词映射")
+    elif n_levels < 19:
+        rule_warnings.append(
+            f"规则文件级别对照解析不完整（{n_levels}/19 项），请检查 Position.md 表格格式")
+    if not (rules.get("scopes") or {}):
+        rule_warnings.append("规则文件未解析到工作范围编号表")
 
     # 3. 清洗数据（传入公司信息用于推断工作地点/国家范围）
     cleaned, warnings = clean_data(positions, rules, company_map=company_map)
+    warnings.extend(rule_warnings)
 
     # 4. 补充推断字段（级别、国家范围兜底）
     for pos in cleaned:

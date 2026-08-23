@@ -5,6 +5,7 @@
 """
 import os
 import re
+import sys
 
 from sqlalchemy.orm import Session
 
@@ -136,10 +137,12 @@ def _parse_levels_from_position_md() -> list | None:
 
 
 def _get_levels() -> list:
-    """返回级别列表：优先从 Position.md 解析，否则用 fallback。"""
+    """返回级别列表：优先从 Position.md 解析，否则用 fallback（显式告警）。"""
     parsed = _parse_levels_from_position_md()
     if parsed:
         return parsed
+    print("[seed] 警告：Position.md 级别对照解析失败（章节/表格格式变动？），"
+          "已回退内置 19 级 fallback，请核查规则文件", file=sys.stderr)
     return FALLBACK_LEVELS
 
 
