@@ -145,17 +145,7 @@ const Positions = {
           <div class="field full"><label>备注（可留空）</label><textarea id="pc-remark" rows="2"></textarea></div>
         </div>
 
-        <div class="section-title">人工成本（可留空）</div>
-        <div class="cost-toggle">
-          <label class="cost-mode"><input type="radio" name="pc-costmode" value="manual" checked> 手动输入</label>
-          <label class="cost-mode"><input type="radio" name="pc-costmode" value="auto"> 自动计算（按税区用工税额）</label>
-        </div>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:10px" id="pc-costfields">
-          <div class="cost-field"><label>税前薪资（人工）</label><input type="number" step="0.01" id="pc-salary"></div>
-          <div class="cost-field"><label>公司份额（人工）</label><input type="number" step="0.01" id="pc-share"></div>
-          <div class="cost-field"><label>用工成本（人工）</label><input type="number" step="0.01" id="pc-labor"></div>
-        </div>
-        <div class="hint" id="pc-costhint"></div>
+        ${costSectionHtml('pc', { heading: '人工成本（可留空）' })}
       </div>
       <footer><button class="btn" onclick="closeModal()">取消</button><button class="btn primary" id="pc-save">保存</button></footer>`);
 
@@ -163,7 +153,6 @@ const Positions = {
     modal.querySelectorAll('input[name="pc-costmode"]').forEach((r) => r.onchange = () => this.applyCostMode(modal, 'pc'));
     modal.querySelector('#pc-save').onclick = async () => {
       if (!val('#pc-posname')) { toast('请填写职位'); return; }
-      const mode = modal.querySelector('input[name="pc-costmode"]:checked').value;
       const body = {
         position_name: val('#pc-posname'),
         company_id: +val('#pc-company'),
@@ -180,10 +169,7 @@ const Positions = {
         dotted_manager_ids: [...modal.querySelector('#pc-dotted').selectedOptions].map((o) => +o.value),
         org_chart_display: val('#pc-display') || null,
         remark: val('#pc-remark') || null,
-        cost_mode: mode,
-        salary_before_tax: val('#pc-salary') ? +val('#pc-salary') : null,
-        company_share: val('#pc-share') ? +val('#pc-share') : null,
-        labor_cost: val('#pc-labor') ? +val('#pc-labor') : null,
+        ...readCostBody('pc'),
       };
       try {
         await post('/positions', body);
@@ -264,15 +250,11 @@ const Positions = {
     const calcBtn = modal.querySelector('#pd-calccost');
     if (calcBtn) calcBtn.onclick = async () => {
       try {
-        const c = await get(`/positions/${id}/cost-calculation`);
-        const fresh = await get('/positions/' + id);
-        await patch(`/positions/${id}`, { version: fresh.version, company_share: c.company_share, labor_cost: c.labor_cost });
+        const c = await fetchCalc(id);
+        await saveCalc(id, { company_share: c.company_share, labor_cost: c.labor_cost });
         toast(`已重算并保存：公司份额 ${fmtMoney(c.company_share)} · 用工成本 ${fmtMoney(c.labor_cost)}`, 'ok');
         this.openDetail(id);
-      } catch (e) {
-        if (e.status === 409) toast('数据已被他人修改，请刷新后重试', 'error');
-        else toast(e.message);
-      }
+      } catch (e) { handleApiError(e, '重算失败'); }
     };
 
     const trans = Positions.TRANSITIONS[p.status] || [];
@@ -334,18 +316,7 @@ const Positions = {
           <div class="field full"><label>备注</label><textarea id="pe-remark" rows="2">${esc(p.remark || '')}</textarea></div>
         </div>
 
-        <div class="section-title">人工成本</div>
-        <div class="cost-toggle">
-          <label class="cost-mode"><input type="radio" name="pe-costmode" value="manual" ${p.cost_mode !== 'auto' ? 'checked' : ''}> 手动输入</label>
-          <label class="cost-mode"><input type="radio" name="pe-costmode" value="auto" ${p.cost_mode === 'auto' ? 'checked' : ''}> 自动计算（按税区用工税额）</label>
-          <button class="btn" id="pe-calccost" style="${p.cost_mode === 'auto' ? '' : 'display:none'}">重算</button>
-        </div>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:10px" id="pe-costfields">
-          <div class="cost-field"><label>税前薪资（人工）</label><input type="number" step="0.01" id="pe-salary" value="${p.salary_before_tax ?? ''}"></div>
-          <div class="cost-field"><label>公司份额（人工）</label><input type="number" step="0.01" id="pe-share" value="${p.company_share ?? ''}"></div>
-          <div class="cost-field"><label>用工成本（人工）</label><input type="number" step="0.01" id="pe-labor" value="${p.labor_cost ?? ''}"></div>
-        </div>
-        <div class="hint" id="pe-costhint"></div>
+        ${costSectionHtml('pe', { position: p, heading: '人工成本', withRecalc: true })}
       </div>
       <footer><button class="btn" onclick="closeModal()">取消</button><button class="btn primary" id="pe-save">保存</button></footer>`);
 
@@ -360,22 +331,16 @@ const Positions = {
       try {
         const salary = val('#pe-salary') ? +val('#pe-salary') : null;
         if (salary == null) { toast('请先填写税前薪资'); return; }
-        // 单次 PATCH：先取最新 version，再计算，最后一次性保存（避免双重 PATCH 导致 409）
-        const fresh = await get('/positions/' + p.id);
-        const c = await get(`/positions/${p.id}/cost-calculation?salary_before_tax=${salary}`);
-        await patch(`/positions/${p.id}`, { version: fresh.version, cost_mode: 'auto', salary_before_tax: salary, company_share: c.company_share, labor_cost: c.labor_cost });
+        const c = await fetchCalc(p.id, salary);
+        const updated = await saveCalc(p.id, { cost_mode: 'auto', salary_before_tax: salary, company_share: c.company_share, labor_cost: c.labor_cost });
         modal.querySelector('#pe-salary').value = c.salary_before_tax ?? '';
         modal.querySelector('#pe-share').value = c.company_share ?? '';
         modal.querySelector('#pe-labor').value = c.labor_cost ?? '';
         toast(`已重算并保存：公司份额 ${fmtMoney(c.company_share)} · 用工成本 ${fmtMoney(c.labor_cost)}`, 'ok');
-        p.version = fresh.version + 1;
-      } catch (e) {
-        if (e.status === 409) toast('数据已被他人修改，请刷新后重试', 'error');
-        else toast(e.message);
-      }
+        p.version = updated.version;
+      } catch (e) { handleApiError(e, '重算失败'); }
     };
     modal.querySelector('#pe-save').onclick = async () => {
-      const mode = modal.querySelector('input[name="pe-costmode"]:checked').value;
       const body = {
         version: p.version,
         position_id: App.functions.find((f) => f.name === val('#pe-posname'))?.id || null,
@@ -394,23 +359,61 @@ const Positions = {
         dotted_manager_ids: [...modal.querySelector('#pe-dotted').selectedOptions].map((o) => +o.value),
         org_chart_display: val('#pe-display') || null,
         remark: val('#pe-remark') || null,
-        cost_mode: mode,
-        salary_before_tax: val('#pe-salary') ? +val('#pe-salary') : null,
-        company_share: val('#pe-share') ? +val('#pe-share') : null,
-        labor_cost: val('#pe-labor') ? +val('#pe-labor') : null,
+        ...readCostBody('pe'),
       };
       try {
-        await patch('/positions/' + p.id, body);
+        const updated = await patch('/positions/' + p.id, body);
+        p.version = updated.version;
         closeModal(); toast('已保存', 'ok'); this.render();
-      } catch (e) {
-        if (e.status === 409) toast('数据已被他人修改，请刷新后重试', 'error');
-        else toast(e.message);
-      }
+      } catch (e) { handleApiError(e); }
     };
   },
 };
 
 function val(id) { return document.getElementById(id).value.trim(); }
+
+/* ---------------- 成本字段区共享实现（新建/编辑/详情复用，#41） ---------------- */
+
+function costSectionHtml(prefix, { position = null, heading = null, withRecalc = false } = {}) {
+  const isAuto = position ? position.cost_mode === 'auto' : false;
+  const v = (k) => (position && position[k] != null ? position[k] : '');
+  return `
+    <div class="section-title">${heading || '人工成本'}</div>
+    <div class="cost-toggle">
+      <label class="cost-mode"><input type="radio" name="${prefix}-costmode" value="manual" ${!isAuto ? 'checked' : ''}> 手动输入</label>
+      <label class="cost-mode"><input type="radio" name="${prefix}-costmode" value="auto" ${isAuto ? 'checked' : ''}> 自动计算（按税区用工税额）</label>
+      ${withRecalc ? `<button class="btn" id="${prefix}-calccost" style="${isAuto ? '' : 'display:none'}">重算</button>` : ''}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:10px" id="${prefix}-costfields">
+      <div class="cost-field"><label>税前薪资（人工）</label><input type="number" step="0.01" id="${prefix}-salary" value="${v('salary_before_tax')}"></div>
+      <div class="cost-field"><label>公司份额（人工）</label><input type="number" step="0.01" id="${prefix}-share" value="${v('company_share')}"></div>
+      <div class="cost-field"><label>用工成本（人工）</label><input type="number" step="0.01" id="${prefix}-labor" value="${v('labor_cost')}"></div>
+    </div>
+    <div class="hint" id="${prefix}-costhint"></div>`;
+}
+
+function readCostBody(prefix) {
+  const num = (k) => { const v = val(`#${prefix}-${k}`); return v ? +v : null; };
+  return {
+    cost_mode: document.querySelector(`input[name="${prefix}-costmode"]:checked`).value,
+    salary_before_tax: num('salary'),
+    company_share: num('share'),
+    labor_cost: num('labor'),
+  };
+}
+
+async function fetchCalc(positionId, salary = null) {
+  const q = salary != null ? `?salary_before_tax=${salary}` : '';
+  const c = await get(`/positions/${positionId}/cost-calculation${q}`);
+  if (c.configured === false) throw new Error(c.message || '该税区未配置税率，无法自动计算');
+  return c;
+}
+
+async function saveCalc(positionId, patchBody) {
+  const fresh = await get('/positions/' + positionId);
+  return patch('/positions/' + positionId, { ...patchBody, version: fresh.version });
+}
+
 function ditem(k, v) {
   return `<div class="detail-item"><div class="k">${k}</div><div class="v">${v === undefined || v === null || v === '' ? '—' : v}</div></div>`;
 }
