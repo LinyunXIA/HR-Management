@@ -2,10 +2,12 @@
 
 编号策略（v3）：**源文件「岗位编号」列一律忽视**，由系统在导入时自动分配：
   正式岗（Employee / Consultant）→ P{seq}；外包岗（External Employee）→ PA{seq}。
-幂等键 = （职位名, 隶属公司, 国家或地区）：与库内已有岗位匹配则更新，否则建档分配新号。
+幂等键 = （职位名, 隶属公司, 国家或地区, 开启日）（PRD §3.1 v2.3，4 列）：
+与库内已有岗位匹配则更新，否则建档分配新号。
 
 分三趟：
-  1) 解析校验行数据，建公司/职位/国家基础字典；
+  1) 解析校验行数据（级别须在 levels 字典、strict 模式法律分类须在字典），
+     建公司/职位/国家基础字典；
   2) 按幂等键 upsert 岗位（新行自动分配编号、写生命周期事件）；
   3) 直线/虚线经理、之前的职位按**职位名**解析为外键，并做环检测。
 """
@@ -20,6 +22,7 @@ from app.models import (
     Country,
     LegalCategory,
     LegalCategoryDef,
+    Level,
     Position,
     PositionNumber,
     PositionNumberDottedLine,
@@ -66,6 +69,23 @@ def parse_date(raw):
         return None
 
 
+def opening_key(v) -> str:
+    """开启日归一化为幂等键分量：年份精度（MM-DD==01-01）存 YYYY，否则完整 ISO。
+
+    文件侧字符串（"1982" / "1982-03-01"）与库内侧 date 统一走此函数，
+    保证两侧键表示一致。
+    """
+    if v is None or v == "":
+        return ""
+    if isinstance(v, str):
+        v = parse_date(v)
+        if v is None:
+            return ""
+    if isinstance(v, date):
+        return str(v.year) if (v.month, v.day) == (1, 1) else v.isoformat()
+    return str(v)
+
+
 def parse_scope_country(raw):
     """'国家或地区' → (scope, country_name, country_code)。"""
     raw = (raw or "").strip()
@@ -96,22 +116,28 @@ def extract_refs(value):
     return [r for r in refs if r and r.upper() != "N/A"]
 
 
-def import_csv(db, rows):
-    """rows: 可迭代的 dict（由 csv.DictReader 或上传解析产生）。"""
+def import_csv(db, rows, *, strict_legal: bool = False):
+    """rows: 可迭代的 dict（由 csv.DictReader 或上传解析产生）。
+
+    strict_legal=True：法律分类不在 legal_categories 字典（且非历史枚举值）时
+    记入 errors 且该行不导入；False（默认）维持告警后照常入库，兼容历史 CSV。
+    """
     report = {"total": 0, "imported": 0, "updated": 0, "errors": [], "warnings": []}
 
     companies = {c.name: c for c in db.query(Company).all()}
     functions = {p.name: p for p in db.query(Position).all()}
     countries = {c.name: c for c in db.query(Country).all()}
+    valid_levels = {code for (code,) in db.query(Level.code).all()}
 
-    # ---- 幂等键索引：(职位名, 公司名, 国家或地区) → 岗位 ----
+    # ---- 幂等键索引：(职位名, 公司名, 国家或地区, 开启日) → 岗位 ----
     all_pns = db.query(PositionNumber).all()
     existing_by_key: dict[tuple, PositionNumber] = {}
     db_refs_by_name: dict[str, list] = {}  # 职位名 → [岗位]（文件外引用兜底）
     for pn in all_pns:
         pos_name = pn.position.name if pn.position else ""
         comp_name = pn.company.name if pn.company else ""
-        existing_by_key[(pos_name, comp_name, scope_raw_value(pn))] = pn
+        key4 = (pos_name, comp_name, scope_raw_value(pn), opening_key(pn.opening_date))
+        existing_by_key[key4] = pn
         db_refs_by_name.setdefault(pos_name, []).append(pn)
 
     # ---- 编号系列计数器（正式 P / 外包 PA），取库内当前最大序号 +1 起 ----
@@ -159,12 +185,12 @@ def import_csv(db, rows):
             db.add(functions[function_name])
             db.flush()
 
-        key = (function_name, company_name, scope_raw or "Global")
-        if key in seen_keys:
+        # 级别须在 levels 字典（PRD §3.6 / §4 F0；空值允许留空）
+        level_val = (raw.get("级别") or "").strip() or None
+        if level_val and level_val not in valid_levels:
             report["errors"].append(
-                f"{label}: 文件内重复（职位+公司+国家或地区），该行不导入：{key}")
+                f"{label}: 级别「{level_val}」不在级别字典，该行不导入（请先在主数据维护）")
             continue
-        seen_keys.add(key)
 
         opening = parse_date(raw.get("职位开启日"))
         closing = parse_date(raw.get("职位关闭日"))
@@ -176,6 +202,10 @@ def import_csv(db, rows):
             exists = db.query(LegalCategoryDef).filter(LegalCategoryDef.name == lc).first()
             if exists:
                 legal = lc
+            elif strict_legal:
+                report["errors"].append(
+                    f"{label}: 法律分类「{lc}」不在主数据字典，strict 模式下该行不导入")
+                continue
             else:
                 try:
                     legal = LegalCategory(lc).value
@@ -186,10 +216,19 @@ def import_csv(db, rows):
         # 职位类型（Consultant / Employee / External Employee）
         position_type = (raw.get("职位类型") or "").strip() or None
 
+        # 幂等键（PRD §3.1 v2.3，4 列）：职位名+公司+国家或地区+开启日
+        key = (function_name, company_name, scope_raw or "Global",
+               opening_key(raw.get("职位开启日")))
+        if key in seen_keys:
+            report["errors"].append(
+                f"{label}: 文件内重复（职位+公司+国家或地区+开启日），该行不导入：{key}")
+            continue
+        seen_keys.add(key)
+
         data = {
             "position_id": functions[function_name].id,
             "company_id": companies[company_name].id,
-            "level": (raw.get("级别") or "").strip() or None,
+            "level": level_val,
             "scope": scope,
             "country_id": country.id if country else None,
             "position_type": position_type,
