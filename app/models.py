@@ -243,7 +243,8 @@ class PositionNumber(Base):
     __tablename__ = "position_numbers"
 
     id = Column(Integer, primary_key=True)
-    number = Column(String(20), unique=True, nullable=False)  # P{seq}-{scope}
+    # 系统分配纯序号（PRD §3.1 v2.3）：正式岗 P{seq} / 外包岗 PA{seq}，与 scope/country 解耦
+    number = Column(String(20), unique=True, nullable=False)
 
     position_id = Column(Integer, ForeignKey("positions.id"), nullable=False)
     # 双外键指向 companies：company_id（当前隶属）+ prev_company_id（转岗前公司），
