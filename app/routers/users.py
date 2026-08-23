@@ -3,8 +3,11 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from fastapi import Request
+
 from app.auth import hash_password, require_admin
 from app.db import get_db
+from app.limiter import limiter
 from app.models import Company, User, UserCompany, UserRole
 
 router = APIRouter(prefix="/api/v1", tags=["users"])
@@ -44,7 +47,8 @@ def list_admin_users(current: User = Depends(require_admin), db: Session = Depen
 
 
 @router.post("/admin/users", status_code=201)
-def create_user(payload: AdminUserCreate, response: Response,
+@limiter.limit("5/minute")
+def create_user(request: Request, payload: AdminUserCreate, response: Response,
                 current: User = Depends(require_admin), db: Session = Depends(get_db)):
     """建号并分配可管公司（关闭自主注册，仅 admin）。"""
     if payload.role not in ("admin", "hr"):

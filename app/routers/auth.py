@@ -56,7 +56,7 @@ def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)
 
 
 @router.post("/auth/register", status_code=201)
-@limiter.limit("10/minute")
+@limiter.limit("5/minute")
 def register(request: Request, payload: RegisterRequest, response: Response,
              current: User = Depends(get_current_user),
              db: Session = Depends(get_db)):
