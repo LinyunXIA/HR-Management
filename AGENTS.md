@@ -47,7 +47,7 @@ APP_ENV=prod .venv/bin/python -m scripts.import_csv testingdata/原始文件/Pos
 
 **职位(Position) ≠ 岗位编号(Position Number)**：
 - `positions`（职位/职能）= 干什么活；一个职位可对应多个岗位编号。
-- `position_numbers`（岗位编号）= 编制名额（slot），业务主键 `number` 格式 `P{seq}-{scope}`，Country 级 `P{seq}-4-{国家编号}`。生命周期与员工挂编以它为主体。
+- `position_numbers`（岗位编号）= 编制名额（slot），业务主键 `number` 由**系统强制分配**（v2.3）：正式岗 `P{seq}`（P1、P2…）、外包岗 `PA{seq}`（PA1…），纯序号无范围后缀；源文件编号一律忽视。生命周期与员工挂编以它为主体。
 - 汇报关系**岗位→岗位**：`position_numbers.solid_line_manager_id` 自引用（直线，0..1）、`position_number_dotted_lines`（虚线，0..N）。
 
 **数据权威（PRD §3.7）**：`testingdata/原始文件/Position.csv`（16 列）为唯一权威；`Org-Chart.md / Org-Chart2.md` 仅展示参考，系统不直接读取。两者不一致时以 CSV 为准。
@@ -104,7 +104,7 @@ APP_ENV=prod .venv/bin/python -m scripts.import_csv testingdata/原始文件/Pos
 
 ## 8. 数据与目录
 
-- `testingdata/原始文件/`：`Position.csv`（权威数据源）/ `Position.md`（规则）/ `Org-Chart.md` / `Org-Chart2.md`（参考）
+- `testingdata/原始文件/`：`Org-Chart3.md`（**唯一支持格式**：无编号树 + 权责说明续行）/ `Position.md`（规则）/ `Position.csv`（模版）；`Org-Chart.md` / `Org-Chart2.md` 为历史存档，系统不再解析
 - `data/`（gitignored）：运行时文件存储（当前主用 PostgreSQL）
 - `docs/`：`PRD.md` / `DESIGN.md` / `API.md` / `API_PUBLIC.md` / `UI_MOCKUP.html`
 - `scripts/import_csv.py`：CLI 导入脚本
@@ -118,12 +118,16 @@ APP_ENV=prod .venv/bin/python -m scripts.import_csv testingdata/原始文件/Pos
 - **Git**：未明确要求时不自动 commit/push；commit 前检查 `git status` / `diff`
 - **配置变更**：修改 `opencode.json` / `.opencode/**` 后需重启 opencode 生效
 
-## 10. 当前运行状态（2026-08-22 扫描）
+## 10. 当前运行状态（2026-08-23 更新）
+
+- **编号系统重制已落地（PRD v2.3）**：源编号一律忽视，导入/创建时系统分配——正式 `P{seq}` / 外包 `PA{seq}`；幂等键=职位名+公司+国家或地区；经理引用按职位名解析
+- **数据清洗仅支持 Org-Chart3 格式**：无编号树 + 权责说明续行；直线经理=真实树祖先（兄弟不互挂、公司清栈）
+- **三库岗位域数据已清空（2026-08-23）**：dev/test/prod 的 positions 域 TRUNCATE 归零；prod 已先备份至 `data/backups/hr_db_prod_20260823_192018.dump`
+- 表计数（hr_db_dev）：`position_numbers=4`（已导入 Org-Chart3.md：P1~P4）
 
 - PostgreSQL 18.4（Postgres.app）已连通：`hr_db_dev` / `hr_db_test` / `hr_db_prod` 三库并存（prod 含 `${POSTGRES_PASSKEY}` 展开）
 - **三环境 DB 隔离（PRD §7D 合并版）已落地**：单文件 `.env` 内 `DATABASE_URL_{dev,test,prod}` + `APP_ENV` 切换；库名一致性校验 + prod 护栏 + `${POSTGRES_PASSKEY}` 展开生效
 - **JWT§7B + 乐观锁§7C + 速率限制§7B.2 已落地**：`PyJWT/bcrypt`、`version` 列、全局 `120/min` / 登录 `10/min` / 公共 `60/min`
-- 表计数（hr_db_dev）：`position_numbers=5`（testingdata 当前为 5 行精简版，待扩充到 91）
 - Python 3.14.7 + FastAPI 0.141.1 + SQLAlchemy 2.0.51 已就绪
 - 分支 `main` 与 `origin/main` 同步，工作区 clean
 - opencode 1.18.15 已安装，全局 provider: minimax / openrouter
