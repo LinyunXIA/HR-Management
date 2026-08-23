@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from fastapi import Request
 
-from app.auth import get_current_user
+from app.auth import get_current_user, require_admin
 from app.db import get_db
 from app.helpers import get_or_404
 from app.limiter import limiter
@@ -19,6 +19,7 @@ from app.models import (
     PositionNumber,
     PositionType,
     ScopeDef,
+    TaxZone,
     WorkLocation,
 )
 from app.schemas import (
@@ -43,6 +44,9 @@ from app.schemas import (
     ScopeCreate,
     ScopeOut,
     ScopeUpdate,
+    TaxZoneCreate,
+    TaxZoneOut,
+    TaxZoneUpdate,
     WorkLocationCreate,
     WorkLocationOut,
     WorkLocationUpdate,
@@ -63,7 +67,14 @@ def _crud(model, out_schema, create_schema, update_schema, path: str,
     def create_item(payload: create_schema, response: Response, db: Session = Depends(get_db)):
         obj = model(**payload.model_dump())
         db.add(obj)
-        db.commit()
+        try:
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            if "UniqueViolation" in type(e).__mro__[0].__name__ or "unique" in str(e).lower() \
+                    or "duplicate key" in str(e).lower():
+                raise HTTPException(400, f"记录已存在或违反唯一约束: {e.orig if hasattr(e, 'orig') else e}")
+            raise
         db.refresh(obj)
         response.headers["Location"] = f"/api/v1{path}/{obj.id}"
         return obj
@@ -161,48 +172,148 @@ def public_companies(request: Request, db: Session = Depends(get_db), _user=Depe
     ]
 
 
-# ---------------------------------------------------------------- 员工用工税额（按国家）
+# ---------------------------------------------------------------- 员工用工税额（v2.3：按税区）
 @router.get("/employment-tax-items", response_model=list[EmploymentTaxItemOut])
-def list_tax_items(country_id: int | None = None, db: Session = Depends(get_db)):
+def list_tax_items(country_id: int | None = None, tax_zone_id: int | None = None,
+                   db: Session = Depends(get_db)):
     q = db.query(EmploymentTaxItem)
-    if country_id:
+    if tax_zone_id:
+        q = q.filter(EmploymentTaxItem.tax_zone_id == tax_zone_id)
+    elif country_id:
         q = q.filter(EmploymentTaxItem.country_id == country_id)
     items = q.order_by(EmploymentTaxItem.id).all()
     countries = {c.id: c.name for c in db.query(Country).all()}
-    return [
-        {"id": it.id, "country_id": it.country_id, "country_name": countries.get(it.country_id),
-         "item_name": it.item_name, "tax_rate": float(it.tax_rate or 0), "is_active": it.is_active}
-        for it in items
-    ]
+    zones = {z.id: z for z in db.query(TaxZone).all()}
+    out = []
+    for it in items:
+        z = zones.get(it.tax_zone_id)
+        zone_label = None
+        if z:
+            cname = countries.get(z.country_id)
+            zone_label = f"{cname}·{z.city}" if z.level == "city" and z.city else cname
+        out.append({
+            "id": it.id, "country_id": it.country_id,
+            "tax_zone_id": it.tax_zone_id, "tax_zone_label": zone_label,
+            "item_name": it.item_name, "tax_rate": float(it.tax_rate or 0),
+            "is_active": it.is_active,
+        })
+    return out
 
 
 @router.post("/employment-tax-items", response_model=EmploymentTaxItemOut, status_code=201)
-def create_tax_item(payload: EmploymentTaxItemCreate, response: Response, db: Session = Depends(get_db)):
-    get_or_404(db, Country, payload.country_id, "国家不存在")
-    it = EmploymentTaxItem(country_id=payload.country_id, item_name=payload.item_name,
-                           tax_rate=payload.tax_rate, is_active=payload.is_active)
+def create_tax_item(payload: EmploymentTaxItemCreate, response: Response,
+                    _admin=Depends(require_admin), db: Session = Depends(get_db)):
+    if not payload.tax_zone_id and not payload.country_id:
+        raise HTTPException(400, "必须指定税区（tax_zone_id）")
+    if payload.tax_zone_id:
+        get_or_404(db, TaxZone, payload.tax_zone_id, "税区不存在")
+    else:
+        get_or_404(db, Country, payload.country_id, "国家不存在")
+    it = EmploymentTaxItem(
+        tax_zone_id=payload.tax_zone_id, country_id=payload.country_id,
+        item_name=payload.item_name, tax_rate=payload.tax_rate, is_active=payload.is_active,
+    )
     db.add(it)
     db.commit()
+    db.refresh(it)
     response.headers["Location"] = f"/api/v1/employment-tax-items/{it.id}"
-    country = db.get(Country, it.country_id)
-    return {"id": it.id, "country_id": it.country_id, "country_name": country.name if country else None,
-            "item_name": it.item_name, "tax_rate": float(it.tax_rate or 0), "is_active": it.is_active}
+    return {"id": it.id, "country_id": it.country_id, "tax_zone_id": it.tax_zone_id,
+            "tax_zone_label": None, "item_name": it.item_name,
+            "tax_rate": float(it.tax_rate or 0), "is_active": it.is_active}
 
 
 @router.patch("/employment-tax-items/{item_id}", response_model=EmploymentTaxItemOut)
-def update_tax_item(item_id: int, payload: EmploymentTaxItemUpdate, db: Session = Depends(get_db)):
+def update_tax_item(item_id: int, payload: EmploymentTaxItemUpdate,
+                    _admin=Depends(require_admin), db: Session = Depends(get_db)):
     it = get_or_404(db, EmploymentTaxItem, item_id)
     for k, v in payload.model_dump(exclude_unset=True).items():
         setattr(it, k, v)
     db.commit()
-    country = db.get(Country, it.country_id)
-    return {"id": it.id, "country_id": it.country_id, "country_name": country.name if country else None,
-            "item_name": it.item_name, "tax_rate": float(it.tax_rate or 0), "is_active": it.is_active}
+    return {"id": it.id, "country_id": it.country_id, "tax_zone_id": it.tax_zone_id,
+            "tax_zone_label": None, "item_name": it.item_name,
+            "tax_rate": float(it.tax_rate or 0), "is_active": it.is_active}
 
 
 @router.delete("/employment-tax-items/{item_id}")
-def delete_tax_item(item_id: int, db: Session = Depends(get_db)):
+def delete_tax_item(item_id: int, _admin=Depends(require_admin), db: Session = Depends(get_db)):
     it = get_or_404(db, EmploymentTaxItem, item_id)
     db.delete(it)
     db.commit()
     return {"ok": True, "id": item_id}
+
+
+# ---------------------------------------------------------------- 税区挂载点配置（v2.3 F1.6）
+def _serialize_zone(db: Session, z: TaxZone) -> dict:
+    items = (
+        db.query(EmploymentTaxItem)
+        .filter(EmploymentTaxItem.tax_zone_id == z.id)
+        .order_by(EmploymentTaxItem.id)
+        .all()
+    )
+    return {
+        "id": z.id, "level": z.level, "country_id": z.country_id,
+        "country_name": z.country.name if z.country else None,
+        "city": z.city, "sort_order": z.sort_order,
+        "items": [
+            {"id": it.id, "country_id": None, "tax_zone_id": z.id, "tax_zone_label": None,
+             "item_name": it.item_name, "tax_rate": float(it.tax_rate or 0),
+             "is_active": it.is_active}
+            for it in items
+        ],
+    }
+
+
+@router.get("/tax-zones", response_model=list[TaxZoneOut])
+def list_tax_zones(country_id: int | None = None, db: Session = Depends(get_db)):
+    q = db.query(TaxZone)
+    if country_id:
+        q = q.filter(TaxZone.country_id == country_id)
+    return [_serialize_zone(db, z) for z in q.order_by(TaxZone.sort_order, TaxZone.id).all()]
+
+
+@router.post("/tax-zones", response_model=TaxZoneOut, status_code=201)
+def create_tax_zone(payload: TaxZoneCreate, response: Response,
+                    _admin=Depends(require_admin), db: Session = Depends(get_db)):
+    """创建税区（国家级或城市级；城市级分拆后该国无国家兜底）。"""
+    if payload.level not in ("country", "city"):
+        raise HTTPException(400, "level 仅支持 country / city")
+    if payload.level == "city" and not (payload.city or "").strip():
+        raise HTTPException(400, "城市级税区必须填写 city")
+    get_or_404(db, Country, payload.country_id, "国家不存在")
+    dup = (
+        db.query(TaxZone)
+        .filter(TaxZone.level == payload.level, TaxZone.country_id == payload.country_id,
+                TaxZone.city == (payload.city or None))
+        .first()
+    )
+    if dup:
+        raise HTTPException(400, f"该税区已存在 (id={dup.id})")
+    z = TaxZone(level=payload.level, country_id=payload.country_id,
+                city=(payload.city or None), sort_order=payload.sort_order or 0)
+    db.add(z)
+    db.commit()
+    db.refresh(z)
+    response.headers["Location"] = f"/api/v1/tax-zones/{z.id}"
+    return _serialize_zone(db, z)
+
+
+@router.patch("/tax-zones/{zone_id}", response_model=TaxZoneOut)
+def update_tax_zone(zone_id: int, payload: TaxZoneUpdate,
+                    _admin=Depends(require_admin), db: Session = Depends(get_db)):
+    z = get_or_404(db, TaxZone, zone_id)
+    for k, v in payload.model_dump(exclude_unset=True).items():
+        setattr(z, k, v)
+    db.commit()
+    db.refresh(z)
+    return _serialize_zone(db, z)
+
+
+@router.delete("/tax-zones/{zone_id}")
+def delete_tax_zone(zone_id: int, _admin=Depends(require_admin), db: Session = Depends(get_db)):
+    z = get_or_404(db, TaxZone, zone_id)
+    used = db.query(EmploymentTaxItem).filter(EmploymentTaxItem.tax_zone_id == z.id).first()
+    if used:
+        raise HTTPException(400, "该税区下已有税务科目，禁止删除（请先清空科目）")
+    db.delete(z)
+    db.commit()
+    return {"ok": True, "id": zone_id}

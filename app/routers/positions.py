@@ -3,8 +3,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app import lifecycle
+from app.auth import get_current_user
 from app.db import get_db
 from app.helpers import (
+    assert_can_write_company,
     assert_version,
     check_cycle,
     dotted_ids,
@@ -109,7 +111,8 @@ def list_positions(
 
 
 @router.post("/positions", status_code=201)
-def create_position(payload: PositionNumberCreate, response: Response, db: Session = Depends(get_db)):
+def create_position(payload: PositionNumberCreate, response: Response,
+                    user=Depends(get_current_user), db: Session = Depends(get_db)):
     position = resolve_position(db, payload.position_id, payload.position_name)
     company = get_or_404(db, Company, payload.company_id, "隶属公司不存在")
     country = None
@@ -118,8 +121,8 @@ def create_position(payload: PositionNumberCreate, response: Response, db: Sessi
             raise HTTPException(400, "Country 范围必须选择国家/地区")
         country = get_or_404(db, Country, payload.country_id, "国家/地区不存在")
 
-    number = generate_number(db, payload.scope, country.code if country else None)
-    validate_number_format(number, payload.scope, country.code if country else None)
+    number = generate_number(db, payload.position_type)
+    validate_number_format(number)
     if db.query(PositionNumber).filter(PositionNumber.number == number).first():
         raise HTTPException(400, f"岗位编号已存在: {number}")
 
@@ -192,16 +195,24 @@ def get_position(pid: int, db: Session = Depends(get_db)):
 
 
 @router.patch("/positions/{pid}")
-def update_position(pid: int, payload: PositionNumberUpdate, db: Session = Depends(get_db)):
+def update_position(pid: int, payload: PositionNumberUpdate,
+                    user=Depends(get_current_user), db: Session = Depends(get_db)):
     pn = get_or_404(db, PositionNumber, pid, "岗位不存在")
     assert_version(pn, payload.version, "岗位")
+    # 行级隔离（PRD §7B.3）：岗位全局可读、hr 可维护；但成本字段按实体隔离
+    cost_fields_touched = any(
+        getattr(payload, f) is not None
+        for f in ("cost_mode", "salary_before_tax", "company_share", "labor_cost")
+    )
+    if cost_fields_touched:
+        assert_can_write_company(db, user, pn.company_id, label="该岗位的成本字段")
     if payload.position_id is not None:
         pn.position_id = payload.position_id
     if payload.company_id is not None:
         get_or_404(db, Company, payload.company_id, "隶属公司不存在")
         pn.company_id = payload.company_id
 
-    # scope / country 变化需保持编号一致
+    # scope / country 变化（编号为系统分配的纯序号，与范围解耦）
     new_scope = payload.scope if payload.scope is not None else pn.scope
     new_country = pn.country
     if payload.country_id is not None:
@@ -209,7 +220,6 @@ def update_position(pid: int, payload: PositionNumberUpdate, db: Session = Depen
     if payload.scope is not None or payload.country_id is not None:
         if new_scope == Scope.COUNTRY and new_country is None:
             raise HTTPException(400, "Country 范围必须选择国家/地区")
-        validate_number_format(pn.number, new_scope, new_country.code if new_country else None)
         pn.scope = new_scope
         pn.country_id = new_country.id if new_country else None
 
@@ -235,12 +245,16 @@ def update_position(pid: int, payload: PositionNumberUpdate, db: Session = Depen
             mgr = get_or_404(db, PositionNumber, payload.solid_line_manager_id, "直线经理岗位不存在")
             _assert_management(db, mgr, "直线经理")
             check_cycle(db, pn.id, payload.solid_line_manager_id)
+            # 汇报接线权限（v2.3）：由被汇报目标岗位的操作者维护
+            assert_can_write_company(db, user, mgr.company_id, label="被汇报目标岗位所属公司")
         pn.solid_line_manager_id = payload.solid_line_manager_id
 
     if payload.dotted_manager_ids is not None:
         for mid in payload.dotted_manager_ids:
             if mid:
-                _assert_management(db, get_or_404(db, PositionNumber, mid, f"虚线经理岗位不存在 (id={mid})"), "虚线经理")
+                mgr = get_or_404(db, PositionNumber, mid, f"虚线经理岗位不存在 (id={mid})")
+                _assert_management(db, mgr, "虚线经理")
+                assert_can_write_company(db, user, mgr.company_id, label="被汇报目标岗位所属公司")
         set_dotted_lines(db, pn.id, payload.dotted_manager_ids)
 
     pn.version = (pn.version or 1) + 1
@@ -249,7 +263,8 @@ def update_position(pid: int, payload: PositionNumberUpdate, db: Session = Depen
 
 
 @router.post("/positions/{pid}/transitions", status_code=201)
-def transition_position(pid: int, payload: TransitionRequest, response: Response, db: Session = Depends(get_db)):
+def transition_position(pid: int, payload: TransitionRequest, response: Response,
+                        user=Depends(get_current_user), db: Session = Depends(get_db)):
     """创建一条生命周期流转事件（会同步变更岗位状态）。"""
     pn = get_or_404(db, PositionNumber, pid, "岗位不存在")
     try:
@@ -294,36 +309,42 @@ def list_transitions(position_id: int | None = None, db: Session = Depends(get_d
 
 
 @router.get("/positions/{pid}/cost-calculation")
-def get_position_cost(pid: int, salary_before_tax: float | None = None, db: Session = Depends(get_db)):
-    """按国家用工税额计算公司份额/用工成本（只读，不落库）。
+def get_position_cost(pid: int, salary_before_tax: float | None = None,
+                      scope: str = "budget", db: Session = Depends(get_db)):
+    """成本测算（v2.3 双口径，只读不落库）。
 
-    公司份额 = 税前薪资 × Σ(有效科目税率)；用工成本 = 税前薪资 + 公司份额。
-    支持传入 salary_before_tax 查询参数以使用前端输入值（未落库）计算，避免双重 PATCH。
+    - scope=budget（默认）：按**岗位税区**（工作地点）计算预算成本，空岗可用；
+    - scope=actual：按当前占用员工的**归属税区**计算实际成本（跟人走），需 Filled；
+    - 未配置税率 → configured=false +「未配置」提示，不猜测估值。
     """
+    from app.helpers import calc_cost_by_zone, resolve_tax_zone
     pn = get_or_404(db, PositionNumber, pid, "岗位不存在")
-    # 优先使用查询参数中的薪资（前端未落库输入），否则使用 DB 已保存值
+    if scope not in ("budget", "actual"):
+        raise HTTPException(400, "scope 仅支持 budget / actual")
+
+    if scope == "actual":
+        emp = db.query(Employee).filter(Employee.position_number_id == pn.id).first()
+        if not emp:
+            raise HTTPException(400, "该岗位无在职员工，实际成本不可用（请用 scope=budget 查看预算口径）")
+        # 人的归属税区 = 其当前所挂岗位的工作地点
+        salary = salary_before_tax if salary_before_tax is not None else emp.actual_salary_before_tax
+        zone = resolve_tax_zone(db, pn.work_location)
+        result = calc_cost_by_zone(db, zone, salary)
+        result.update({"position_id": pn.id, "scope": "actual", "employee_id": emp.id})
+        return result
+
+    # budget：岗位预算口径（空岗可录、不随人走）
     salary = salary_before_tax if salary_before_tax is not None else pn.salary_before_tax
     if salary is None:
         raise HTTPException(400, "请先填写税前薪资（人工）")
-    if not pn.country_id:
-        raise HTTPException(400, "该岗位无国家/地区，无法按国家税率计算（请切换为手动输入）")
-    items = db.query(EmploymentTaxItem).filter(
-        EmploymentTaxItem.country_id == pn.country_id, EmploymentTaxItem.is_active.is_(True)
-    ).all()
-    rate = sum(float(it.tax_rate or 0) for it in items) / 100.0
-    share = round(float(salary) * rate, 2)
-    return {
-        "position_id": pn.id,
-        "salary_before_tax": float(salary),
-        "tax_rate_total": round(rate * 100, 2),
-        "tax_items": [{"item_name": it.item_name, "tax_rate": float(it.tax_rate or 0)} for it in items],
-        "company_share": share,
-        "labor_cost": round(float(salary) + share, 2),
-    }
+    zone = resolve_tax_zone(db, pn.work_location)
+    result = calc_cost_by_zone(db, zone, salary)
+    result.update({"position_id": pn.id, "scope": "budget"})
+    return result
 
 
 @router.delete("/positions/{pid}")
-def delete_position(pid: int, db: Session = Depends(get_db)):
+def delete_position(pid: int, user=Depends(get_current_user), db: Session = Depends(get_db)):
     pn = get_or_404(db, PositionNumber, pid, "岗位不存在")
     if db.query(Employee).filter(Employee.position_number_id == pid).first():
         raise HTTPException(400, "岗位有在职员工，禁止删除（请先离职/调岗）")
