@@ -148,7 +148,7 @@ const Positions = {
         <div class="section-title">人工成本（可留空）</div>
         <div class="cost-toggle">
           <label class="cost-mode"><input type="radio" name="pc-costmode" value="manual" checked> 手动输入</label>
-          <label class="cost-mode"><input type="radio" name="pc-costmode" value="auto"> 自动计算（按国家用工税额）</label>
+          <label class="cost-mode"><input type="radio" name="pc-costmode" value="auto"> 自动计算（按税区用工税额）</label>
         </div>
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:10px" id="pc-costfields">
           <div class="cost-field"><label>税前薪资（人工）</label><input type="number" step="0.01" id="pc-salary"></div>
@@ -200,7 +200,7 @@ const Positions = {
     const hint = modal.querySelector(`#${prefix}-costhint`);
     if (mode === 'auto') {
       salary.disabled = false; share.disabled = true; labor.disabled = true;
-      hint.textContent = '自动模式：公司份额 = 税前薪资 × Σ(国家科目税率)，用工成本 = 税前 + 份额；保存后可在详情「重算」。';
+      hint.textContent = '自动模式：公司份额 = 税前薪资 × Σ(该岗位工作地点所挂税区全部有效科目税率)，用工成本 = 税前 + 份额；城市级分拆后无国家兜底，未配置税率将提示「未配置」。保存后可在详情「重算」。';
     } else {
       salary.disabled = false; share.disabled = false; labor.disabled = false;
       hint.textContent = '手动模式：三个字段均可填写。';
@@ -337,7 +337,7 @@ const Positions = {
         <div class="section-title">人工成本</div>
         <div class="cost-toggle">
           <label class="cost-mode"><input type="radio" name="pe-costmode" value="manual" ${p.cost_mode !== 'auto' ? 'checked' : ''}> 手动输入</label>
-          <label class="cost-mode"><input type="radio" name="pe-costmode" value="auto" ${p.cost_mode === 'auto' ? 'checked' : ''}> 自动计算（按国家用工税额）</label>
+          <label class="cost-mode"><input type="radio" name="pe-costmode" value="auto" ${p.cost_mode === 'auto' ? 'checked' : ''}> 自动计算（按税区用工税额）</label>
           <button class="btn" id="pe-calccost" style="${p.cost_mode === 'auto' ? '' : 'display:none'}">重算</button>
         </div>
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:10px" id="pe-costfields">
