@@ -241,6 +241,14 @@ class UserCompany(Base):
 class PositionNumber(Base):
     """岗位编号（管理主体）。"""
     __tablename__ = "position_numbers"
+    __table_args__ = (
+        # issue #69：scope=country（枚举名 COUNTRY，SAEnum 持久化「名」）时 country_id 必填，
+        # DB 层兜底防绕过 API 直写库产生脏数据
+        CheckConstraint(
+            f"scope <> '{Scope.COUNTRY.name}' OR country_id IS NOT NULL",
+            name="ck_positions_country_required_when_country_scope",
+        ),
+    )
 
     id = Column(Integer, primary_key=True)
     # 系统分配纯序号（PRD §3.1 v2.3）：正式岗 P{seq} / 外包岗 PA{seq}，与 scope/country 解耦
@@ -366,9 +374,10 @@ class Employee(Base):
         # 仅离职允许解绑为 NULL。DB 层强制，防止绕过应用逻辑产生孤儿记录。
         # 保持 nullable=True 以支持离职解绑流程（app/routers/employees.py:_vacate），
         # 但用 CHECK 约束保证在职员工不为 NULL。
-        # 约束值派生自 EmploymentStatus.TERMINATED（值为“离职”），兼容历史英文值 'TERMINATED'。
+        # SAEnum(native_enum=False) 持久化枚举「名」（'TERMINATED'），中文值不入库
+        # （issue #57：约束仅保留实际存储值，去除误导性冗余项）。
         CheckConstraint(
-            f"employment_status IN ('{EmploymentStatus.TERMINATED.name}', '{EmploymentStatus.TERMINATED.value}') OR position_number_id IS NOT NULL",
+            f"employment_status = '{EmploymentStatus.TERMINATED.name}' OR position_number_id IS NOT NULL",
             name="ck_employees_position_required_if_active",
         ),
     )
