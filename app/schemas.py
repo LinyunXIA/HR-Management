@@ -133,12 +133,17 @@ class EmployeeCreate(BaseModel):
 class EmployeeUpdate(BaseModel):
     name: str | None = None
     gender: Gender | None = None
-    birth_date: date | None = None
+    birth_date: str | date | None = None
     phone: str | None = None
     email: str | None = None
     hire_date: date | None = None
     employee_type: EmployeeType | None = None
     employment_status: EmploymentStatus | None = None
+    # 实际成本（v2.3 双口径：跟人走）
+    actual_cost_mode: str | None = None       # auto | manual
+    actual_salary_before_tax: float | None = None
+    actual_company_share: float | None = None
+    actual_labor_cost: float | None = None
     remark: str | None = None
     version: int | None = None  # 乐观锁版本号（PRD §7C）
 
@@ -150,6 +155,26 @@ class TransferRequest(BaseModel):
 class TransferCreate(BaseModel):
     employee_id: int
     to_position_id: int
+
+
+# ---------------------------------------------------------------- 转调 / 升职（v2.3 F1.5b）
+class TransferInitiate(BaseModel):
+    """转调发起：原 HR 把人转出到目标公司（人仍挂原岗、原岗锁定不释放）。"""
+    employee_id: int
+    target_company_id: int
+    note: str | None = None
+
+
+class TransferClaim(BaseModel):
+    """转调认领（仅目标公司 HR）：分配空闲目标岗，单事务生效。"""
+    to_position_id: int
+
+
+class PromoteRequest(BaseModel):
+    """升职：时节=月末（财务月末归属）/ 即时（当天）。老岗默认 Vacant。"""
+    to_position_id: int
+    timing: str = "immediate"  # month_end | immediate
+    note: str | None = None
 
 
 # ---------------------------------------------------------------- 主数据（F0）
@@ -270,15 +295,17 @@ class PositionTypeUpdate(BaseModel):
 
 class EmploymentTaxItemOut(BaseModel):
     id: int
-    country_id: int
-    country_name: str | None = None
+    country_id: int | None = None
+    tax_zone_id: int | None = None
+    tax_zone_label: str | None = None
     item_name: str
     tax_rate: float
     is_active: bool
 
 
 class EmploymentTaxItemCreate(BaseModel):
-    country_id: int
+    country_id: int | None = None   # 旧口径兼容；新配置请用 tax_zone_id
+    tax_zone_id: int | None = None  # v2.3 税区（国家或城市级）
     item_name: str
     tax_rate: float = 0.0
     is_active: bool = True
@@ -288,6 +315,29 @@ class EmploymentTaxItemUpdate(BaseModel):
     item_name: str | None = None
     tax_rate: float | None = None
     is_active: bool | None = None
+
+
+# ---------------------------------------------------------------- 税区（v2.3 F1.6）
+class TaxZoneOut(BaseModel):
+    id: int
+    level: str            # country | city
+    country_id: int
+    country_name: str | None = None
+    city: str | None = None
+    sort_order: int = 0
+    items: list[EmploymentTaxItemOut] = []
+
+
+class TaxZoneCreate(BaseModel):
+    level: str            # country | city
+    country_id: int
+    city: str | None = None
+    sort_order: int | None = 0
+
+
+class TaxZoneUpdate(BaseModel):
+    city: str | None = None
+    sort_order: int | None = None
 
 
 class ManagerOption(BaseModel):

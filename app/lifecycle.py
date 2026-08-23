@@ -13,8 +13,9 @@ ALLOWED_MANUAL = {
     PositionStatus.CLOSED: set(),  # 终态
 }
 
-# 员工动作触发的系统自动流转（入职/离职/调岗）
+# 员工动作触发的系统自动流转（入职/离职/调岗/转调认领）
 ALLOWED_EMPLOYEE = {
+    PositionStatus.PLANNED: {PositionStatus.FILLED},   # v2.3 转调认领可分配 Planned 空闲编制
     PositionStatus.OPEN: {PositionStatus.FILLED},
     PositionStatus.VACANT: {PositionStatus.FILLED},
     PositionStatus.OFFERED: {PositionStatus.FILLED},

@@ -1,19 +1,58 @@
-"""员工路由：CRUD + 入职/调岗/离职（联动岗位状态 Filled↔Vacant）。"""
+"""员工路由：CRUD + 入职/调岗/离职/升职（联动岗位状态 Filled↔Vacant）。
+
+v2.3：
+- 挂编联动：岗位 position_type ↔ 员工 employee_type 强制匹配（数据层兜底）
+- 行级隔离：写操作按可管实体隔离（读可跨司，PRD §7B.3）
+- 升职：POST /employees/{id}/promote，单事务成对流转
+"""
+from datetime import date as _date
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app import lifecycle
+from app.auth import get_current_user
 from app.db import get_db
-from app.helpers import assert_version, dotted_ids, get_or_404
+from app.helpers import (
+    assert_can_write_company,
+    assert_version,
+    dotted_ids,
+    get_operable_company_ids,
+    get_or_404,
+)
 from app.models import (
+    Company,
     Employee,
+    EmployeeType,
     EmploymentStatus,
     PositionNumber,
+    PositionNumberDottedLine,
     PositionStatus,
 )
-from app.schemas import EmployeeCreate, EmployeeUpdate, TransferRequest
+from app.schemas import EmployeeCreate, EmployeeUpdate, PromoteRequest
 
 router = APIRouter(prefix="/api/v1", tags=["employees"])
+
+# 挂编联动映射（PRD §4 F1.5）：岗位 position_type → 允许的员工 employee_type 集合
+ATTACH_TYPE_MAP = {
+    "Consultant": {"正式"},
+    "External Employee": {"外包"},
+    "Employee": {"正式", "实习", "劳务"},
+}
+
+
+def _assert_type_match(pn: PositionNumber, employee_type) -> None:
+    """岗位类型 ↔ 员工合同属性强制联动；不匹配挂载拒绝（防「四不像」数据）。"""
+    allowed = ATTACH_TYPE_MAP.get((pn.position_type or "").strip())
+    if allowed is None:
+        return  # 岗位未设类型 → 不约束（导入历史数据兼容）
+    et = employee_type.value if hasattr(employee_type, "value") else str(employee_type)
+    if et not in allowed:
+        type_cn = {"Consultant": "顾问编制", "External Employee": "外包编制",
+                   "Employee": "正式编制"}.get(pn.position_type, pn.position_type)
+        raise HTTPException(
+            400, f"挂编联动校验失败：岗位为{type_cn}（{pn.position_type}），"
+                 f"仅允许 {'/'.join(sorted(allowed))} 员工，不接受「{et}」")
 
 
 def serialize_employee(db: Session, emp: Employee) -> dict:
@@ -24,6 +63,7 @@ def serialize_employee(db: Session, emp: Employee) -> dict:
     for did in dotted:
         dm = db.get(PositionNumber, did)
         dotted_nums.append(dm.number if dm else str(did))
+    tc = db.get(Company, emp.target_company_id) if emp.target_company_id else None
     return {
         "id": emp.id,
         "employee_no": emp.employee_no,
@@ -40,6 +80,13 @@ def serialize_employee(db: Session, emp: Employee) -> dict:
         "position_name": pn.position.name if pn else None,
         "company_id": pn.company_id if pn else None,
         "company_name": pn.company.name if pn else None,
+        "target_company_id": emp.target_company_id,
+        "target_company_name": tc.name if tc else None,
+        # ---- 实际成本（跟人走）----
+        "actual_cost_mode": emp.actual_cost_mode.value if emp.actual_cost_mode else None,
+        "actual_salary_before_tax": float(emp.actual_salary_before_tax) if emp.actual_salary_before_tax is not None else None,
+        "actual_company_share": float(emp.actual_company_share) if emp.actual_company_share is not None else None,
+        "actual_labor_cost": float(emp.actual_labor_cost) if emp.actual_labor_cost is not None else None,
         "solid_line_manager_id": pn.solid_line_manager_id if pn else None,
         "solid_line_number": sl.number if sl else None,
         "solid_line_manager_name": sl.position.name if sl else None,
@@ -88,11 +135,15 @@ def list_employees(
 
 
 @router.post("/employees", status_code=201)
-def create_employee(payload: EmployeeCreate, response: Response, db: Session = Depends(get_db)):
+def create_employee(payload: EmployeeCreate, response: Response,
+                    user=Depends(get_current_user), db: Session = Depends(get_db)):
     if db.query(Employee).filter(Employee.employee_no == payload.employee_no).first():
         raise HTTPException(400, f"工号已存在: {payload.employee_no}")
     pn = get_or_404(db, PositionNumber, payload.position_number_id, "岗位不存在")
     _assert_attachable(db, pn)
+    _assert_type_match(pn, payload.employee_type)
+    # 行级隔离：入职挂编写入目标岗位所属实体，需可管
+    assert_can_write_company(db, user, pn.company_id, label="目标岗位所属公司")
     emp = Employee(
         employee_no=payload.employee_no,
         name=payload.name,
@@ -122,14 +173,29 @@ def get_employee(eid: int, db: Session = Depends(get_db)):
 
 
 @router.patch("/employees/{eid}")
-def update_employee(eid: int, payload: EmployeeUpdate, db: Session = Depends(get_db)):
+def update_employee(eid: int, payload: EmployeeUpdate,
+                    user=Depends(get_current_user), db: Session = Depends(get_db)):
     emp = get_or_404(db, Employee, eid, "员工不存在")
     assert_version(emp, payload.version, "员工")
+    # 行级隔离：员工修改按其实体隔离（转调中仍归属原岗公司）
+    cur_pn = db.get(PositionNumber, emp.position_number_id) if emp.position_number_id else None
+    assert_can_write_company(db, user, cur_pn.company_id if cur_pn else None, label="该员工")
     for field in ("name", "gender", "birth_date", "phone", "email",
                   "hire_date", "employee_type", "remark"):
         val = getattr(payload, field)
         if val is not None:
             setattr(emp, field, val)
+    # 实际成本字段（v2.3：跟人走）
+    for field in ("actual_salary_before_tax", "actual_company_share", "actual_labor_cost"):
+        val = getattr(payload, field)
+        if val is not None:
+            setattr(emp, field, val)
+    if payload.actual_cost_mode is not None:
+        from app.models import CostMode
+        try:
+            emp.actual_cost_mode = CostMode(payload.actual_cost_mode)
+        except ValueError:
+            raise HTTPException(400, "actual_cost_mode 仅支持 auto / manual")
     if payload.employment_status is not None:
         if (payload.employment_status == EmploymentStatus.TERMINATED
                 and emp.employment_status != EmploymentStatus.TERMINATED):
@@ -141,13 +207,65 @@ def update_employee(eid: int, payload: EmployeeUpdate, db: Session = Depends(get
 
 
 @router.delete("/employees/{eid}")
-def delete_employee(eid: int, db: Session = Depends(get_db)):
+def delete_employee(eid: int, user=Depends(get_current_user), db: Session = Depends(get_db)):
     emp = get_or_404(db, Employee, eid, "员工不存在")
     if emp.position_number_id is not None or emp.employment_status != EmploymentStatus.TERMINATED:
         raise HTTPException(400, "仅可删除已离职且已解绑岗位的员工档案")
+    assert_can_write_company(db, user, None, label="该员工")  # 已解绑无实体归属；仅要求登录
     db.delete(emp)
     db.commit()
     return {"ok": True, "id": eid}
+
+
+# ---------------------------------------------------------------- 升职（v2.3 F1.5b）
+@router.post("/employees/{eid}/promote")
+def promote_employee(eid: int, payload: PromoteRequest,
+                     user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """升职：Filled 新岗、老岗默认 Vacant（可后续手动 Closed）、prev_* 记来源、工龄照人。
+
+    时节 timing=immediate|month_end 仅记入事件供财务月边界归属；
+    本系统无调度器，动作即时生效并在事件中保留时节标记。
+    单事务成对流转：老岗 Vacant + 新岗 Filled + 人移动 + prev_* 全部生效或整体回滚。
+    """
+    if payload.timing not in ("immediate", "month_end"):
+        raise HTTPException(400, "timing 仅支持 immediate / month_end")
+    emp = (
+        db.query(Employee).filter(Employee.id == eid).with_for_update().first()
+    )
+    if not emp:
+        raise HTTPException(404, "员工不存在")
+    if emp.employment_status == EmploymentStatus.TERMINATED:
+        raise HTTPException(400, "离职员工不可升职")
+    if emp.employment_status == EmploymentStatus.TRANSFERRING:
+        raise HTTPException(400, "转调中员工请先完成认领或退回再升职")
+    old_pn = db.get(PositionNumber, emp.position_number_id) if emp.position_number_id else None
+    if old_pn:
+        assert_can_write_company(db, user, old_pn.company_id, label="该员工的所属公司")
+    new_pn = (
+        db.query(PositionNumber)
+        .filter(PositionNumber.id == payload.to_position_id)
+        .with_for_update()
+        .first()
+    )
+    if not new_pn:
+        raise HTTPException(404, "目标岗位不存在")
+    _assert_attachable(db, new_pn)
+
+    timing_cn = "月末升职" if payload.timing == "month_end" else "即时升职"
+    if old_pn and old_pn.id != new_pn.id:
+        if old_pn.status == PositionStatus.FILLED:
+            lifecycle.transition(db, old_pn, PositionStatus.VACANT,
+                                 note=f"员工 {emp.name} {timing_cn}移出（如需关闭编制请手动 Closed）",
+                                 employee_id=emp.id, system=True)
+        lifecycle.transition(db, new_pn, PositionStatus.FILLED,
+                             note=f"员工 {emp.name} {timing_cn}入岗",
+                             employee_id=emp.id, system=True)
+        new_pn.prev_position_id = old_pn.id
+        new_pn.prev_company_id = old_pn.company_id
+        emp.position_number_id = new_pn.id
+        emp.version = (emp.version or 1) + 1
+    db.commit()
+    return {"ok": True, "employee": serialize_employee(db, emp)}
 
 
 def _vacate(db: Session, emp: Employee, note: str):
