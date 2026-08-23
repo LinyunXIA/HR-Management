@@ -22,10 +22,14 @@ from app.db import APP_ENV, Base, SessionLocal, assert_writable, engine, startup
 from app.import_csv import import_csv
 from app.seed import seed_master_data
 
+# 项目根目录（issue #67：默认路径用绝对路径，任意工作目录下均可运行）
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_CSV = os.path.join(BASE_DIR, "testingdata", "原始文件", "Position.csv")
+
 
 def main():
     args = sys.argv[1:]
-    path = "testingdata/原始文件/Position.csv"
+    path = DEFAULT_CSV
     reset = False
     strict_legal = True  # #51：默认 strict，非 strict 仅历史迁移显式关闭
     if "--reset" in args:
