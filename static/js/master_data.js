@@ -15,8 +15,11 @@ const MasterData = {
         { k: 'is_management', label: '管理岗（M 开头）', type: 'check' },
         { k: 'sort_order', label: '排序', type: 'number' }] },
     { key: 'worklocations', label: '工作地点', endpoint: '/work-locations',
-      columns: [{ k: 'name', label: '名称' }, { k: 'sort_order', label: '排序' }],
-      fields: [{ k: 'name', label: '名称', type: 'text', req: true }, { k: 'sort_order', label: '排序', type: 'number' }] },
+      columns: [{ k: 'name', label: '名称' }, { k: 'country', label: '国家/地区' }, { k: 'city', label: '城市' }, { k: 'sort_order', label: '排序' }],
+      fields: [{ k: 'name', label: '名称', type: 'text', req: true },
+        { k: 'country', label: '国家/地区', type: 'text' },
+        { k: 'city', label: '城市', type: 'text' },
+        { k: 'sort_order', label: '排序', type: 'number' }] },
     { key: 'scopes', label: '工作范围', endpoint: '/scopes',
       columns: [{ k: 'code', label: '编码' }, { k: 'label', label: '名称' }, { k: 'suffix_code', label: '后缀' }],
       fields: [
@@ -47,7 +50,7 @@ const MasterData = {
         <div style="display:flex;gap:16px;padding:14px">
           <div class="side" style="width:210px">
             ${this.KINDS.map((k) => `<div class="item" data-kind="${k.key}" ${k.key === this.current ? 'active' : ''}>${k.label}</div>`).join('')}
-            <div class="item" data-kind="taxtax" ${this.current === 'taxtax' ? 'active' : ''}>员工用工税额（按国家）</div>
+            <div class="item" data-kind="taxtax" ${this.current === 'taxtax' ? 'active' : ''}>税区与用工税额</div>
           </div>
           <div style="flex:1" id="md-panel"></div>
         </div>
@@ -118,61 +121,96 @@ const MasterData = {
     catch (e) { toast(e.message); }
   },
 
-  /* ---------------- 员工用工税额 ---------------- */
+  /* ---------------- 税区与用工税额（v2.3 F1.6：挂载点可配置，城市级分拆后无国家兜底） ---------------- */
   async renderTaxPanel(el) {
     const panel = el.querySelector('#md-panel');
     const countries = App.countries;
     if (!countries.length) { panel.innerHTML = '<div class="empty">请先在「国家/地区」维护国家</div>'; return; }
-    if (!this.taxCountry) this.taxCountry = countries[0].id;
-    const items = await get('/employment-tax-items?country_id=' + this.taxCountry);
-    const cname = countries.find((c) => c.id === this.taxCountry)?.name || '';
-    const totalRate = items.filter((i) => i.is_active).reduce((s, i) => s + i.tax_rate, 0);
+    const zones = await get('/tax-zones');
     panel.innerHTML = `
       <div class="toolbar" style="border:1px solid var(--border);border-radius:8px">
-        <b>员工用工税额 · ${esc(cname)}</b>
-        <select id="tax-country">${countries.map((c) => `<option value="${c.id}" ${c.id === this.taxCountry ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
-        <span class="hint">启用科目合计税率：${totalRate.toFixed(2)}%（公司份额 = 税前薪资 × ${totalRate.toFixed(2)}%）</span>
+        <b>税区与用工税额</b>
+        <span class="hint">税率挂载点：国家级 或 城市级；某国一旦按城市分拆，未配置的城市无兜底 → 成本显示「未配置」</span>
         <span class="grow"></span>
-        <button class="btn primary" id="tax-new">＋ 新增科目</button>
+        <button class="btn primary" id="zone-new">＋ 新增税区</button>
       </div>
       <div style="margin-top:10px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
-        <table><thead><tr><th>科目</th><th>税率 %</th><th>启用</th><th></th></tr></thead>
-        <tbody>${items.length ? items.map((it) => `
-          <tr><td>${esc(it.item_name)}</td><td class="num">${it.tax_rate}</td><td>${it.is_active ? '✔' : '—'}</td>
-          <td><button class="btn small" data-tedit="${it.id}">编辑</button>
-              <button class="btn small danger" data-tdel="${it.id}">删除</button></td></tr>`).join('')
-          : '<tr><td colspan="4" class="empty">该国家暂无税务科目配置</td></tr>'}</tbody></table>
+        <table><thead><tr><th>挂载级别</th><th>国家/地区</th><th>城市</th><th>科目数</th><th>合计税率 %</th><th></th></tr></thead>
+        <tbody>${zones.length ? zones.map((z) => `
+          <tr>
+            <td>${z.level === 'city' ? '🏙 城市级' : '🌍 国家级'}</td>
+            <td>${esc(z.country_name || '—')}</td>
+            <td>${esc(z.city || '—')}</td>
+            <td class="num">${(z.items || []).length}</td>
+            <td class="num">${(z.items || []).filter((i) => i.is_active).reduce((s, i) => s + i.tax_rate, 0).toFixed(2)}</td>
+            <td>
+              <button class="btn small" data-zitems="${z.id}">管理科目</button>
+              <button class="btn small danger" data-zdel="${z.id}">删除</button>
+            </td>
+          </tr>`).join('') : '<tr><td colspan="6" class="empty">暂无税区。自动计算成本前请先配置税区与税务科目。</td></tr>'}</tbody></table>
       </div>`;
-    panel.querySelector('#tax-country').onchange = (e) => { this.taxCountry = +e.target.value; this.render(); };
-    panel.querySelector('#tax-new').onclick = () => this.openTaxForm(null);
-    panel.querySelectorAll('[data-tedit]').forEach((b) => b.onclick = () => this.openTaxForm(items.find((i) => i.id === +b.dataset.tedit)));
-    panel.querySelectorAll('[data-tdel]').forEach((b) => b.onclick = () => this.delTax(+b.dataset.tdel));
+    panel.querySelector('#zone-new').onclick = () => this.openZoneForm(null);
+    panel.querySelectorAll('[data-zitems]').forEach((b) => b.onclick = () =>
+      this.openZoneItems(zones.find((z) => z.id === +b.dataset.zitems)));
+    panel.querySelectorAll('[data-zdel]').forEach((b) => b.onclick = () => this.delZone(+b.dataset.zdel));
   },
 
-  openTaxForm(item) {
+  openZoneForm(item) {
     const isEdit = !!item;
     const modal = openModal(`
-      <header><h2>${isEdit ? '编辑' : '新增'} 税务科目</h2><button class="btn small" onclick="closeModal()">✕</button></header>
+      <header><h2>${isEdit ? '编辑' : '新增'} 税区</h2><button class="btn small" onclick="closeModal()">✕</button></header>
       <div class="body"><div class="form-grid">
-        <div class="field"><label>国家/地区</label>
-          <select id="taxf-country">${App.countries.map((c) => `<option value="${c.id}" ${c.id === this.taxCountry ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></div>
-        <div class="field"><label>科目 *</label><input type="text" id="taxf-name" value="${esc(item?.item_name || '')}" required></div>
-        <div class="field"><label>税率 % *</label><input type="number" step="0.01" id="taxf-rate" value="${item?.tax_rate ?? ''}" required></div>
-        <div class="field"><label>启用</label><input type="checkbox" id="taxf-active" ${!item || item.is_active ? 'checked' : ''}></div>
+        <div class="field"><label>挂载级别 *</label>
+          <select id="zf-level"><option value="country">国家级（该国统一税率）</option><option value="city">城市级（按城市分拆）</option></select></div>
+        <div class="field"><label>国家/地区 *</label>
+          <select id="zf-country">${App.countries.map((c) => `<option value="${c.id}" ${item && item.country_id === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></div>
+        <div class="field"><label>城市（城市级必填）</label><input type="text" id="zf-city" value="${esc(item?.city || '')}"></div>
       </div></div>
-      <footer><button class="btn" onclick="closeModal()">取消</button><button class="btn primary" id="taxf-save">保存</button></footer>`);
-    modal.querySelector('#taxf-save').onclick = async () => {
-      if (!val('#taxf-name') || val('#taxf-rate') === '') { toast('请填写科目与税率'); return; }
+      <footer><button class="btn" onclick="closeModal()">取消</button><button class="btn primary" id="zf-save">保存</button></footer>`);
+    modal.querySelector('#zf-save').onclick = async () => {
       const body = {
-        country_id: +val('#taxf-country'),
-        item_name: val('#taxf-name'),
-        tax_rate: parseFloat(val('#taxf-rate')),
-        is_active: modal.querySelector('#taxf-active').checked,
+        level: modal.querySelector('#zf-level').value,
+        country_id: +modal.querySelector('#zf-country').value,
+        city: modal.querySelector('#zf-city').value.trim() || null,
       };
       try {
-        if (isEdit) await patch('/employment-tax-items/' + item.id, body);
-        else await post('/employment-tax-items', body);
+        if (isEdit) await patch('/tax-zones/' + item.id, { city: body.city });
+        else await post('/tax-zones', body);
         closeModal(); toast('已保存', 'ok'); this.render();
+      } catch (e) { toast(e.message); }
+    };
+  },
+
+  async delZone(id) {
+    if (!confirm('确认删除该税区？（其下不可有税务科目）')) return;
+    try { await del('/tax-zones/' + id); toast('已删除', 'ok'); this.render(); }
+    catch (e) { toast(e.message); }
+  },
+
+  /* 税区下的税务科目维护 */
+  openZoneItems(zone) {
+    const modal = openModal(`
+      <header><h2>税务科目 — ${esc(zone.country_name)}${zone.level === 'city' && zone.city ? ' · ' + esc(zone.city) : ''}</h2>
+        <button class="btn small" onclick="closeModal()">✕</button></header>
+      <div class="body">
+        <table><thead><tr><th>科目</th><th>税率 %</th><th>启用</th><th></th></tr></thead>
+          <tbody id="zi-rows">${(zone.items || []).map((it) => `
+            <tr data-item="${it.id}"><td>${esc(it.item_name)}</td><td class="num">${it.tax_rate}</td><td>${it.is_active ? '✔' : '—'}</td>
+            <td><button class="btn small danger" onclick="Users_delItem(this)" data-id="${it.id}">删</button></td></tr>`).join('')
+            || '<tr><td colspan="4" class="empty">暂无科目</td></tr>'}</tbody></table>
+        <div class="form-grid" style="margin-top:10px">
+          <div class="field"><label>新科目 *</label><input type="text" id="zi-name"></div>
+          <div class="field"><label>税率 % *</label><input type="number" step="0.01" id="zi-rate"></div>
+          <div class="field" style="align-self:end"><button class="btn" id="zi-add">＋ 添加科目</button></div>
+        </div>
+      </div>`);
+    modal.querySelector('#zi-add').onclick = async () => {
+      const name = modal.querySelector('#zi-name').value.trim();
+      const rate = parseFloat(modal.querySelector('#zi-rate').value);
+      if (!name || isNaN(rate)) { toast('请填写科目名与税率'); return; }
+      try {
+        await post('/employment-tax-items', { tax_zone_id: zone.id, item_name: name, tax_rate: rate, is_active: true });
+        closeModal(); toast('已添加', 'ok'); this.render();
       } catch (e) { toast(e.message); }
     };
   },
@@ -183,3 +221,9 @@ const MasterData = {
     catch (e) { toast(e.message); }
   },
 };
+
+async function Users_delItem(btn) {
+  if (!confirm('确认删除该税务科目？')) return;
+  try { await del('/employment-tax-items/' + btn.dataset.id); toast('已删除', 'ok'); MasterData.render(); }
+  catch (e) { toast(e.message); }
+}

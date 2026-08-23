@@ -59,6 +59,7 @@ const App = {
       else if (tab === 'employees') await Employees.render();
       else if (tab === 'orgchart') await OrgChart.render();
       else if (tab === 'import') Import.render();
+      else if (tab === 'users') await Users.render();
     } catch (e) {
       document.getElementById(`tab-${tab}`).innerHTML =
         `<div class="panel"><div class="empty">加载失败：${esc(e.message)}</div></div>`;
@@ -68,6 +69,11 @@ const App = {
 
 document.addEventListener('DOMContentLoaded', async () => {
   if (window.Auth) { await Auth.fetchMe(); Auth.renderBadge(); }
+  // v2.3：用户管理入口仅 admin 可见
+  const navUsers = document.getElementById('nav-users');
+  if (navUsers && window.Auth && Auth.user && Auth.user.role === 'admin') {
+    navUsers.style.display = '';
+  }
   try { await App.loadDicts(); } catch (e) { toast('初始化字典失败：' + e.message); }
   App.init();
 });

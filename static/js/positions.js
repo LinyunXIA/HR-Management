@@ -233,10 +233,18 @@ const Positions = {
           ${ditem('之前的职位', p.prev_position_number || '—')}
           ${ditem('之前的公司', p.prev_company_name || '—')}
           ${ditem('成本模式', p.cost_mode === 'auto' ? '自动计算' : '手动输入')}
-          ${ditem('税前薪资', fmtMoney(p.salary_before_tax))}
-          ${ditem('公司份额', fmtMoney(p.company_share))}
-          ${ditem('用工成本', fmtMoney(p.labor_cost))}
+          ${ditem('税前薪资（预算）', fmtMoney(p.salary_before_tax))}
+          ${ditem('公司份额（预算）', fmtMoney(p.company_share))}
+          ${ditem('用工成本（预算）', fmtMoney(p.labor_cost))}
         </div>
+        ${p.incumbent_name ? `
+          <div class="section-title">实际成本（${esc(p.incumbent_name)} · 跟人走）</div>
+          <div class="grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;font-size:13px">
+            ${ditem('税前薪资（实际）', fmtMoney(p.actual_salary_before_tax))}
+            ${ditem('公司份额（实际）', fmtMoney(p.actual_company_share))}
+            ${ditem('用工成本（实际）', fmtMoney(p.actual_labor_cost))}
+            <div></div>
+          </div>` : ''}
         ${p.remark ? `<div class="section-title">备注</div><div style="font-size:13px">${esc(p.remark)}</div>` : ''}
         ${p.cost_mode === 'auto' && p.salary_before_tax != null ? `<div class="transition-bar"><button class="btn" id="pd-calccost">重算用工成本</button></div>` : ''}
 
