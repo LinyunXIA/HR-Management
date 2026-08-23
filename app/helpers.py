@@ -13,10 +13,13 @@ from app.models import (
     Scope,
 )
 
-# P{序号}-{范围}，范围可为 1/2/3 或 4-{国家编号}
-NUMBER_RE = re.compile(r"^P(\d{3,})-(\d+)(?:-(\d+))?$")
+# 编号规则（系统强制分配，源文件编号一律忽视）：
+#   正式岗（Employee / Consultant）→ P{seq}，如 P1、P2…
+#   外包岗（External Employee）   → PA{seq}，如 PA1、PA2…
+NUMBER_RE_P = re.compile(r"^P(\d+)$")
+NUMBER_RE_PA = re.compile(r"^PA(\d+)$")
 
-SCOPE_SUFFIX = {Scope.FAMILY: "1", Scope.GLOBAL: "2", Scope.REGIONAL: "3"}
+OUTSOURCED_TYPE = "External Employee"
 
 
 def get_or_404(db: Session, model, obj_id: int, detail=None):
@@ -40,35 +43,34 @@ def resolve_position(db: Session, position_id: int = None, position_name: str = 
     raise HTTPException(400, "必须提供 position_id 或 position_name")
 
 
-def validate_number_format(number: str, scope: Scope, country_code: str | None):
-    """校验岗位编号与 scope/country 一致性。"""
-    m = NUMBER_RE.match(number)
-    if not m:
-        raise HTTPException(400, f"岗位编号格式非法: {number}（应为 P{{序号}}-{{范围}}）")
-    scope_part = m.group(2)
-    if scope == Scope.COUNTRY:
-        if country_code is None:
-            raise HTTPException(400, "Country 范围缺少国家/地区")
-        expected = country_code  # country.code 形如 '4-5'
-        if f"{scope_part}-{m.group(3)}" != expected:
-            raise HTTPException(400, f"Country 范围岗位编号后缀应为 {expected}，而非 -{scope_part}-{m.group(3)}")
-    else:
-        expected = SCOPE_SUFFIX[scope]
-        if scope_part != expected:
-            raise HTTPException(400, f"{scope.value} 范围岗位编号后缀应为 -{expected}，而非 -{scope_part}")
+def validate_number_format(number: str, scope: Scope = None, country_code: str | None = None):
+    """校验岗位编号格式（P{seq} 或 PA{seq}）。scope/country 参数保留兼容旧调用，不再参与校验。"""
+    if not (NUMBER_RE_P.match(number) or NUMBER_RE_PA.match(number)):
+        raise HTTPException(400, f"岗位编号格式非法: {number}（应为 P{{序号}} 或 PA{{序号}}）")
 
 
-def generate_number(db: Session, scope: Scope, country_code: str | None) -> str:
-    """按规则自动生成岗位编号：下一可用 P 序号 + 范围后缀。"""
+def number_series(position_type: str | None) -> str:
+    """按职位类型返回编号系列前缀：外包岗 PA，其余 P。"""
+    return "PA" if (position_type or "").strip() == OUTSOURCED_TYPE else "P"
+
+
+def next_sequence(db: Session, prefix: str) -> int:
+    """取库内指定编号系列的下一个序号（当前最大值 +1；空库从 1 起）。"""
+    pattern = NUMBER_RE_PA if prefix == "PA" else NUMBER_RE_P
     seqs = []
     for (num,) in db.query(PositionNumber.number).all():
-        m = NUMBER_RE.match(num)
+        m = pattern.match(num or "")
         if m:
             seqs.append(int(m.group(1)))
-    seq = (max(seqs) + 1) if seqs else 1
-    if scope == Scope.COUNTRY:
-        return f"P{seq:03d}-{country_code}"
-    return f"P{seq:03d}-{SCOPE_SUFFIX[scope]}"
+    return (max(seqs) + 1) if seqs else 1
+
+
+def generate_number(db: Session, position_type: str | None = None, *args) -> str:
+    """自动生成岗位编号：正式岗 P{seq}、外包岗 PA{seq}（纯序号，无范围后缀）。
+
+    scope/country 等位置参数保留兼容旧签名，已不参与编号。
+    """
+    return f"{number_series(position_type)}{next_sequence(db, number_series(position_type))}"
 
 
 def check_cycle(db: Session, position_id: int, manager_id: int):
@@ -117,6 +119,110 @@ def assert_version(obj, client_version: int | None, label: str = "数据"):
             409,
             f"{label}已被他人修改，请刷新后重试（当前版本 {current}，提交版本 {client_version}）",
         )
+
+
+# ---------------------------------------------------------------- 行级权限隔离（v2.3 PRD §7B.3）
+ALL_COMPANIES = "ALL"  # admin 哨兵：全司可读写
+
+
+def get_operable_company_ids(db: Session, user) -> set[int] | str:
+    """返回用户可写操作的公司 id 集合。
+
+    - admin → ALL_COMPANIES（全司）
+    - hr    → 其 user_companies 绑定的实体集合（空集 = 无任何可管实体）
+    """
+    from app.models import UserCompany
+    if user.role == "admin":
+        return ALL_COMPANIES
+    rows = db.query(UserCompany.company_id).filter(UserCompany.user_id == user.id).all()
+    return {r[0] for r in rows}
+
+
+def assert_can_write_company(db: Session, user, company_id: int | None,
+                             label: str = "该公司"):
+    """写操作按实体隔离：hr 仅能修改其可管实体下的员工/成本（PRD §7B.3）。
+
+    未授权 → 403；company_id 为空视为不涉及实体归属，放行。
+    """
+    allowed = get_operable_company_ids(db, user)
+    if allowed == ALL_COMPANIES:
+        return
+    if company_id is not None and company_id not in allowed:
+        raise HTTPException(403, f"无权操作{label}（未分配该法人实体）")
+
+
+# ---------------------------------------------------------------- 成本引擎（v2.3 F1.6 税区化）
+def resolve_tax_zone(db: Session, work_location: str | None):
+    """按工作地点解析税区（TaxZone）。
+
+    - 工作地点两级（国家+城市）：优先匹配**城市级**税区；
+    - **无国家兜底**：一旦该国存在城市级分拆，未配置的城市不再回落国家级；
+    - 未配置 → 返回 None（成本「无法自动计算」，不猜测）。
+    """
+    from app.models import Country, EmploymentTaxItem, TaxZone, WorkLocation
+    if not work_location:
+        return None
+    loc = db.query(WorkLocation).filter(WorkLocation.name == work_location).first()
+    if not loc or not loc.country:
+        return None
+    country = db.query(Country).filter(Country.name == loc.country).first()
+    if not country:
+        return None
+    has_city_split = (
+        db.query(TaxZone)
+        .filter(TaxZone.level == "city", TaxZone.country_id == country.id)
+        .first()
+    ) is not None
+    if loc.city:
+        zone = (
+            db.query(TaxZone)
+            .filter(TaxZone.level == "city", TaxZone.country_id == country.id,
+                    TaxZone.city == loc.city)
+            .first()
+        )
+        if zone:
+            return zone
+        if has_city_split:
+            return None  # 该国已城市级分拆：未配置的城市无兜底
+    return (
+        db.query(TaxZone)
+        .filter(TaxZone.level == "country", TaxZone.country_id == country.id)
+        .first()
+    )
+
+
+def calc_cost_by_zone(db: Session, zone, salary) -> dict:
+    """按税区计算公司份额与用工成本；zone=None → configured=False（未配置）。"""
+    from app.models import EmploymentTaxItem
+    result = {
+        "configured": False,
+        "tax_zone_id": zone.id if zone else None,
+        "salary_before_tax": float(salary),
+        "tax_rate_total": 0.0,
+        "tax_items": [],
+        "company_share": None,
+        "labor_cost": None,
+        "message": "该地区税率未配置，无法自动计算（请配置税区或改用手动输入）" if zone is None else None,
+    }
+    if zone is None:
+        return result
+    items = (
+        db.query(EmploymentTaxItem)
+        .filter(EmploymentTaxItem.tax_zone_id == zone.id,
+                EmploymentTaxItem.is_active.is_(True))
+        .all()
+    )
+    rate = sum(float(it.tax_rate or 0) for it in items) / 100.0
+    share = round(float(salary) * rate, 2)
+    result.update({
+        "configured": True,
+        "tax_rate_total": round(rate * 100, 2),
+        "tax_items": [{"item_name": it.item_name, "tax_rate": float(it.tax_rate or 0)} for it in items],
+        "company_share": share,
+        "labor_cost": round(float(salary) + share, 2),
+        "message": None if items else "税区下暂无有效税务科目",
+    })
+    return result
 
 
 def serialize_position(db: Session, pn: PositionNumber) -> dict:
@@ -169,6 +275,11 @@ def serialize_position(db: Session, pn: PositionNumber) -> dict:
         "labor_cost": float(pn.labor_cost) if pn.labor_cost is not None else None,
         "incumbent_id": incumbent.id if incumbent else None,
         "incumbent_name": incumbent.name if incumbent else None,
+        # ---- 实际成本层（v2.3 双口径：Filled 对照、跟人走；空岗为 None）----
+        "actual_cost_mode": (incumbent.actual_cost_mode.value if incumbent and incumbent.actual_cost_mode else None),
+        "actual_salary_before_tax": (float(incumbent.actual_salary_before_tax) if incumbent and incumbent.actual_salary_before_tax is not None else None),
+        "actual_company_share": (float(incumbent.actual_company_share) if incumbent and incumbent.actual_company_share is not None else None),
+        "actual_labor_cost": (float(incumbent.actual_labor_cost) if incumbent and incumbent.actual_labor_cost is not None else None),
         "version": pn.version,
         "created_at": pn.created_at,
         "updated_at": pn.updated_at,
