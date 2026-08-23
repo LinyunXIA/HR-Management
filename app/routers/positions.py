@@ -228,12 +228,20 @@ def update_position(pid: int, payload: PositionNumberUpdate,
         if not db.query(LegalCategoryDef).filter(LegalCategoryDef.name == payload.legal_category).first():
             raise HTTPException(400, f"法律强制/可选「{payload.legal_category}」不存在，请先在主数据中添加")
 
+    old_position_type = pn.position_type
     for field in ("level", "opening_date", "closing_date", "work_location",
                   "job_responsibility", "legal_category", "org_chart_display",
                   "prev_position_id", "prev_company_id", "remark", "position_type"):
         val = getattr(payload, field)
         if val is not None:
             setattr(pn, field, val)
+
+    # 挂编联动（PRD F1.5）：岗位类型变更时校验当前占用员工合同属性，防「四不像」数据
+    if payload.position_type is not None and payload.position_type != (old_position_type or "").strip():
+        from app.routers.employees import ATTACH_TYPE_MAP, _assert_type_match
+        incumbent = db.query(Employee).filter(Employee.position_number_id == pn.id).first()
+        if incumbent and (pn.position_type or "").strip() in ATTACH_TYPE_MAP:
+            _assert_type_match(pn, incumbent.employee_type)
 
     for field in ("cost_mode", "salary_before_tax", "company_share", "labor_cost"):
         val = getattr(payload, field)

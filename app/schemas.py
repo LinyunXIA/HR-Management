@@ -58,8 +58,8 @@ class PositionNumberCreate(BaseModel):
     prev_position_id: int | None = None
     prev_company_id: int | None = None
     remark: str | None = None
-    # 成本字段（新建时可留空）
-    cost_mode: CostMode | None = None
+    # 成本字段（新建时可留空；模式缺省为手动输入，与模型默认一致）
+    cost_mode: CostMode = CostMode.MANUAL
     salary_before_tax: float | None = None
     company_share: float | None = None
     labor_cost: float | None = None
@@ -139,6 +139,7 @@ class EmployeeUpdate(BaseModel):
     hire_date: date | None = None
     employee_type: EmployeeType | None = None
     employment_status: EmploymentStatus | None = None
+    target_company_id: int | None = None  # v2.3 转调中目标公司（常规流程走 /transfers/initiate）
     # 实际成本（v2.3 双口径：跟人走）
     actual_cost_mode: str | None = None       # auto | manual
     actual_salary_before_tax: float | None = None
@@ -224,16 +225,22 @@ class WorkLocationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     name: str
+    country: str | None = None
+    city: str | None = None
     sort_order: int
 
 
 class WorkLocationCreate(BaseModel):
     name: str
+    country: str | None = None
+    city: str | None = None
     sort_order: int = 0
 
 
 class WorkLocationUpdate(BaseModel):
     name: str | None = None
+    country: str | None = None
+    city: str | None = None
     sort_order: int | None = None
 
 
@@ -309,6 +316,12 @@ class EmploymentTaxItemCreate(BaseModel):
     item_name: str
     tax_rate: float = 0.0
     is_active: bool = True
+
+    @model_validator(mode="after")
+    def check_zone_or_country(self):
+        if self.tax_zone_id is None and self.country_id is None:
+            raise ValueError("tax_zone_id 与 country_id 必须二选一填写")
+        return self
 
 
 class EmploymentTaxItemUpdate(BaseModel):
