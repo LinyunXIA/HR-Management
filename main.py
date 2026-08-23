@@ -139,7 +139,7 @@ def _ensure_company_is_active():
 
 _ensure_company_is_active()
 
-# 轻量迁移：v2.3 新增列（转调 / 实际成本 / 工作地点两级 / 税区）
+# 轻量迁移：v2.3 新增列（转调 / 实际成本 / 工作地点两级 / 税区 / 虚线标签）
 def _ensure_v23_columns():
     stmts = [
         # 员工：转调中目标公司 + 实际成本四字段
@@ -154,6 +154,8 @@ def _ensure_v23_columns():
         # 用工税额：挂载到税区（旧 country_id 保留兼容，放开非空约束）
         "ALTER TABLE employment_tax_items ADD COLUMN IF NOT EXISTS tax_zone_id INTEGER REFERENCES tax_zones(id) ON DELETE CASCADE",
         "ALTER TABLE employment_tax_items ALTER COLUMN country_id DROP NOT NULL",
+        # 虚线经理标签
+        "ALTER TABLE position_number_dotted_lines ADD COLUMN IF NOT EXISTS label VARCHAR(100)",
     ]
     try:
         with engine.begin() as conn:

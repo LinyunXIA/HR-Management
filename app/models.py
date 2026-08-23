@@ -313,6 +313,7 @@ class PositionNumberDottedLine(Base):
     dotted_manager_id = Column(
         Integer, ForeignKey("position_numbers.id", ondelete="CASCADE"), nullable=False
     )
+    label = Column(String(100), nullable=True)  # 虚线标签（如 "AML 虚线"、"IT 虚线"）
 
 
 class PositionEvent(Base):

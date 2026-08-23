@@ -20,7 +20,7 @@ const Employees = {
             ${['正式', '实习', '外包', '劳务'].map((t) => `<option value="${t}" ${this.filters.employee_type === t ? 'selected' : ''}>${t}</option>`).join('')}
           </select>
           <select id="ef-status"><option value="">全部在职状态</option>
-            ${['试用期', '在职', '休假', '离职'].map((t) => `<option value="${t}" ${this.filters.employment_status === t ? 'selected' : ''}>${t}</option>`).join('')}
+            ${['试用期', '在职', '休假', '转调中', '离职'].map((t) => `<option value="${t}" ${this.filters.employment_status === t ? 'selected' : ''}>${t}</option>`).join('')}
           </select>
           <input type="search" id="ef-search" placeholder="搜索姓名 / 工号" value="${esc(this.filters.search)}" style="width:200px">
           <button class="btn" id="ef-reset">重置</button>
@@ -145,11 +145,15 @@ const Employees = {
           <div class="section-title">操作</div>
           <div class="transition-bar">
             <button class="btn" id="ed-transfer">⇄ 调岗</button>
+            <button class="btn" id="ed-transfer-initiate">🔄 转调发起</button>
+            <button class="btn" id="ed-promote">⬆ 升职</button>
             <button class="btn danger" id="ed-offboard">离职</button>
           </div>` : ''}
       </div>`);
     if (e.employment_status !== '离职') {
       modal.querySelector('#ed-transfer').onclick = () => this.openTransfer(e);
+      modal.querySelector('#ed-transfer-initiate').onclick = () => this.openTransferInitiate(e);
+      modal.querySelector('#ed-promote').onclick = () => this.openPromote(e);
       modal.querySelector('#ed-offboard').onclick = async () => {
         if (!confirm(`确认员工 ${e.name} 离职？岗位将转空缺。`)) return;
         try {
@@ -163,21 +167,66 @@ const Employees = {
     }
   },
 
-  async openTransfer(e) {
-    this._attachable = (await this.attachablePositions()).filter((p) => p.id !== e.position_number_id);
+  async openTransferInitiate(e) {
+    const companies = await get('/companies');
     const modal = openModal(`
-      <header><h2>调岗 · ${esc(e.name)}</h2><button class="btn small" onclick="closeModal()">✕</button></header>
+      <header><h2>转调发起 · ${esc(e.name)}</h2><button class="btn small" onclick="closeModal()">✕</button></header>
       <div class="body">
-        <div class="field"><label>目标岗位（仅 Open/Vacant/Offered，且未占用）</label>
-          <select id="tr-pos">${this.posOptions()}</select>
+        <div class="hint" style="margin-bottom:12px">员工将标记为「转调中」，原岗位保持 Filled 锁定，等待目标公司 HR 认领分配空闲岗位。</div>
+        <div class="field"><label>目标公司 *</label>
+          <select id="ti-company">${companies.filter(c => c.id !== e.company_id).map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
         </div>
+        <div class="field"><label>备注</label><textarea id="ti-note" rows="2"></textarea></div>
       </div>
-      <footer><button class="btn" onclick="closeModal()">取消</button><button class="btn primary" id="tr-save">确认调岗</button></footer>`);
-    modal.querySelector('#tr-save').onclick = async () => {
-      if (!val('#tr-pos')) { toast('请选择目标岗位'); return; }
+      <footer><button class="btn" onclick="closeModal()">取消</button><button class="btn primary" id="ti-save">发起转调</button></footer>`);
+    modal.querySelector('#ti-save').onclick = async () => {
+      if (!val('#ti-company')) { toast('请选择目标公司'); return; }
       try {
-        const emp = await post(`/transfers`, { employee_id: e.id, to_position_id: +val('#tr-pos') });
-        closeModal(); toast(`已调岗至 ${emp.position_number}`, 'ok'); this.render(); App.loadStats();
+        await post('/transfers/initiate', {
+          employee_id: e.id,
+          target_company_id: +val('#ti-company'),
+          note: val('#ti-note') || null
+        });
+        closeModal(); toast('转调已发起，等待目标公司 HR 认领', 'ok');
+        this.render(); App.loadStats();
+      } catch (err) { toast(err.message); }
+    };
+  },
+
+  async openPromote(e) {
+    const positions = await get('/positions?page_size=500');
+    // 只显示 Open/Vacant/Offered/Planned 且非当前岗位的空闲编制
+    const available = positions.items.filter(p =>
+      ['open', 'vacant', 'offered', 'planned'].includes(p.status) &&
+      p.id !== e.position_number_id &&
+      !p.incumbent_id
+    );
+    if (!available.length) {
+      toast('无可用的空闲岗位用于升职'); return;
+    }
+    const modal = openModal(`
+      <header><h2>升职 · ${esc(e.name)}</h2><button class="btn small" onclick="closeModal()">✕</button></header>
+      <div class="body">
+        <div class="hint" style="margin-bottom:12px">升职后原岗位默认转 Vacant（可后续手动 Closed），工龄跟人不变，实际成本跟人走。</div>
+        <div class="field"><label>目标岗位 *（仅空闲编制）</label>
+          <select id="pr-pos">${available.map(p => `<option value="${p.id}">${esc(p.number)} ${esc(p.position_name)} · ${p.company_name} · ${STATUS_LABEL[p.status]}</option>`).join('')}</select>
+        </div>
+        <div class="field"><label>生效时节</label>
+          <select id="pr-timing"><option value="immediate">即时升职</option><option value="month_end">月末升职（财务月边界归属）</option></select>
+        </div>
+        <div class="field"><label>备注</label><textarea id="pr-note" rows="2"></textarea></div>
+      </div>
+      <footer><button class="btn" onclick="closeModal()">取消</button><button class="btn primary" id="pr-save">确认升职</button></footer>`);
+    modal.querySelector('#pr-save').onclick = async () => {
+      if (!val('#pr-pos')) { toast('请选择目标岗位'); return; }
+      try {
+        const emp = await post(`/employees/${e.id}/promote`, {
+          to_position_id: +val('#pr-pos'),
+          timing: val('#pr-timing'),
+          note: val('#pr-note') || null
+        });
+        closeModal(); toast(`升职完成：${emp.employee.position_number}`, 'ok');
+        this.render(); App.loadStats();
       } catch (err) { toast(err.message); }
     };
   },

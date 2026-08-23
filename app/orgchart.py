@@ -47,13 +47,13 @@ def build_orgchart(db: Session) -> dict:
         else:
             roots.append(pn.number)
 
-        rows = db.query(PositionNumberDottedLine.dotted_manager_id).filter(
+        rows = db.query(PositionNumberDottedLine.dotted_manager_id, PositionNumberDottedLine.label).filter(
             PositionNumberDottedLine.position_number_id == pn.id
         ).all()
-        for (mid,) in rows:
+        for mid, label in rows:
             m = db.get(PositionNumber, mid)
             if m:
-                dotted_edges.append({"from": pn.number, "to": m.number, "label": "虚线汇报"})
+                dotted_edges.append({"from": pn.number, "to": m.number, "label": label or "虚线汇报"})
 
     return {
         "nodes": nodes,

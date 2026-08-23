@@ -100,6 +100,7 @@ const DataClean = {
         <div class="report-card"><div class="n" style="color:${report.warnings.length?'var(--warn)':'var(--ok)'}">${report.warnings.length}</div><div class="t">⚠️ 警告</div></div>
         <div class="report-card"><div class="n" style="color:${report.errors.length?'var(--danger)':'var(--ok)'}">${report.errors.length}</div><div class="t">❌ 错误</div></div>
       </div>
+      <div class="hint" style="margin-bottom:8px">ℹ️ CSV「岗位编号」列为临时 T 占位（T1、T2...），仅供 review 识别岗位/经理；导入时系统将按职位类型分配正式 P/PA 编号（P1、PA1...），临时编号不占正式池、不回归。</div>
       ${report.warnings.length ? '<div class="hint" style="margin-bottom:8px">🔧 自动修复项：' + report.warnings.map((w) => esc((w.position||'') + ' ' + w.warning)).join('；') + '</div>' : ''}
       ${report.errors.length ? '<div style="color:var(--danger);font-size:13px;margin-bottom:8px">❌ ' + report.errors.map((e) => esc(e.position + ': ' + e.errors.join('; '))).join('<br>') + '</div>' : ''}`;
   },
@@ -111,17 +112,17 @@ const DataClean = {
       <div class="section-title">清洗结果预览（${cleaned.length} 个岗位）</div>
       <div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px">
         <table>
-          <thead><tr><th>岗位编号</th><th>职位</th><th>职位类型</th><th>隶属公司</th><th>直线经理</th><th>法律强制</th><th>开启日</th><th>备注</th></tr></thead>
-          <tbody>${cleaned.map((p) => `<tr>
-            <td class="num">${esc(p.number || '<导入时分配>')}</td>
-            <td>${esc(p.position_name || p.name_en || '')}</td>
-            <td>${esc((p.type || '').split(' - ')[0])}</td>
-            <td>${esc(p.company || '')}</td>
-            <td>${esc(p.line_manager || '—')}</td>
-            <td>${esc(p.legal_category || '—')}</td>
-            <td>${esc(p.opening_year || '—')}</td>
-            <td class="hint">${esc(p.remark || '')}</td>
-          </tr>`).join('')}</tbody>
+<thead><tr><th>岗位编号</th><th>职位</th><th>职位类型</th><th>隶属公司</th><th>直线经理</th><th>法律强制</th><th>开启日</th><th>备注</th></tr></thead>
+      <tbody>${cleaned.map((p, i) => `<tr>
+        <td class="num">${esc(p.number || `T${i+1}`)}</td>
+        <td>${esc(p.position_name || p.name_en || '')}</td>
+        <td>${esc((p.type || '').split(' - ')[0])}</td>
+        <td>${esc(p.company || '')}</td>
+        <td>${esc(p.line_manager || '—')}</td>
+        <td>${esc(p.legal_category || '—')}</td>
+        <td>${esc(p.opening_year || '—')}</td>
+        <td class="hint">${esc(p.remark || '')}</td>
+      </tr>`).join('')}</tbody>
         </table>
       </div>`;
   },

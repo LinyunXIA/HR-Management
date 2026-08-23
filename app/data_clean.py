@@ -438,7 +438,7 @@ def _infer_level(pos_name_en: str) -> str:
 
 
 def to_csv(cleaned: List[Dict], positions_map: Dict = None) -> str:
-    """将清洗后的数据输出为 CSV 字符串（17 列；岗位编号留空由系统分配）。"""
+    """将清洗后的数据输出为 CSV 字符串（17 列；岗位编号输出临时 T 占位供 review 识别）。"""
     # 先清理控制字符
     for pos in cleaned:
         for k, v in pos.items():
@@ -451,11 +451,12 @@ def to_csv(cleaned: List[Dict], positions_map: Dict = None) -> str:
 
     pm = positions_map or {p["name_en"]: p for p in cleaned}
 
-    for pos in cleaned:
+    # 临时 T 占位编号：供 review 阶段识别岗位/经理，不占正式编号池
+    for idx, pos in enumerate(cleaned, 1):
         row = {
             "职位": pos.get("position_name", pos.get("name_en", "")),
             "职位类型": pos.get("type", ""),
-            "岗位编号": "",  # 一律留空：导入时由系统按 P/PA 序列分配
+            "岗位编号": f"T{idx}",  # 临时占位 T 序号，导入时由系统按 P/PA 序列重新分配
             "隶属公司": pos.get("company", ""),
             "级别": pos.get("level", ""),
             "国家或地区": pos.get("country_scope", ""),

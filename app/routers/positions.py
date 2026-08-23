@@ -175,7 +175,11 @@ def create_position(payload: PositionNumberCreate, response: Response,
     db.flush()
     if payload.solid_line_manager_id:
         check_cycle(db, pn.id, payload.solid_line_manager_id)
-    set_dotted_lines(db, pn.id, payload.dotted_manager_ids)
+    dotted_list = [
+        {"id": mid, "label": payload.dotted_manager_labels[i] if i < len(payload.dotted_manager_labels) else None}
+        for i, mid in enumerate(payload.dotted_manager_ids)
+    ]
+    set_dotted_lines(db, pn.id, dotted_list)
     db.add(PositionEvent(position_number_id=pn.id, from_status=None,
                          to_status=PositionStatus.PLANNED.value, note="岗位建档"))
     db.commit()
@@ -276,7 +280,11 @@ def update_position(pid: int, payload: PositionNumberUpdate,
                 mgr = get_or_404(db, PositionNumber, mid, f"虚线经理岗位不存在 (id={mid})")
                 _assert_management(db, mgr, "虚线经理")
                 assert_can_write_company(db, user, mgr.company_id, label="被汇报目标岗位所属公司")
-        set_dotted_lines(db, pn.id, payload.dotted_manager_ids)
+        dotted_list = [
+            {"id": mid, "label": payload.dotted_manager_labels[i] if payload.dotted_manager_labels and i < len(payload.dotted_manager_labels) else None}
+            for i, mid in enumerate(payload.dotted_manager_ids)
+        ]
+        set_dotted_lines(db, pn.id, dotted_list)
 
     pn.version = (pn.version or 1) + 1
     db.commit()

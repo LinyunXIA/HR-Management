@@ -302,7 +302,7 @@ def import_csv(db, rows, *, strict_legal: bool = True):
             db.flush()
             existing_by_key[key] = pn
             report["imported"] += 1
-            report.setdefault("assigned_numbers", []).append({"label": key[0], "number": number})
+            report.setdefault("assigned_numbers", []).append({"label": key[0], "number": number, "action": "imported"})
             record_event(db, pn.id, None, data["status"].value, note="导入建档（系统分配编号）")
             if data["status"] == PositionStatus.CLOSED and data["closing_date"]:
                 ev = record_event(db, pn.id, PositionStatus.OPEN.value, PositionStatus.CLOSED.value,
@@ -312,6 +312,8 @@ def import_csv(db, rows, *, strict_legal: bool = True):
             for k, v in data.items():
                 setattr(pn, k, v)
             report["updated"] += 1
+            action = "updated_by_id" if matched_via == "id" else "updated_by_key"
+            report.setdefault("assigned_numbers", []).append({"label": key[0], "number": pn.number, "action": action})
             if matched_via == "id":
                 report["updated_by_id"] += 1
             else:

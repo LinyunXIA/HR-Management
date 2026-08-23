@@ -94,15 +94,21 @@ def check_cycle(db: Session, position_id: int, manager_id: int):
         cur = m.solid_line_manager_id if m else None
 
 
-def set_dotted_lines(db: Session, position_number_id: int, manager_ids: list[int]):
-    """重设岗位的虚线经理列表。"""
+def set_dotted_lines(db: Session, position_number_id: int, manager_ids: list[int] | list[dict]):
+    """重设岗位的虚线经理列表。支持传入 [{id, label}] 或 [id] 两种格式。"""
     db.query(PositionNumberDottedLine).filter(
         PositionNumberDottedLine.position_number_id == position_number_id
     ).delete()
-    for mid in dict.fromkeys(manager_ids):  # 去重保序
-        if mid:
-            get_or_404(db, PositionNumber, mid, f"虚线经理岗位不存在 (id={mid})")
-            db.add(PositionNumberDottedLine(position_number_id=position_number_id, dotted_manager_id=mid))
+    for item in dict.fromkeys([m['id'] if isinstance(m, dict) else m for m in manager_ids]):
+        if item:
+            get_or_404(db, PositionNumber, item, f"虚线经理岗位不存在 (id={item})")
+            # 查找对应的 label
+            label = None
+            for m in manager_ids:
+                if isinstance(m, dict) and m.get('id') == item:
+                    label = m.get('label')
+                    break
+            db.add(PositionNumberDottedLine(position_number_id=position_number_id, dotted_manager_id=item, label=label))
 
 
 def dotted_ids(db: Session, position_number_id: int) -> list[int]:
@@ -237,7 +243,11 @@ def serialize_position(db: Session, pn: PositionNumber) -> dict:
     incumbent = (
         db.query(Employee).filter(Employee.position_number_id == pn.id).first()
     )
-    dotted_ids_list = dotted_ids(db, pn.id)
+    dotted_lines = db.query(PositionNumberDottedLine).filter(
+        PositionNumberDottedLine.position_number_id == pn.id
+    ).all()
+    dotted_ids_list = [d.dotted_manager_id for d in dotted_lines]
+    dotted_labels = [d.label for d in dotted_lines]
     dotted_nums = []
     for did in dotted_ids_list:
         dm = db.get(PositionNumber, did)
@@ -266,6 +276,7 @@ def serialize_position(db: Session, pn: PositionNumber) -> dict:
         "solid_line_number": sl.number if sl else None,
         "solid_line_manager_name": sl.position.name if sl else None,
         "dotted_manager_ids": dotted_ids_list,
+        "dotted_manager_labels": dotted_labels,
         "dotted_manager_numbers": dotted_nums,
         "org_chart_display": pn.org_chart_display,
         "prev_position_id": pn.prev_position_id,
