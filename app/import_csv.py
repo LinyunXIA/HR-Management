@@ -118,11 +118,11 @@ def extract_refs(value):
     return [r for r in refs if r and r.upper() != "N/A"]
 
 
-def import_csv(db, rows, *, strict_legal: bool = False):
+def import_csv(db, rows, *, strict_legal: bool = True):
     """rows: 可迭代的 dict（由 csv.DictReader 或上传解析产生）。
 
-    strict_legal=True：法律分类不在 legal_categories 字典（且非历史枚举值）时
-    记入 errors 且该行不导入；False（默认）维持告警后照常入库，兼容历史 CSV。
+    strict_legal=True（默认，#51）：法律分类不在 legal_categories 字典（且非历史枚举值）时
+    记入 errors 且该行不导入；False 仅限历史数据一次性迁移显式传入，告警后照常入库。
     """
     report = {"total": 0, "imported": 0, "updated": 0, "updated_by_id": 0,
               "updated_by_key": 0, "errors": [], "warnings": []}
