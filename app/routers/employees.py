@@ -196,6 +196,12 @@ def update_employee(eid: int, payload: EmployeeUpdate,
             emp.actual_cost_mode = CostMode(payload.actual_cost_mode)
         except ValueError:
             raise HTTPException(400, "actual_cost_mode 仅支持 auto / manual")
+    # 转调目标公司（v2.3）：直接修正需校验公司存在；常规流程走 /transfers/initiate|claim
+    if payload.target_company_id is not None:
+        tc = db.get(Company, payload.target_company_id)
+        if not tc:
+            raise HTTPException(400, f"目标公司不存在 (id={payload.target_company_id})")
+        emp.target_company_id = payload.target_company_id
     if payload.employment_status is not None:
         if (payload.employment_status == EmploymentStatus.TERMINATED
                 and emp.employment_status != EmploymentStatus.TERMINATED):
