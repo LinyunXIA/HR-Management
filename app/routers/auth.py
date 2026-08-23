@@ -12,7 +12,7 @@ from app.auth import (
     verify_password,
 )
 from app.db import get_db
-from app.models import User
+from app.models import User, UserRole
 
 router = APIRouter(prefix="/api/v1", tags=["auth"])
 
@@ -60,11 +60,11 @@ def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)
 def register(request: Request, payload: RegisterRequest, response: Response,
              current: User = Depends(get_current_user),
              db: Session = Depends(get_db)):
-    """注册新用户（需已登录的管理员）。首个用户可无认证注册（种子阶段兜底）。"""
-    # 若库中无用户，允许匿名注册首个管理员（便于初始化）
-    has_any = db.query(User).count() > 0
-    if has_any and current.role != "admin":
-        raise HTTPException(403, "仅管理员可注册新用户")
+    """建号（v2.3：关闭自主注册，仅 admin 可调用；角色限 admin/hr）。"""
+    if current.role != "admin":
+        raise HTTPException(403, "仅管理员可创建账号")
+    if payload.role not in ("admin", "hr"):
+        raise HTTPException(400, "role 仅支持 admin / hr")
     if db.query(User).filter(User.username == payload.username).first():
         raise HTTPException(400, f"用户名已存在: {payload.username}")
     if len(payload.password) < 6:
@@ -72,30 +72,7 @@ def register(request: Request, payload: RegisterRequest, response: Response,
     user = User(
         username=payload.username.strip(),
         hashed_password=hash_password(payload.password),
-        role=payload.role,
-        is_active=True,
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    response.headers["Location"] = f"/api/v1/users/{user.id}"
-    return {"id": user.id, "username": user.username, "role": user.role}
-
-
-# 允许匿名注册首个用户的备用端点（与上方复用逻辑，避免循环依赖）
-@router.post("/auth/register-first", status_code=201)
-@limiter.limit("5/minute")
-def register_first(request: Request, payload: RegisterRequest, response: Response, db: Session = Depends(get_db)):
-    if db.query(User).count() > 0:
-        raise HTTPException(400, "系统已有用户，请使用 /auth/register（需管理员 Token）")
-    if db.query(User).filter(User.username == payload.username).first():
-        raise HTTPException(400, f"用户名已存在: {payload.username}")
-    if len(payload.password) < 6:
-        raise HTTPException(400, "密码至少 6 位")
-    user = User(
-        username=payload.username.strip(),
-        hashed_password=hash_password(payload.password),
-        role=payload.role,
+        role=UserRole(payload.role),
         is_active=True,
     )
     db.add(user)

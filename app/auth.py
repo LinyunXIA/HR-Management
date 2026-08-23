@@ -123,3 +123,15 @@ def get_current_user_optional(request: Request, db: Session = Depends(get_db)) -
     if not user or not user.is_active:
         raise HTTPException(401, "用户不存在或已停用")
     return user
+
+
+def require_admin(current: User = Depends(get_current_user)) -> User:
+    """仅 admin 可操作（建号 / 分配可管实体 / 主数据维护等）。"""
+    if current.role != "admin":
+        raise HTTPException(403, "仅管理员可执行此操作")
+    return current
+
+
+def require_user(current: User = Depends(get_current_user)) -> User:
+    """写操作统一要求登录（admin 或 hr）。"""
+    return current
