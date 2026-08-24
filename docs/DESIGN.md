@@ -715,6 +715,7 @@ SQLite 完全可支撑本项目的 LLM+Embedding 需求（91 岗位 + 万级员�
 ### S3 配置与周边
 - [x] `requirements.txt` 移除 psycopg2-binary；`.env.example` / `.env` 三段改 sqlite URL。
 - [x] `tests/test_integration.py` S7 用例改 sqlite 路径断言（含非 sqlite scheme 拒绝用例）。
+- [x] **登录入口拆分（v2.5 追加）**：新增 `POST /auth/ui-login` 仅放行 UI 类型账号——API 账号即使持「认证」授权也 403（防外部集成账号误入内部 UI）；前端 SPA 登录改走 ui-login、`fetchMe` 对 api 类型兜底清除会话；回归 v23 增补 8 项断言。
 
 ### S4 数据迁移
 - [x] 新增 `scripts/migrate_pg_master_data.py`：11 张主数据字典表 PG→SQLite 幂等合入（seed 后按唯一键 upsert；税区/股东按名称解析关联）；users 与岗位域不迁移。

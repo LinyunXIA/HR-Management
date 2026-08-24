@@ -81,6 +81,28 @@ def main():
     hr_user = next(u for u in users["items"] if u["username"] == hr_name)
     check(hr_user["role"] == "hr" and hr_user["companies"] == [], "hr 建号成功、初始无可管实体")
 
+    # v2.5 登录入口拆分：API 账号禁止 UI 登录（POST /auth/ui-login 一律 403）
+    api_name = f"api_be_{suffix}"
+    req("POST", "/admin/users", {"username": api_name, "password": "api123456",
+                                 "role": "hr", "user_type": "api"}, token=admin, expect=201)
+    code, _b = req("POST", "/auth/ui-login", {"username": api_name, "password": "api123456"})
+    check(code == 403, f"API 账号 UI 登录被拒（{code}，期望 403）")
+    # 无「认证」授权 → 程序化登录也拒绝
+    code, _b = req("POST", "/auth/login", {"username": api_name, "password": "api123456"})
+    check(code == 403, f"API 账号未授予「认证」时 /auth/login 拒绝（{code}）")
+    # 授予「认证」后：程序化登录放行、UI 登录仍拒绝
+    _, users2 = req("GET", "/admin/users", token=admin)
+    api_user = next(u for u in users2["items"] if u["username"] == api_name)
+    req("PUT", f"/admin/users/{api_user['id']}/apis",
+        {"apis": ["auth.login", "public.companies"]}, token=admin, expect=200)
+    req("POST", "/auth/login", {"username": api_name, "password": "api123456"}, expect=200)
+    code, _b = req("POST", "/auth/ui-login", {"username": api_name, "password": "api123456"})
+    check(code == 403, f"持「认证」授权的 API 账号 UI 登录仍被拒（{code}）")
+    # UI 类型账号经 /auth/ui-login 正常换取 JWT
+    _, ui_login_r = req("POST", "/auth/ui-login", {"username": hr_name, "password": "hr123456"},
+                        expect=200)
+    check(bool(ui_login_r.get("access_token")), "UI 账号 /auth/ui-login 登录成功")
+
     # ---------- 主数据准备 ----------
     section("前置数据：公司/岗位/税区")
     _, comps = req("GET", "/companies")

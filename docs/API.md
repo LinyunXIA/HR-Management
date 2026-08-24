@@ -117,13 +117,14 @@
 
 | 方法 | 路径 | 说明 | 认证 | 限流 |
 | --- | --- | --- | --- | --- |
-| POST | `/auth/login` | 登录换取 JWT（API 类型用户须持「认证」授权） | 无 | `10/min` |
-| GET | `/auth/me` | 当前用户信息 | JWT | 全局 |
+| POST | `/auth/login` | 程序化登录换取 JWT（API 类型用户须持「认证」授权） | 无 | `10/min` |
+| POST | `/auth/ui-login` | **Web 界面专用登录**：仅 UI 类型账号；API 账号一律 403（v2.5 登录入口拆分） | 无 | `10/min` |
+| GET | `/auth/me` | 当前用户信息（含 `user_type`） | JWT | 全局 |
 
 > 建号/用户管理统一走 `/admin/users*`（§6.0，仅 UI admin）；`/auth/register`、
 > `/auth/register-first`、`/users` 遗留端点已移除（v2.4.3）。
 
-**POST /auth/login 请求体**
+**POST /auth/login 与 POST /auth/ui-login 请求体**（二者同构）
 
 ```json
 { "username": "admin", "password": "admin123" }
@@ -137,6 +138,9 @@
 
 - 默认种子 `admin/admin123`（`app/seed.py:1`，可由 `DEFAULT_ADMIN_USER/PASSWORD` 覆盖）。
 - JWT：HS256，`app/auth.py:20`（`JWT_SECRET_KEY`/`JWT_EXPIRE_MINUTES`），`Authorization: Bearer <token>`（兼容 `X-Token` / `?token=`）。
+- **入口拆分（v2.5）**：外部程序化接入用 `/auth/login`；Web 界面用 `/auth/ui-login`——
+  `user_type=api` 账号调 ui-login 返回 `403 {"detail": "API 账号不支持网页界面登录：…"}`，
+  即使已授予「认证」授权；UI 类型账号两个端点均可登录。
 
 ---
 
@@ -418,6 +422,7 @@
 | 方法 | 路径 | 模块 | 认证 | 限流 |
 | --- | --- | --- | --- | --- |
 | POST | /auth/login | auth | 无 | `10/min` |
+| POST | /auth/ui-login | auth | 无 | `10/min`（仅 UI 类型账号，API 账号 403） |
 | GET | /auth/me | auth | JWT | 全局 |
 | GET/POST, PATCH/DELETE | /companies、/countries、/levels、/work-locations、/scopes、/legal-categories、/position-types | master_data | 无 | 全局 |
 | GET/POST, PATCH/DELETE | /employment-tax-items、/employment-tax-items/{id} | master_data | 无 | 全局 |
