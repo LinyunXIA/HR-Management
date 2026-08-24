@@ -6,30 +6,30 @@
 ## 1. 项目概览
 
 轻量级 HR 管理系统（单用户本地工具），三大能力：**岗位全生命周期**、**员工档案**、**组织架构图（汇报线树）**。
-技术栈：**FastAPI + PostgreSQL + SQLAlchemy + Pydantic v2**，前端**原生 JS（零依赖、无 npm/构建）**。
+技术栈：**FastAPI + SQLite（v2.5 起，同机三文件隔离）+ SQLAlchemy + Pydantic v2**，前端**原生 JS（零依赖、无 npm/构建）**。
 需求与设计见 `docs/PRD.md`、`docs/DESIGN.md`、`docs/API.md`。
 
 ## 2. 常用命令
 
 ```bash
-# 安装依赖（Python 3.14 venv）
+# 安装依赖（Python 3.14 venv；SQLite 用标准库 sqlite3，无数据库服务）
 .venv/bin/pip install -r requirements.txt
 
 # 三环境配置（PRD §7D，单文件 .env 合并版）
 cp .env.example .env            # 单文件内含 dev/test/prod 三段，通过 APP_ENV 切换
 # .env 内示例：
-#   DATABASE_URL_dev=postgresql://.../hr_db_dev
-#   DATABASE_URL_test=postgresql://.../hr_db_test
-#   DATABASE_URL_prod=postgresql://.../hr_db_prod  # 含 ${POSTGRES_PASSKEY}
-# 库名强制 hr_db_{env}，不一致则拒启；旧的 .env.test/.env.prod 仍兼容
+#   DATABASE_URL_dev=sqlite:///./data/hr_db_dev.db
+#   DATABASE_URL_test=sqlite:///./data/hr_db_test.db
+#   DATABASE_URL_prod=sqlite:///./data/hr_db_prod.db
+# 文件名强制 hr_db_{env}.db，与 APP_ENV 不一致则拒启；相对路径基于项目根规范化
 
-# 启动（dev 默认；自动建表 + 种子数据）
+# 启动（dev 默认；自动建表 + 种子数据 + 挂编联动触发器）
 .venv/bin/uvicorn main:app --reload --port 7273   # http://127.0.0.1:7273
 
 # 切换环境（dev / test / prod）
-APP_ENV=dev  .venv/bin/uvicorn main:app --reload --port 7273
-APP_ENV=test .venv/bin/uvicorn main:app --reload --port 7274   # hr_db_test
-APP_ENV=prod .venv/bin/uvicorn main:app --reload --port 7275   # hr_db_prod
+APP_ENV=dev  .venv/bin/uvicorn main:app --reload --port 7273   # data/hr_db_dev.db
+APP_ENV=test .venv/bin/uvicorn main:app --reload --port 7274   # data/hr_db_test.db
+APP_ENV=prod .venv/bin/uvicorn main:app --reload --port 7275   # data/hr_db_prod.db
 
 # 数据导入（幂等 upsert；dev/test 允许 --reset；prod 禁止）
 APP_ENV=dev  .venv/bin/python -m scripts.import_csv testingdata/原始文件/Position.csv --reset
@@ -39,7 +39,7 @@ APP_ENV=prod .venv/bin/python -m scripts.import_csv testingdata/原始文件/Pos
 # 或在网页「数据导入」Tab 上传 Position.csv
 ```
 
-**生产护栏**：`APP_ENV=prod` 时 `--reset` / `Base.metadata.drop_all` 一律被 `app.db.assert_writable()` 拦截并退出码 1。生产重置必须走 `pg_dump hr_db_prod` + 受控迁移，不经本系统。
+**生产护栏**：`APP_ENV=prod` 时 `--reset` / `Base.metadata.drop_all` 一律被 `app.db.assert_writable()` 拦截并退出码 1。生产重置必须走 `.db 文件复制备份` + 受控迁移，不经本系统。
 
 **无测试/静态检查配置**。验证方式：`curl /api/*` 或无头浏览器 `--headless --dump-dom http://127.0.0.1:7273/#orgchart` 检查 DOM。
 
@@ -69,7 +69,7 @@ APP_ENV=prod .venv/bin/python -m scripts.import_csv testingdata/原始文件/Pos
 ## 5. 后端结构（app/）
 
 - `main.py:1`：入口；`Base.metadata.create_all` + `seed_master_data`；注册 6 个 router；`/` 返回 `static/index.html`；挂载 `/static`
-- `app/db.py:1`：三环境引擎（`DATABASE_URL_{env}` + `APP_ENV` 分流 + 库名强制 `hr_db_{env}` + 读写护栏 + `limiter`）；单文件 `.env` 合并版
+- `app/db.py:1`：三环境引擎（`DATABASE_URL_{env}` + `APP_ENV` 分流 + SQLite 文件名强制 `hr_db_{env}.db` + 每连接 `PRAGMA foreign_keys=ON/WAL/busy_timeout` + 读写护栏）；单文件 `.env` 合并版
 - `app/auth.py`：JWT 签发/校验（`Authorization: Bearer`）、bcrypt；`app/limiter.py` 全局限流（`120/min`，登录 `10/min`）
 - `app/models.py:1`：14 张表（含 `users`）+ `position_numbers/employees.version` 乐观锁
 - `app/helpers.py:1`：`validate_number_format` / `generate_number` / `check_cycle` / `set_dotted_lines` / `serialize_position`
@@ -84,7 +84,8 @@ APP_ENV=prod .venv/bin/python -m scripts.import_csv testingdata/原始文件/Pos
 
 ## 6. 关键实现约束
 
-- `PositionNumber.company` 必须 `foreign_keys=[company_id]`（`app/models.py:213`），否则 AmbiguousForeignKeys（存在 `company_id` + `prev_company_id` 双外键）
+- **SQLite 注意**：外键约束靠每连接 `PRAGMA foreign_keys=ON`（`app/db.py` event listener，勿删）；并发写靠事务 `BEGIN IMMEDIATE` + `busy_timeout=30s`（begin event listener 勿删，承接 PG 行锁守卫语义，`with_for_update()` 为 no-op）；金额 `Numeric` 以 float 存储；备份 = 复制 `.db` 文件（连同 `-wal/-shm` 或先 wal_checkpoint）
+- `PositionNumber.company` 必须 `foreign_keys=[company_id]`，否则 AmbiguousForeignKeys（存在 `company_id` + `prev_company_id` 双外键）
 - `solid_line_manager_id` 未声明 ORM relationship，一律 `db.get(PositionNumber, id)` 查询
 - 全局用 `_now()`（timezone-aware，`app/models.py:23`），禁用 `datetime.utcnow`
 - 直线经理变更必须 `check_cycle`（`app/helpers.py:74`）环检测
@@ -94,8 +95,9 @@ APP_ENV=prod .venv/bin/python -m scripts.import_csv testingdata/原始文件/Pos
 ## 7. 前端结构（static/）
 
 单页 hash 路由（`#data_clean` / `#master` / `#positions` / `#employees` / `#orgchart` / `#import`）：
-- `static/index.html:1`：单页骨架（6 个 Tab）
+- `static/index.html:1`：单页骨架（6 个 Tab）；header 含环境徽章 `#env-badge`（main.py 注入 window.APP_ENV/APP_DB，dev=绿/test=黄/prod=红）
 - `static/js/api.js`：fetch 封装 + `esc` / `statusBadge` / `openModal`
+- `static/js/auth.js`：登录态管理；登录弹窗内显示当前环境（防误登）
 - `static/js/app.js`：Tab 切换、顶部统计、字典预加载
 - `static/js/positions.js`：列表/新建/详情/编辑；含成本字段（auto/manual 互斥）与 `TRANSITIONS`
 - `static/js/employees.js`：入职（选 Open/Vacant/Offered）/调岗/离职
@@ -105,10 +107,10 @@ APP_ENV=prod .venv/bin/python -m scripts.import_csv testingdata/原始文件/Pos
 ## 8. 数据与目录
 
 - `testingdata/原始文件/`：`Org-Chart3.md`（**唯一支持格式**：无编号树 + 权责说明续行）/ `Position.md`（规则）/ `Position.csv`（模版）；`Org-Chart.md` / `Org-Chart2.md` 为历史存档，系统不再解析
-- `data/`（gitignored）：运行时文件存储（当前主用 PostgreSQL）
+- `data/`（gitignored）：SQLite 三环境库文件 `hr_db_{dev,test,prod}.db`（WAL 模式伴生 `-wal/-shm`）+ `backups/`
 - `docs/`：`PRD.md` / `DESIGN.md` / `API.md` / `API_PUBLIC.md` / `UI_MOCKUP.html`
-- `scripts/import_csv.py`：CLI 导入脚本
-- `.env`（gitignored, 合并版）：`DATABASE_URL_{dev,test,prod}` 三段 + `APP_ENV` 切换；`.env.example` 为模版（含 JWT/limiter 示例）
+- `scripts/import_csv.py`：CLI 导入脚本；`scripts/migrate_pg_master_data.py`：PG→SQLite 主数据一次性迁移
+- `.env`（gitignored, 合并版）：`DATABASE_URL_{dev,test,prod}` 三段 sqlite URL + `APP_ENV` 切换；`.env.example` 为模版（含 JWT/limiter 示例）
 
 ## 9. Opencode 工作约定
 
@@ -118,16 +120,14 @@ APP_ENV=prod .venv/bin/python -m scripts.import_csv testingdata/原始文件/Pos
 - **Git**：未明确要求时不自动 commit/push；commit 前检查 `git status` / `diff`
 - **配置变更**：修改 `opencode.json` / `.opencode/**` 后需重启 opencode 生效
 
-## 10. 当前运行状态（2026-08-23 更新）
+## 10. 当前运行状态（2026-08-24 更新）
 
-- **编号系统重制已落地（PRD v2.3）**：源编号一律忽视，导入/创建时系统分配——正式 `P{seq}` / 外包 `PA{seq}`；幂等键=职位名+公司+国家或地区；经理引用按职位名解析
+- **v2.5 存储切换已落地：PostgreSQL → SQLite 同机三文件**（`data/hr_db_{dev,test,prod}.db`，WAL + 每连接 `PRAGMA foreign_keys=ON`）；psycopg2 已移出运行时依赖；主数据字典已从 PG 迁入（`scripts/migrate_pg_master_data.py`，幂等可重跑）
+- **编号系统重制已落地（PRD v2.3）**：源编号一律忽视，导入/创建时系统分配——正式 `P{seq}` / 外包 `PA{seq}`；幂等键=职位名+公司+国家或地区+开启日；经理引用按职位名解析
 - **数据清洗仅支持 Org-Chart3 格式**：无编号树 + 权责说明续行；直线经理=真实树祖先（兄弟不互挂、公司清栈）
-- **三库岗位域数据已清空（2026-08-23）**：dev/test/prod 的 positions 域 TRUNCATE 归零；prod 已先备份至 `data/backups/hr_db_prod_20260823_192018.dump`
-- 表计数（hr_db_dev）：`position_numbers=4`（已导入 Org-Chart3.md：P1~P4）
-
-- PostgreSQL 18.4（Postgres.app）已连通：`hr_db_dev` / `hr_db_test` / `hr_db_prod` 三库并存（prod 含 `${POSTGRES_PASSKEY}` 展开）
-- **三环境 DB 隔离（PRD §7D 合并版）已落地**：单文件 `.env` 内 `DATABASE_URL_{dev,test,prod}` + `APP_ENV` 切换；库名一致性校验 + prod 护栏 + `${POSTGRES_PASSKEY}` 展开生效
+- 表计数（hr_db_dev）：`position_numbers=4`（Org-Chart3.md 导入：P1~P4）、`companies=4`、users 仅 admin
+- **三环境 DB 隔离（PRD §7D）**：单文件 `.env` 内 `DATABASE_URL_{dev,test,prod}` sqlite 三段 + `APP_ENV` 切换；文件名一致性校验 + prod 护栏（复制 .db 备份替代 pg_dump）
 - **JWT§7B + 乐观锁§7C + 速率限制§7B.2 已落地**：`PyJWT/bcrypt`、`version` 列、全局 `120/min` / 登录 `10/min` / 公共 `60/min`
+- **回归基线**：`tests/test_integration.py` 45/45、`tests/test_v23.py` 43/43 全过（SQLite 下并发抢岗 [200,400] 语义保持）；挂编联动触发器 SQLite 版直写拦截验证通过
 - Python 3.14.7 + FastAPI 0.141.1 + SQLAlchemy 2.0.51 已就绪
-- 分支 `main` 与 `origin/main` 同步，工作区 clean
 - opencode 1.18.15 已安装，全局 provider: minimax / openrouter

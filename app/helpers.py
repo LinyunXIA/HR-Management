@@ -57,17 +57,15 @@ def number_series(position_type: str | None) -> str:
 def next_sequence(db: Session, prefix: str) -> int:
     """取库内指定编号系列的下一个序号（当前最大值 +1；空库从 1 起）。
 
-    最大值在 DB 侧聚合计算：正则过滤系列 + 剥离前缀转整数取 max，
-    避免全表加载到 Python 逐条正则匹配。
+    可移植实现（v2.5 SQLite 切换）：LIKE 前缀过滤 + Python 侧正则解析取 max，
+    不依赖 PG 专属 regexp_replace / ~ 操作符；岗位量级小（百级），无性能顾虑。
     """
-    from sqlalchemy import cast, func, Integer
-    digits = func.regexp_replace(PositionNumber.number, r"^PA?", "")
-    max_seq = (
-        db.query(func.max(cast(digits, Integer)))
-        .filter(PositionNumber.number.op("~")(rf"^{prefix}\d+$"))
-        .scalar()
-    )
-    return (max_seq or 0) + 1
+    rows = db.query(PositionNumber.number).filter(
+        PositionNumber.number.like(f"{prefix}%")
+    ).all()
+    pat = re.compile(rf"^{re.escape(prefix)}(\d+)$")
+    max_seq = max((int(m.group(1)) for (n,) in rows if (m := pat.match(n))), default=0)
+    return max_seq + 1
 
 
 def generate_number(db: Session, position_type: str | None = None, *args) -> str:
@@ -88,18 +86,18 @@ EMPLOYEE_NO_SERIES = {
 
 
 def generate_employee_no(db: Session, employee_type) -> str:
-    """自动生成员工工号：正式 G{seq:05d}、实习/劳务 V{seq:05d}、外包 O{seq:05d}。"""
-    from sqlalchemy import cast, func, Integer
+    """自动生成员工工号：正式 G{seq:05d}、实习/劳务 V{seq:05d}、外包 O{seq:05d}。
 
+    可移植实现（v2.5 SQLite 切换）：LIKE 前缀过滤 + Python 侧正则解析取 max。
+    """
     key = employee_type.name if hasattr(employee_type, "name") else str(employee_type)
     prefix = EMPLOYEE_NO_SERIES.get(key, "G")
-    digits = func.regexp_replace(Employee.employee_no, rf"^{prefix}", "")
-    max_seq = (
-        db.query(func.max(cast(digits, Integer)))
-        .filter(Employee.employee_no.op("~")(rf"^{prefix}\d{{5}}$"))
-        .scalar()
-    )
-    return f"{prefix}{(max_seq or 0) + 1:05d}"
+    rows = db.query(Employee.employee_no).filter(
+        Employee.employee_no.like(f"{prefix}%")
+    ).all()
+    pat = re.compile(rf"^{re.escape(prefix)}(\d{{5}})$")
+    max_seq = max((int(m.group(1)) for (n,) in rows if (m := pat.match(n))), default=0)
+    return f"{prefix}{max_seq + 1:05d}"
 
 
 def check_cycle(db: Session, position_id: int, manager_id: int):

@@ -143,8 +143,11 @@ class CompanyShareholder(Base):
     """股权结构子表（v2.4）：0..N 股东，每行三来源互斥——内部公司 / 外部合作公司 / 自然人。"""
     __tablename__ = "company_shareholders"
     __table_args__ = (
+        # 三来源互斥（恰好其一非空）。可移植写法：布尔表达式求和 = 1，
+        # SQLite/PostgreSQL 通用（PG 专属函数 num_nonnulls 已弃用，v2.5 SQLite 切换）
         CheckConstraint(
-            "num_nonnulls(internal_company_id, external_company_id, person_name) = 1",
+            "((internal_company_id IS NOT NULL) + (external_company_id IS NOT NULL)"
+            " + (person_name IS NOT NULL)) = 1",
             name="ck_shareholder_source_exclusive",
         ),
         CheckConstraint(
