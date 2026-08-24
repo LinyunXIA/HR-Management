@@ -14,12 +14,17 @@ PASS = 0
 FAIL = 0
 
 
+_DEFAULT_TOKEN = {}
+
+
 def req(method, path, body=None, token=None, expect=None):
     url = BASE + path
     data = json.dumps(body).encode() if body is not None else None
     r = urllib.request.Request(url, data=data, method=method)
     if data:
         r.add_header("Content-Type", "application/json")
+    if token is None and _DEFAULT_TOKEN.get("v"):
+        token = _DEFAULT_TOKEN["v"]  # #78 后全部内部 GET 需认证，默认注入；显式传 "" 测未认证态
     if token:
         r.add_header("Authorization", f"Bearer {token}")
     try:
@@ -53,17 +58,22 @@ def main():
     section("S2 认证：登录与建号")
     _, login = req("POST", "/auth/login", {"username": "admin", "password": "admin123"}, expect=200)
     admin = login["access_token"]
+    _DEFAULT_TOKEN["v"] = admin
 
     # register-first 已移除
     code, _ = req("POST", "/auth/register-first", {"username": "x", "password": "123456"})
     check(code in (404, 405), f"register-first 已移除（{code}）")
-    # 未认证建号被拒
-    req("GET", "/admin/users", expect=401)
+    # /auth/register 遗留端点已移除（v2.4.3：建号统一走 /admin/users）
+    code, _ = req("POST", "/auth/register", {"username": "x", "password": "123456", "role": "hr"},
+                  token=admin)
+    check(code in (404, 405), f"/auth/register 已移除（{code}）")
+    # 未认证建号被拒（显式空 token 绕过默认注入）
+    req("GET", "/admin/users", expect=401, token="")
     # 建 hr 账号
     import random
     suffix = random.randint(1000, 9999)
     hr_name = f"hr_be_{suffix}"
-    req("POST", "/auth/register", {"username": hr_name, "password": "hr123456", "role": "hr"},
+    req("POST", "/admin/users", {"username": hr_name, "password": "hr123456", "role": "hr"},
         token=admin, expect=201)
     _, me = req("POST", "/auth/login", {"username": hr_name, "password": "hr123456"}, expect=200)
     hr = me["access_token"]
