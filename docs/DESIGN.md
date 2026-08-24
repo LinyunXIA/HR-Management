@@ -69,6 +69,7 @@ HR_Management/
 │   ├── orgchart.py         # 组织树构建 + 环检测
 │   ├── data_clean.py       # Org-Chart3.md 解析 + 清洗（仅 Org-Chart3 格式）
 │   ├── export_md.py        # 组织图导出 MD（3 格式）
+│   ├── benchmark.py        # 年度用工成本预估引擎（在岗判定/月折算/覆盖校验/报告计算，v2.6）
 │   ├── seed.py             # 主数据初始化 + 管理员种子 admin/admin123
 │   ├── import_csv.py       # Position.csv 解析/校验/入库
 │   └── routers/
@@ -81,6 +82,7 @@ HR_Management/
 │       ├── transfers.py    # 调岗
 │       ├── orgchart.py     # GET /org-charts
 │       ├── data_clean.py   # 数据清洗路由
+│       ├── benchmarks.py   # 外部基准对接：POST /benchmarks + GET /benchmarks/reports/{year}（v2.6）
 │       └── import_routes.py
 ├── static/
 │   ├── index.html          # 单页，Tab：数据清洗/主数据/岗位/员工/组织架构/导入 + 登录徽章
@@ -357,6 +359,8 @@ REST 规范：名词复数资源、HTTP 方法映射 CRUD（GET 查 / POST 建 /
 | GET | /org-charts | 组织树数据：{nodes, solid_edges, dotted_edges, roots} |
 | GET | /org-charts?report={org\|solid\|dotted} | 导出 Markdown（`Accept: text/markdown`） |
 | POST | /imports | 上传 Position.csv → 校验/幂等入库，返回报告 |
+| POST | /benchmarks | 外部基准包推送（v2.6，scope=benchmarks）：L1~L4 校验链整批原子，通过则整年替换 + 异步生成报告；报告**仅经 API 获取，无前端界面**（PRD F6 定稿） |
+| GET | /benchmarks/reports/{year} | 拉取年度预估报告（v2.6，scope=benchmarks）：ready/pending/failed；无数据 404 |
 
 ### 6.3 /org-charts 返回结构（供 SVG 渲染）
 
@@ -454,6 +458,7 @@ CLI：`python -m scripts.import_csv data/Position.csv`（首次 `--reset` 语义
 ## 9. 前端设计
 
 - **单页 + Tab**：数据清洗 / 主数据配置 / 岗位 / 员工 / 组织架构 / 导入；顶部显示库状态（岗位数、员工数）+ **环境徽章**（`#env-badge`，dev=绿/test=黄/prod=红 + 库文件名，读取后端注入的 `window.APP_ENV`/`window.APP_DB`，登录弹窗内同步显示当前环境防误登）+ 右侧登录徽章（`static/js/auth.js`）。
+- **年度用工成本预估无前端界面（v2.6 F6 定稿）**：基准包推送与预估报告**仅经 JWT API 消费**，不设 Tab/页面/导出入口——前端岗位/员工管理等页亦不展示年度预估结果。
 - **全局 fetch（`api.js`）**：自动携带 `Authorization: Bearer`，统一处理 `401`（弹登录）、`409`（乐观锁冲突）、`429`（限流）。
 - **登录态（`auth.js`）**：JWT 存 `localStorage:hr_token`，`GET /auth/me` 校验，`admin/admin123` 默认账号。
 - **主数据配置（master_data.js）**：左列表 + 右表单（或 Tab 页签），维护公司/级别/工作地点/工作范围/国家/法律强制/员工用工税额；用工税额按国家分组展示科目与税率。
@@ -713,6 +718,7 @@ SQLite 完全可支撑本项目的 LLM+Embedding 需求（91 岗位 + 万级员�
 - [x] `app/benchmark.py`：active_positions_in_year（日期交集）/ months_factor（含首尾自然月/12）/ coverage_missing（L4 与报告共用）/ compute_report / run_report_task。
 - [x] `app/routers/benchmarks.py`：POST 推送（L1~L4 整批原子 → 202 + BackgroundTasks）+ GET 报告（pending/ready/failed；报告行缺失自愈重算）。
 - [x] `API_SCOPES` += benchmarks、public.levels；`GET /public/levels` 字典端点。
+- [x] **输出形态定稿（PRD F6）**：报告**仅经 API 获取，无前端界面/Tab**——前端不设基准 Tab、岗位/员工页不展示年度预估结果（见 §9）。
 
 ### S4 测试
 - [x] `tests/test_benchmark.py` 28 项：鉴权矩阵 / L2·L3·L4 拒收 / 整年 replace / 公式与月折算 / pending→ready / public.levels。
