@@ -2,10 +2,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | v2.3 |
-| 更新日期 | 2026-08-23 |
-| 关联 | [PRD.md](./PRD.md)（v2.3，需求与决策） |
-| 目标版本 | V2.3 |
+| 文档版本 | v2.4 |
+| 更新日期 | 2026-08-26 |
+| 关联 | [PRD.md](./PRD.md)（v2.4，需求与决策） |
+| 目标版本 | V2.4 |
 
 ---
 
@@ -122,9 +122,28 @@ class UserCompany(Base):             # v2.3：hr ↔ 可管法人实体 多对�
     # admin 自带全司（无需记录）；hr 无记录则无任何可管实体
 
 # ---- 主数据字典（F0，均可维护）----
-class Company(Base):               # 隶属公司
+class Company(Base):               # 隶属公司（v2.4：开业/关闭日期 + 股权结构）
     __tablename__ = 'companies'
     id, name(unique), is_active
+    opening_date, closing_date     # Date 可空（v2.4）；closing_date 有值 ⇔ 关闭，与 is_active 联动
+                                   # （填关闭日自动置停用、清空恢复启用；年份精度按 YYYY-01-01 存）
+
+class ExternalCompany(Base):       # v2.4：外部合作公司（独立主数据，不在系统内设岗）
+    __tablename__ = 'external_companies'
+    id, name(unique), remark, is_active
+    # 仅作股权等关系引用；不出现在岗位「隶属公司」下拉
+
+class CompanyShareholder(Base):    # v2.4：股权结构子表（0..N 股东，三来源互斥）
+    __tablename__ = 'company_shareholders'
+    id, company_id FK companies            # 被持股方
+    internal_company_id FK companies ∅     ┐ 三选一（CHECK num_nonnulls(...)=1）
+    external_company_id FK external_companies ∅  │ 内部公司 / 外部合作公司 / 自然人
+    person_name String(255) ∅              ┘
+    ownership_pct Numeric(5,2) nullable    # 持股比例 %，可选；合计≠100% 前端软告警
+    sort_order Integer default 0
+    CHECK (internal_company_id IS NULL OR internal_company_id <> company_id)   # 拒自环
+    Unique(company_id, internal_company_id) / Unique(company_id, external_company_id)
+    # 应用层：沿内部股东链上溯环检测（A→B→A 拒绝），风格对齐 helpers.check_cycle
 
 class Country(Base):               # 国家/地区（Country 范围二级菜单）
     __tablename__ = 'countries'
@@ -229,7 +248,8 @@ class Employee(Base):              # 人员档案
 
 ### 4.2 约束与索引
 
-- 唯一约束：`position_numbers.number`、`companies.name`、`positions.name`、`employees.employee_no`、`levels.code`、`work_locations.name`、`scopes.code`、`legal_categories.name`、`users.username`。
+- 唯一约束：`position_numbers.number`、`companies.name`、`external_companies.name`（v2.4）、`positions.name`、`employees.employee_no`、`levels.code`、`work_locations.name`、`scopes.code`、`legal_categories.name`、`users.username`。
+- **股权结构约束（v2.4）**：`company_shareholders` 每行三来源互斥 `CHECK num_nonnulls(internal_company_id, external_company_id, person_name) = 1`；内部股东拒自环 `CHECK (internal_company_id IS NULL OR internal_company_id <> company_id)`；`Unique(company_id, internal_company_id)` / `Unique(company_id, external_company_id)`；应用层沿内部股东链环检测 + pct 合计软校验。
 - 岗位↔员工一对一：`employees.position_number_id` 设唯一约束（一个岗位至多 1 名在职员工）。
 - 删除保护：岗位有在职员工或已有 `position_events` 时禁止删除，仅允许状态关闭。主数据被岗位引用时禁止删除（可停用）。
 - 编号规则校验（v2.3）：编号由系统分配，格式仅校验 `P{seq}` / `PA{seq}` 纯序号；与 scope/country **解耦**（范围/国家存独立字段）。
@@ -566,5 +586,51 @@ CLI：`python -m scripts.import_csv data/Position.csv`（首次 `--reset` 语义
 - [x] 三环境：dev/test `--reset` 允许、prod 拦截；`.env` 三段切换（S0 阶段已验证）。
 - [x] `pg_dump` 备份（`data/backups/hr_db_prod_20260823_192018.dump`）。
 
-> **实施顺序建议**：S1 → S2 → S3 → S4（权限 & 转调/升职是最重、最影响接口面）→ S5（成本）→ S6（导入）→ S7（清洗/前端）→ S8（验证）。PRD/DESIGN 为本清单唯一事实源，开发中发现问题优先回写文档再改代码。
 
+
+---
+
+## 14. Phase v2.4 实施清单（公司主数据改造）
+
+> 依据 2026-08-26 决策（PRD §4 F0.1 / §5 / §8 / §10）。任一阶段跨 `models/schemas/routers/前端` 时先更新文档，保持 `create_all` 幂等 + `main.py` 兜底 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`。
+>
+> **2026-08-24 开发完成**。清理结果：dev 删 1 留 4（绑岗位跳过）、test/prod 各删 3；报告与备份见 `data/backups/companies_cleanup_20260824.json` / `hr_db_*_20260824_092230.dump`。实现备注：①`Company.shareholders` relationship 必须显式 `foreign_keys`（company_id/internal_company_id 双 FK 路径）；②股东 replace-all 需先清空旧行再插入（flush 顺序会撞 Unique）；③环检测在 replace-all flush 后基于全图 DFS。
+
+### S0 文档回写
+- [x] PRD：版本 v2.4；F0 表加「外部合作公司」行；新增 F0.1（开业/关闭日期、股权结构三来源、pct 软校验）；§5 数据模型补 `companies` 新列 + `external_companies` / `company_shareholders`；§8 版本规划 V2.4 定版；§10 追加 2026-08-26 决策。
+- [x] DESIGN：头部 v2.4；§4.1 模型补齐；§4.2 约束补股权 CHECK/Unique；本节 §14 新增。
+
+### S1 三库 companies 受控清理（2026-08-26 执行，绑岗位的跳过）
+- [x] `pg_dump` 三库备份至 `data/backups/hr_db_{env}_{ts}.dump`。
+- [x] 逐行判断删除：被岗位引用（`position_numbers.company_id / prev_company_id`）的公司**跳过保留**，未引用的 DELETE；输出 `{deleted[], skipped[]}` 报告留档。
+- [x] prod 走受控 SQL（不经系统 reset 护栏）；记录 `user_companies` 级联连带。
+
+### S2 数据模型与兜底迁移（`app/models.py` + `main.py`）
+- [x] `Company` 加 `opening_date / closing_date`（Date 可空）。
+- [x] 新增 `ExternalCompany`（name 唯一 / remark / is_active）。
+- [x] 新增 `CompanyShareholder`（三来源互斥 CHECK + 拒自环 CHECK + 双 Unique + pct + sort_order）。
+- [x] `main.py` 兜底迁移：companies 两列 `ADD COLUMN IF NOT EXISTS`；新表由 `create_all` 幂等创建。
+
+### S3 后端（`app/schemas.py` + `app/routers/master_data.py`）
+- [x] 公司 CRUD 从通用 `_crud` 拆出专用路由：GET 含 `shareholders[]`；POST/PATCH 股东行 replace-all；PATCH `closing_date ↔ is_active` 联动。
+- [x] 校验：内部股东拒自环（应用层友好报错 + DB CHECK 兜底）；沿内部股东链环检测（A→B→A 拒绝，对齐 `helpers.check_cycle` 风格）；pct 合计 ≠100% 仅返回 `warning` 不拦截。
+- [x] `/external-companies` 标准 CRUD；DELETE 前检查被股东行引用 → 400。
+- [x] CSV 导入链路零改动（自动建档仅填 name，新字段可空）。
+
+### S4 前端（`static/js/master_data.js`）
+- [x] 左侧菜单加「外部合作公司」（普通 `_crud` 配置）。
+- [x] 「隶属公司」专用渲染：列表列=名称/开业日/关闭日/股东摘要/状态；表单弹窗内嵌股东编辑器子表格（行内来源类型下拉〔内部公司∣外部公司∣自然人〕→动态渲染对应输入、内部公司排除自身、比例输入、增删行）；合计≠100% 黄条告警可保存。
+- [x] `App.loadDicts()` 预加载 `/external-companies`。
+
+### S5 验证
+- [x] curl 冒烟：三种来源股东各建一遍；自环 400；A/B 互持 400；pct 合计 99% 带 warning 保存成功；删被引用外部公司 400；closing_date↔is_active 联动生效。
+- [x] 三环境启动冒烟：dev 老 5 家公司新列为 NULL 正常展示；test/prod companies 已清空确认。
+
+### S6 反馈修复（2026-08-24 第二轮，v2.4.1）
+- [x] 股东行默认来源智能化：首家公司（系统内无其他公司可选）新增股东行默认「自然人」（家族自然人顶层场景）；文本输入改 oninput 即时同步。
+- [x] 隶属公司删除：软删改**物理删除** + 引用校验（岗位 company_id/prev_company_id、股权内部股东行、转调目标 target_company_id、HR 绑定 user_companies 任一引用 → 400）；前端加「删除」键。
+- [x] 外部合作公司弃用「启用」开关，改**开业/关闭日期管理**（closing_date ↔ is_active 联动，同隶属公司）；`external_companies` 加两列 + main.py 兜底迁移；前端专用面板/表单替换通用 _crud。
+- [x] 公司关闭前置校验：设置 closing_date 时名下全部岗位须为 Closed（`_assert_company_closable`），否则 400。
+- [x] 岗位管理「隶属公司」下拉排除已关闭公司（新建不可选；编辑保留当前值并标注「已关闭」）。
+
+> **实施顺序建议**：S1 → S2 → S3 → S4（权限 & 转调/升职是最重、最影响接口面）→ S5（成本）→ S6（导入）→ S7（清洗/前端）→ S8（验证）。PRD/DESIGN 为本清单唯一事实源，开发中发现问题优先回写文档再改代码。

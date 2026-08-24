@@ -83,11 +83,12 @@ function openModal(html, opts = {}) {
 function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
 
 function toast(msg, type = 'error') {
+  const bg = { error: '#d64545', ok: '#2e9e5b', warn: '#d9a406' }[type] || '#d64545';
   const el = document.createElement('div');
-  el.style.cssText = `position:fixed;top:70px;right:24px;z-index:200;padding:10px 16px;border-radius:8px;background:${type==='error'?'#d64545':'#2e9e5b'};color:#fff;box-shadow:0 4px 16px rgba(0,0,0,.2);font-size:13px;`;
+  el.style.cssText = `position:fixed;top:70px;right:24px;z-index:200;padding:10px 16px;border-radius:8px;background:${bg};color:#fff;box-shadow:0 4px 16px rgba(0,0,0,.2);font-size:13px;max-width:380px;`;
   el.textContent = msg;
   document.body.appendChild(el);
-  setTimeout(() => el.remove(), 3200);
+  setTimeout(() => el.remove(), 4200);
 }
 
 /* 乐观锁冲突统一文案（后端 409 detail 已含版本信息时优先展示后端消息） */

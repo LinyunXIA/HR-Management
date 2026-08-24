@@ -92,12 +92,71 @@ class CostMode(str, enum.Enum):
 
 # ---------------------------------------------------------------- 表
 class Company(Base):
-    """隶属公司（法人实体，软删除：is_active=False 为 Closed）。"""
+    """隶属公司（法人实体，软删除：is_active=False 为 Closed）。
+
+    v2.4：开业/关闭日期 + 股权结构（CompanyShareholder 子表，三来源互斥）。
+    closing_date 有值 ⇔ 公司关闭（与 is_active 联动，见 routers/master_data.py）。
+    """
     __tablename__ = "companies"
 
     id = Column(Integer, primary_key=True)
     name = Column(String(255), unique=True, nullable=False)
     is_active = Column(Boolean, nullable=False, default=True)  # True=opened, False=closed（软删除，id 保留）
+    opening_date = Column(Date, nullable=True)   # v2.4 开业日期（年份精度按 YYYY-01-01 存）
+    closing_date = Column(Date, nullable=True)   # v2.4 关闭日期；有值视为关闭
+
+    shareholders = relationship(
+        "CompanyShareholder", cascade="all, delete-orphan",
+        order_by="CompanyShareholder.sort_order", backref="company",
+        # 双外键路径（company_id / internal_company_id）必须显式指定，否则 AmbiguousForeignKeys
+        foreign_keys="CompanyShareholder.company_id",
+    )
+
+
+class ExternalCompany(Base):
+    """外部合作公司（v2.4）：不在系统内设岗、仅作股权等关系引用的外部法人实体。
+
+    v2.4.1：启停改由关闭日期管理（closing_date 有值 ⇔ 关闭），与隶属公司一致；
+    不再使用手工「启用」开关（is_active 保留为派生字段）。
+    """
+    __tablename__ = "external_companies"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(255), unique=True, nullable=False)
+    remark = Column(Text, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    opening_date = Column(Date, nullable=True)
+    closing_date = Column(Date, nullable=True)
+
+
+class CompanyShareholder(Base):
+    """股权结构子表（v2.4）：0..N 股东，每行三来源互斥——内部公司 / 外部合作公司 / 自然人。"""
+    __tablename__ = "company_shareholders"
+    __table_args__ = (
+        CheckConstraint(
+            "num_nonnulls(internal_company_id, external_company_id, person_name) = 1",
+            name="ck_shareholder_source_exclusive",
+        ),
+        CheckConstraint(
+            "internal_company_id IS NULL OR internal_company_id <> company_id",
+            name="ck_shareholder_no_self_loop",
+        ),
+        UniqueConstraint("company_id", "internal_company_id",
+                         name="uq_shareholder_internal"),
+        UniqueConstraint("company_id", "external_company_id",
+                         name="uq_shareholder_external"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    internal_company_id = Column(Integer, ForeignKey("companies.id"), nullable=True)          # 内部公司股东
+    external_company_id = Column(Integer, ForeignKey("external_companies.id"), nullable=True)  # 外部合作公司股东
+    person_name = Column(String(255), nullable=True)                                          # 自然人股东
+    ownership_pct = Column(Numeric(5, 2), nullable=True)  # 持股比例 %（可选；合计≠100% 前端软告警）
+    sort_order = Column(Integer, nullable=False, default=0)
+
+    internal_company = relationship("Company", foreign_keys=[internal_company_id])
+    external_company = relationship("ExternalCompany")
 
 
 class Country(Base):

@@ -7,6 +7,14 @@ const Positions = {
   _managers: [],       // 管理岗（直线/虚线经理下拉，仅管理岗）
   _all: [],
 
+  /* 隶属公司下拉（v2.4.1）：已关闭公司不可挂新岗；编辑时保留当前所属公司以维持原值 */
+  companyOptions(selectedId) {
+    return App.companies
+      .filter((c) => c.is_active || c.id === selectedId)
+      .map((c) => `<option value="${c.id}" ${c.id === selectedId ? 'selected' : ''}>${esc(c.name)}${c.is_active ? '' : '（已关闭）'}</option>`)
+      .join('');
+  },
+
   /* 手动流转白名单（与后端 ALLOWED_MANUAL 一致；filled/vacant 由员工动作触发） */
   TRANSITIONS: {
     planned: ['open', 'closed', 'frozen'],
@@ -111,8 +119,8 @@ const Positions = {
             <input type="text" id="pc-posname" list="posfn-list" placeholder="输入或选择职位名">
             <datalist id="posfn-list">${App.functions.map((f) => `<option value="${esc(f.name)}">`).join('')}</datalist>
           </div>
-          <div class="field"><label>隶属公司 *</label>
-            <select id="pc-company">${App.companies.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
+          <div class="field"><label>隶属公司 *（已关闭公司不可选）</label>
+            <select id="pc-company">${this.companyOptions()}</select>
           </div>
           <div class="field"><label>级别</label>
             <select id="pc-level"><option value="">—</option>${App.levels.map((l) => `<option value="${esc(l.code)}">${esc(l.code)}${l.label ? ' · ' + esc(l.label) : ''}${l.is_management ? '（管理岗）' : ''}</option>`).join('')}</select>
@@ -289,8 +297,8 @@ const Positions = {
             <input type="text" id="pe-posname" list="posfn-list" value="${esc(p.position_name)}">
             <datalist id="posfn-list">${App.functions.map((f) => `<option value="${esc(f.name)}">`).join('')}</datalist>
           </div>
-          <div class="field"><label>隶属公司</label>
-            <select id="pe-company">${App.companies.map((c) => `<option value="${c.id}" ${c.id === p.company_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
+          <div class="field"><label>隶属公司（已关闭公司不可改选）</label>
+            <select id="pe-company">${this.companyOptions(p.company_id)}</select>
           </div>
           <div class="field"><label>级别</label>
             <select id="pe-level"><option value="">—</option>${App.levels.map((l) => `<option value="${esc(l.code)}" ${l.code === p.level ? 'selected' : ''}>${esc(l.code)}${l.label ? ' · ' + esc(l.label) : ''}</option>`).join('')}</select>
