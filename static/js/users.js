@@ -41,8 +41,18 @@ const Users = {
     document.getElementById('btn-add-user').onclick = () => this.create();
   },
 
+  async _fetchScopes() {
+    /* API 权限注册表动态拉取（单一事实源 = 后端 API_SCOPES，v2.6 R2） */
+    try { return await get('/admin/scopes'); }
+    catch (_) { return []; }
+  },
+
   async create() {
     const companies = App._allCompanies || [];
+    const scopes = await this._fetchScopes();
+    const scopeBoxes = scopes.map((s) =>
+      `<label><input type="checkbox" value="${esc(s.key)}"> ${esc(s.label)}</label>`).join('')
+      || '<i>（scope 注册表加载失败）</i>';
     openModal(`
       <h3>建号</h3>
       <div class="field"><label>用户名 *</label><input id="nu-name"></div>
@@ -55,10 +65,7 @@ const Users = {
           <option value="api">外部 API 用户（数据权限 + API 权限 结合）</option>
         </select></div>
       <div class="field" id="nu-apis-wrap" style="display:none"><label>API 权限（可多选）</label>
-        <div style="display:flex;flex-direction:column;gap:4px">
-          <label><input type="checkbox" value="auth.login"> 认证（登录换取 JWT）</label>
-          <label><input type="checkbox" value="public.companies"> 获取隶属公司列表</label>
-        </div></div>
+        <div style="display:flex;flex-direction:column;gap:4px">${scopeBoxes}</div></div>
       <div class="field"><label>可管实体（Ctrl 多选，数据权限→实体）</label>
         <select id="nu-companies" multiple size="${Math.min(6, companies.length)}">
           ${companies.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}
@@ -90,10 +97,7 @@ const Users = {
     const users = await get('/admin/users');
     const u = users.items.find((x) => x.id === id);
     if (!u) return;
-    const SCOPES = [
-      { key: 'auth.login', label: '认证（登录换取 JWT）' },
-      { key: 'public.companies', label: '获取隶属公司列表' },
-    ];
+    const SCOPES = await this._fetchScopes();
     const current = new Set((u.apis || []).map((a) => a.key));
     openModal(`
       <h3>API 权限 — ${esc(u.username)}（外部 API 用户）</h3>

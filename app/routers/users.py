@@ -56,6 +56,12 @@ def list_admin_users(current: User = Depends(require_admin), db: Session = Depen
     return {"total": len(users), "items": [_serialize_user(db, u) for u in users]}
 
 
+@router.get("/admin/scopes")
+def list_api_scopes(_admin: User = Depends(require_admin)):
+    """对外 API 权限注册表（单一事实源 = app/auth.py::API_SCOPES），供用户管理页动态渲染复选框。"""
+    return [{"key": k, "label": v} for k, v in API_SCOPES.items()]
+
+
 @router.post("/admin/users", status_code=201)
 @limiter.limit("5/minute")
 def create_user(request: Request, payload: AdminUserCreate, response: Response,

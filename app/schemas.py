@@ -38,6 +38,8 @@ class CompanyOut(BaseModel):
     is_active: bool
     opening_date: date | None = None
     closing_date: date | None = None
+    tax_zone_id: int | None = None        # v2.6 R1：公司所绑税区（成本键）
+    tax_zone_label: str | None = None     # 序列化时填充：国家·城市（级别）
     shareholders: list[CompanyShareholderOut] = []
 
 
@@ -241,6 +243,7 @@ class CompanyCreate(BaseModel):
     is_active: bool | None = True
     opening_date: date | None = None
     closing_date: date | None = None
+    tax_zone_id: int | None = None   # v2.6 R1：公司所绑税区（一对一，全部成本场景统一口径）
     shareholders: list[CompanyShareholderIn] | None = None
 
 
@@ -249,6 +252,7 @@ class CompanyUpdate(BaseModel):
     is_active: bool | None = None
     opening_date: date | None = None
     closing_date: date | None = None
+    tax_zone_id: int | None = None   # v2.6 R1；显式 null = 解绑
     # 股东行整组 replace-all：None=不改动；[] = 清空全部
     shareholders: list[CompanyShareholderIn] | None = None
 

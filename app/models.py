@@ -106,15 +106,19 @@ class Company(Base):
 
     v2.4：开业/关闭日期 + 股权结构（CompanyShareholder 子表，三来源互斥）。
     closing_date 有值 ⇔ 公司关闭（与 is_active 联动，见 routers/master_data.py）。
+    v2.6 R1：绑定税区（一对一）——全部成本场景（F1.6 自动计算/对外数据导出）
+    统一以「公司所绑税区」为成本键，不再经工作地点解析。
     """
     __tablename__ = "companies"
 
     id = Column(Integer, primary_key=True)
     name = Column(String(255), unique=True, nullable=False)
     is_active = Column(Boolean, nullable=False, default=True)  # True=opened, False=closed（软删除，id 保留）
-    opening_date = Column(Date, nullable=True)   # v2.4 开业日期（年份精度按 YYYY-01-01 存）
+    opening_date = Column(Date, nullable=True)   # v2.4 开业日期（年份精度按 YYYY-01-01 存；NULL 视为未知在营）
     closing_date = Column(Date, nullable=True)   # v2.4 关闭日期；有值视为关闭
+    tax_zone_id = Column(Integer, ForeignKey("tax_zones.id"), nullable=True)  # v2.6 R1：公司所绑税区
 
+    tax_zone = relationship("TaxZone")
     shareholders = relationship(
         "CompanyShareholder", cascade="all, delete-orphan",
         order_by="CompanyShareholder.sort_order", backref="company",
@@ -523,42 +527,6 @@ class Employee(Base):
     position = relationship("PositionNumber")
     target_company = relationship("Company")
 
-
-class LaborBenchmark(Base):
-    """外部用工成本基准包（v2.6，整年快照行）。
-
-    外部系统按我方 schema 经 POST /benchmarks 推送，整批原子、整年替换
-    （最后一次提交为准）。匹配键 = (year, company_id, level, country_id,
-    work_location)，与岗位同名字段全等值精确对应（PRD §4 F6）。
-    """
-    __tablename__ = "labor_benchmarks"
-    __table_args__ = (
-        UniqueConstraint("year", "company_id", "level", "country_id", "work_location",
-                         name="uq_labor_benchmarks_key"),
-    )
-
-    id = Column(Integer, primary_key=True)
-    year = Column(Integer, nullable=False)
-    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
-    level = Column(String(20), nullable=False)                 # levels.code（如 M8a）
-    country_id = Column(Integer, ForeignKey("countries.id"), nullable=False)
-    work_location = Column(String(255), nullable=False)        # work_locations.name
-    salary_before_tax = Column(Numeric(14, 2), nullable=False)  # 税前（年薪）
-    tax_rate = Column(Numeric(7, 4), nullable=False, default=0)     # 强制税率 %
-    mandatory_fixed_fee = Column(Numeric(14, 2), nullable=False, default=0)  # 强制定额扣费
-    created_at = Column(DateTime, default=_now)
-
-    company = relationship("Company")
-    country = relationship("Country")
-
-
-class BenchmarkReport(Base):
-    """年度用工成本预估报告（v2.6）：一年一份最新结果，推送后异步生成覆盖。"""
-    __tablename__ = "benchmark_reports"
-
-    id = Column(Integer, primary_key=True)
-    year = Column(Integer, unique=True, nullable=False)
-    status = Column(String(20), nullable=False, default="pending")  # pending|ready|failed
-    payload = Column(Text, nullable=True)          # 报告 JSON（公司汇总 + 岗位明细 + 缺失清单）
-    error_count = Column(Integer, nullable=False, default=0)
-    generated_at = Column(DateTime, nullable=True)
+# v2.6 第二轮修订：原「外部基准对接」LaborBenchmark / BenchmarkReport 两表已整体退役
+# （计算权移交第三方，我方改为对外提供 GET /public/positions 岗位数据导出），
+# 模型声明删除；存量表由 main.py 幂等迁移 DROP（dev/test 自动，prod 走受控 SQL）。
