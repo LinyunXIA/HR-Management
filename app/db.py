@@ -3,19 +3,21 @@
 支持三环境 DB 隔离（PRD §7D）：
 
 - 环境变量 `APP_ENV=dev|test|prod`（大小写不敏感，默认 dev）
-- 同机不同库强制 `hr_db_{env}`，库名与 APP_ENV 不一致时拒绝启动
+- SQLite 同机三文件隔离，文件名强制 `hr_db_{env}.db`，与 APP_ENV 不一致时拒绝启动
 - 加载优先级：
-  1) 显式 `DATABASE_URL`（shell / 当前进程已设） → 直接使用，但需通过库名校验
+  1) 显式 `DATABASE_URL`（shell / 当前进程已设） → 直接使用，但需通过文件名校验
   2) 未设 → 按 APP_ENV 加载 `.env.{env}` / `.env` 后取 DATABASE_URL
-  3) 仍无 → 拼默认 `postgresql://postgres:postgres@localhost:5432/hr_db_{env}`
+  3) 仍无 → 拼默认 `sqlite:///{PROJECT_ROOT}/data/hr_db_{env}.db`
+- 每连接自动注入 PRAGMA：foreign_keys=ON（SQLite 默认关闭外键！）、WAL、busy_timeout
 - `assert_writable()` 用于 prod 环境下拦截破坏性操作（drop_all / --reset）
-- 启动时打印 APP_ENV 与脱敏后的连接串，便于运维核对
+- 启动时打印 APP_ENV 与数据库文件路径，便于运维核对
 """
 import os
 from pathlib import Path
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import unquote, urlparse, urlunparse
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 # ---------------------------------------------------------------- 配置
@@ -80,7 +82,7 @@ def _load_env_file(env: str) -> list[str]:
             if not k:
                 continue
             # 去引号后暂不展开 ${VAR}，延迟到 _resolve 阶段统一展开，
-            # 以支持 .env 内 DATABASE_URL_prod 引用 ${POSTGRES_PASSKEY} 且该变量在 shell 后设的场景
+            # 以支持 .env 内 DATABASE_URL_{env} 引用 shell 变量（如密码）且该变量后设的场景
             v = _strip_quotes(v)
             if k not in os.environ:
                 # 先存原始值，带 ${} 的稍后展开
@@ -137,19 +139,24 @@ def get_app_env() -> str:
 
 
 def _validate_database_url(database_url: str, app_env: str) -> str:
-    """校验 DATABASE_URL 库名 == hr_db_{app_env}；不一致拒绝启动。"""
-    expected = f"hr_db_{app_env}"
+    """校验 DATABASE_URL：必须为 SQLite 文件库，文件名 == hr_db_{env}.db；不一致拒绝启动。"""
+    expected = f"hr_db_{app_env}.db"
     parsed = urlparse(database_url)
-    db_name = (parsed.path or "").lstrip("/")
-    # 去掉可能的查询串/片段影响
-    if not db_name:
+    if parsed.scheme != "sqlite":
         raise RuntimeError(
-            f"DATABASE_URL 缺少数据库名（APP_ENV={app_env}，期望 {expected}）"
+            f"DATABASE_URL 仅支持 SQLite（sqlite:///...），当前 scheme={parsed.scheme!r}。"
+            f"三环境文件名强制 hr_db_{{env}}.db，与 APP_ENV={app_env!r} 对应，参见 PRD §7D。"
+        )
+    db_name = Path(unquote(parsed.path or "")).name
+    if not db_name or db_name == ":memory:":
+        raise RuntimeError(
+            f"DATABASE_URL 缺少数据库文件名（APP_ENV={app_env}，期望 {expected}）；"
+            f"内存库 :memory: 不支持三环境隔离，禁止使用"
         )
     if db_name != expected:
         raise RuntimeError(
             f"DATABASE_URL 库名 {db_name!r} 与 APP_ENV={app_env!r} 不一致"
-            f"（应为 {expected!r}）。三环境库名强制 hr_db_{{env}}，参见 PRD §7D。"
+            f"（应为 {expected!r}）。三环境文件名强制 hr_db_{{env}}.db，参见 PRD §7D。"
         )
     return db_name
 
@@ -167,11 +174,26 @@ def _sanitize_url(database_url: str) -> str:
 
 
 def _default_url(app_env: str) -> str:
-    user = os.environ.get("DB_USER", "postgres")
-    pwd = os.environ.get("DB_PASSWORD", "postgres")
-    host = os.environ.get("DB_HOST", "localhost")
-    port = os.environ.get("DB_PORT", "5432")
-    return f"postgresql://{user}:{pwd}@{host}:{port}/hr_db_{app_env}"
+    """默认 SQLite 文件库：{PROJECT_ROOT}/data/hr_db_{env}.db（绝对路径，任意 cwd 可运行）。"""
+    data_dir = PROJECT_ROOT / "data"
+    return f"sqlite:///{data_dir / f'hr_db_{app_env}.db'}"
+
+
+def _absolutize_sqlite_url(url: str) -> str:
+    """把 SQLite 相对路径规范化为项目根绝对路径（任意 cwd 启动行为一致）。
+
+    sqlite:///./data/x.db（相对）→ sqlite:////{PROJECT_ROOT}/data/x.db；
+    绝对路径 / 内存库原样返回。
+    """
+    u = make_url(url)
+    if u.drivername.startswith("sqlite"):
+        db_path = u.database
+        if db_path and db_path != ":memory:":
+            p = Path(db_path)
+            if not p.is_absolute():
+                u = u.set(database=str(PROJECT_ROOT / p))
+                url = str(u)
+    return url
 
 
 def _resolve_database_url() -> tuple[str, str, list[str]]:
@@ -192,10 +214,11 @@ def _resolve_database_url() -> tuple[str, str, list[str]]:
         per_env_val = os.environ.get(per_env_key, "").strip()
         if per_env_val:
             url = _expand_env(per_env_val)
-            # 将解析后的 URL 同步为 DATABASE_URL，便于后续代码/日志一致
-            os.environ["DATABASE_URL"] = url
         else:
             url = _default_url(app_env)
+    url = _absolutize_sqlite_url(url)
+    # 将解析后的 URL 同步为 DATABASE_URL，便于后续代码/日志一致
+    os.environ["DATABASE_URL"] = url
     _validate_database_url(url, app_env)
     return url, app_env, loaded
 
@@ -205,7 +228,55 @@ DATABASE_URL, APP_ENV, LOADED_ENV_FILES = _resolve_database_url()
 SAFE_DATABASE_URL = _sanitize_url(DATABASE_URL)
 
 # ---------------------------------------------------------------- 引擎
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+# SQLite 文件的父目录必须存在（sqlite3 不自动建目录）
+_db_file = Path(make_url(DATABASE_URL).database or "")
+if _db_file and _db_file != Path(":memory:"):
+    _db_file.parent.mkdir(parents=True, exist_ok=True)
+
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    # FastAPI 同步端点跑在线程池：允许跨线程复用连接；写锁等待 30s（配合 busy_timeout）
+    connect_args={"check_same_thread": False, "timeout": 30},
+)
+
+
+@event.listens_for(engine, "connect")
+def _set_sqlite_pragma(dbapi_conn, _record):
+    """每个新连接注入 PRAGMA 与事务模式。
+
+    - foreign_keys=ON：SQLite 默认**不启用**外键约束，必须显式打开，
+      否则 FK / ON DELETE CASCADE / 引用完整性全部失效（关键！）
+    - journal_mode=WAL：读写不互斥，并发读性能好
+    - busy_timeout：写锁冲突时等待而非立即报 database is locked
+    - synchronous=NORMAL：WAL 下的推荐安全档位
+    - isolation_level=None：关闭 pysqlite 隐式事务管理，改由下方 begin
+      事件显式开启事务（SQLAlchemy 官方配方）
+    """
+    cur = dbapi_conn.cursor()
+    cur.execute("PRAGMA foreign_keys=ON")
+    cur.execute("PRAGMA journal_mode=WAL")
+    cur.execute("PRAGMA busy_timeout=30000")
+    cur.execute("PRAGMA synchronous=NORMAL")
+    cur.close()
+    # 延迟到 cursor 关闭后设置：交给 SQLAlchemy 的 begin 事件管理事务边界
+    dbapi_conn.isolation_level = None
+
+
+@event.listens_for(engine, "begin")
+def _tx_begin_immediate(conn):
+    """事务统一以 BEGIN IMMEDIATE 开启（v2.5 并发语义修复）。
+
+    pysqlite 遗留模式下 SELECT 不开事务（autocommit 读），
+    「先 SELECT 守卫、后 UPDATE 写入」的竞态窗口会双双放行
+    （如两 HR 同时认领同一空闲岗 → [200,200] 一人双岗）。
+    BEGIN IMMEDIATE 让写锁在事务首条语句（含守卫 SELECT）前取得，
+    后到者阻塞（busy_timeout 内等待），拿到锁后读到已提交的新状态
+    ——与 PostgreSQL `SELECT … FOR UPDATE` 行锁守卫语义等价。
+    """
+    conn.exec_driver_sql("BEGIN IMMEDIATE")
+
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -228,7 +299,8 @@ def assert_writable(operation: str = "破坏性操作") -> None:
     if APP_ENV == "prod":
         raise RuntimeError(
             f"[FATAL] APP_ENV=prod 禁止{operation}。\n"
-            f"  生产重置必须走线下备份+受控迁移：先 pg_dump hr_db_prod，再手工 SQL 恢复。\n"
+            f"  生产重置必须走线下备份+受控迁移：先复制 data/hr_db_prod.db 备份"
+            f"（含 -wal/-shm 伴生文件，或先 PRAGMA wal_checkpoint(TRUNCATE)），再手工恢复。\n"
             f"  本系统不提供 prod 库清空入口（PRD §7D.3）。"
         )
 

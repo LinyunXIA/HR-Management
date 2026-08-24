@@ -2,10 +2,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | v2.4（公司主数据改造：开业/关闭日期、股权结构（三来源股东）、外部合作公司独立主数据、三库 companies 受控清理） |
-| 更新日期 | 2026-08-26 |
+| 文档版本 | v2.5（存储底座切换：PostgreSQL → SQLite 同机三文件；主数据一次性迁移；LLM+Embedding 扩展能力确认） |
+| 更新日期 | 2026-08-24 |
 | 状态 | 草案 |
-| 目标版本 | V2.4 |
+| 目标版本 | V2.5 |
 
 ---
 
@@ -30,13 +30,13 @@ Position.csv 模版文件（编号列填临时 T 占位；迭代导入带正式 
 3. **组织架构图 / 汇报线**：以岗位为节点生成**汇报线树**，正确展示直线（Solid-line）与虚线（Dotted-line）汇报关系。
 
 ### 1.2 目标
-- Web 界面操作，**PostgreSQL** 作为持久化存储，一条命令启动。
+- Web 界面操作，**SQLite**（标准库内置，零部署）作为持久化存储，一条命令启动。
 - 数据来源为 Org-Chart 原始文件，通过清洗模块转换为标准 CSV 后导入系统。
 - 岗位状态变化全程可追溯（生命周期事件时间线）。
 - 组织架构图以岗位汇报关系为准，真实反映报告线。
 - 外部 API 采用 JWT 认证，确保访问安全。
 - 支持并发编辑，冲突时采用合理的版本控制策略。
-- 开发/测试/生产三环境数据库物理隔离，同机不同库 `hr_db_{env}`，开发操作不可影响生产（见 §7D）。
+- 开发/测试/生产三环境数据库物理隔离，同机不同文件 `data/hr_db_{env}.db`，开发操作不可影响生产（见 §7D）。
 
 ### 1.3 非目标（V1 明确不做）
 - 多租户、复杂权限；复杂审批流；薪资、考勤、绩效、招聘全流程、社保。
@@ -460,13 +460,13 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 | 层 | 选型 | 说明 |
 | --- | --- | --- |
 | 后端 | Python 3.14 + FastAPI | REST API |
-| 存储 | **PostgreSQL 同机三库 `hr_db_dev` / `hr_db_test` / `hr_db_prod` 隔离，见 §7D** | 持久化关系型数据库，按 `APP_ENV=dev/test/prod` 选择库 |
+| 存储 | **SQLite 同机三文件 `data/hr_db_dev.db` / `hr_db_test.db` / `hr_db_prod.db` 隔离，见 §7D** | 标准库内置零部署，按 `APP_ENV=dev/test/prod` 选择文件（WAL + 每连接 `PRAGMA foreign_keys=ON`，`app/db.py:1`） |
 | ORM/Schema | SQLAlchemy + Pydantic v2 | 选用兼容 Python 3.14 的版本 |
 | 前端 | 原生 JS + 轻量 Org Chart 渲染 | 无构建步骤、无 npm |
 | 认证 | **JWT** | 外部 API 访问安全 |
 | 并发控制 | **乐观锁（版本号）** | 多人同时编辑同一条数据的冲突处理 |
 
-前端页面：**数据清洗**、**主数据配置**、岗位管理（含生命周期时间线 + 成本字段）、员工管理、组织架构图（汇报线树 + 导出 MD）、数据导入。启动时按 `APP_ENV` 选择对应库（`hr_db_{env}`）。
+前端页面：**数据清洗**、**主数据配置**、岗位管理（含生命周期时间线 + 成本字段）、员工管理、组织架构图（汇报线树 + 导出 MD）、数据导入。启动时按 `APP_ENV` 选择对应库文件（`hr_db_{env}.db`）。
 
 ---
 
@@ -474,8 +474,8 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 - **轻量**：依赖少、启动快（秒级）、无构建步骤、无数据库服务。
 - **性能**：91 岗位 + 万级员工量级下操作流畅（分页、图表渲染可控）。
 - **可维护**：状态机与编号规则独立成模块，便于规则调整。
-- **数据安全**：PostgreSQL 备份；关键变更写历史表可追溯。
-- **环境隔离**：同机三库 `hr_db_dev` / `hr_db_test` / `hr_db_prod` 物理隔离，`dev`/`test` 任意清空/重置不影响 `hr_db_prod`（见 §7D）。
+- **数据安全**：SQLite `.db` 文件复制备份（连同 `-wal/-shm` 或先 wal_checkpoint）；关键变更写历史表可追溯。
+- **环境隔离**：同机三文件 `hr_db_dev.db` / `hr_db_test.db` / `hr_db_prod.db` 物理隔离，`dev`/`test` 任意清空/重置不影响 `hr_db_prod`（见 §7D）。
 
 ---
 
@@ -511,7 +511,7 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 - 密码使用 bcrypt 哈希存储（`app/auth.py:29`，`PyJWT/bcrypt`）。
 - API 请求速率限制（`app/limiter.py:1` + `main.py:1`，`slowapi`；全局 `120/min` / IP，登录 `10/min` / 建号 `5/min` / 公共 `60/min`，超限 `429`）。
 - 输入校验：所有接口输入均经过 Pydantic 校验，防止注入。
-- PostgreSQL 连接使用参数化查询（SQLAlchemy ORM 天然支持），防 SQL 注入。
+- 数据库访问使用参数化查询（SQLAlchemy ORM 天然支持），防 SQL 注入。
 
 ---
 
@@ -533,36 +533,35 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 
 ---
 
-## 7D. 多环境与数据库隔离（dev / test / prod）
+## 7D. 多环境与数据库隔离（dev / test / prod，v2.5 SQLite 三文件）
 
 ### 7D.1 环境与命名
 - 三环境取值固定：`APP_ENV=dev|test|prod`（默认 `dev`），大小写不敏感。
-- 同机不同库，库名强制 `hr_db_{env}`：`hr_db_dev` / `hr_db_test` / `hr_db_prod`，禁止自定义库名/复用同一库。
-- 同一 PostgreSQL 实例内三库并存，账号可共用但生产建议独立最小权限账号。
+- 同机不同**文件**，文件名强制 `hr_db_{env}.db`：`data/hr_db_dev.db` / `hr_db_test.db` / `hr_db_prod.db`，禁止自定义文件名/复用同一文件；`.env` 相对路径基于项目根规范化（任意 cwd 启动行为一致）。
+- SQLite 每连接自动注入 `PRAGMA foreign_keys=ON`（外键默认关闭，必须显式开启）+ `journal_mode=WAL` + `busy_timeout=30s`（`app/db.py` event listener）。
 
 ### 7D.2 配置与文件约定（合并版，`app/db.py:1`）
-- 环境变量：`APP_ENV`（环境）+ `DATABASE_URL` / `DATABASE_URL_{env}`（连接串，库名必须与 `APP_ENV` 一致）。
-- **单文件 `.env` 合并版**（`app/db.py:55`，`DATABASE_URL_{dev,test,prod}` 三段 + `APP_ENV` 切换，旧的 `.env.test`/`.env.prod` 仍兼容）：
+- 环境变量：`APP_ENV`（环境）+ `DATABASE_URL` / `DATABASE_URL_{env}`（sqlite URL，文件名必须为 `hr_db_{env}.db`）。
+- **单文件 `.env` 合并版**（`DATABASE_URL_{dev,test,prod}` 三段 + `APP_ENV` 切换，旧的 `.env.test`/`.env.prod` 仍兼容）：
   ```ini
   APP_ENV=dev
-  DATABASE_URL_dev=postgresql://postgres:postgres@localhost:5432/hr_db_dev
-  DATABASE_URL_test=postgresql://postgres:postgres@localhost:5432/hr_db_test
-  DATABASE_URL_prod=postgresql://postgres:${POSTGRES_PASSKEY}@localhost:5432/hr_db_prod
-  # 密码等敏感信息通过 ${POSTGRES_PASSKEY} 引用 shell 变量（启动前 export）
+  DATABASE_URL_dev=sqlite:///./data/hr_db_dev.db
+  DATABASE_URL_test=sqlite:///./data/hr_db_test.db
+  DATABASE_URL_prod=sqlite:///./data/hr_db_prod.db
   # 也可直接设 DATABASE_URL=... 强制覆盖（优先级更高）
   ```
-  `.env` 单文件内含三环境，`DATABASE_URL_{env}` 按 `APP_ENV` 自动选择；`.env.example` 为模版（含 JWT/limiter 示例）。
-- 加载优先级：`DATABASE_URL` 显式值优先（含 `${POSTGRES_PASSKEY}` 展开）；否则取 `DATABASE_URL_{env}` 并展开；否则按 `APP_ENV` 拼默认 URL；`APP_ENV` 未设时回退 `dev`。
-- 启动自检：打印 `APP_ENV` 与脱敏后库名；若 `DATABASE_URL` 库名与 `APP_ENV` 不一致则拒绝启动。
+- 加载优先级：`DATABASE_URL` 显式值优先；否则取 `DATABASE_URL_{env}`；否则按 `APP_ENV` 拼 `data/hr_db_{env}.db` 默认路径；仅支持 `sqlite:///` scheme，其他 scheme 拒绝启动。
+- 启动自检：打印 `APP_ENV` 与库文件路径；若文件名与 `APP_ENV` 不一致则拒绝启动。
 
 ### 7D.3 生产护栏（仅 prod 禁止破坏性操作）
-- 禁止：`prod` 下执行 `Base.metadata.drop_all` / `scripts/import_csv --reset` / 任何清空库操作，直接报错退出；`dev`/`test` 无限制（`test` 允许 `--reset`）。（v2.4.1 起 `POST /imports` 与 `POST /data-clean-jobs/{id}/imports` **各环境均允许**——导入为幂等 upsert 非破坏性操作，原 #14 prod 拦截移除；破坏性护栏不变。）
-- 仅 `prod` 需拦截，默认一律拦截；如确需重置生产，需走线下备份+受控迁移（`pg_dump hr_db_prod` 后手工操作，不经本系统 `--reset`）。
+- 禁止：`prod` 下执行 `Base.metadata.drop_all` / `scripts/import_csv --reset` / 任何清空库操作，直接报错退出（退出码 1）；`dev`/`test` 无限制（`test` 允许 `--reset`）。（v2.4.1 起 `POST /imports` 与 `POST /data-clean-jobs/{id}/imports` **各环境均允许**——导入为幂等 upsert 非破坏性操作；破坏性护栏不变。）
+- 仅 `prod` 需拦截；如确需重置生产，需走线下备份+受控迁移（复制 `hr_db_prod.db` 备份——连同 `-wal/-shm` 或先 `wal_checkpoint(TRUNCATE)`——后手工恢复，不经本系统 `--reset`）。
 - 应用启动 `main.py` 的 `create_all` 在 `prod` 仅建缺失表，不删改已有数据。
 
 ### 7D.4 数据与运维
-- 种子/导入：`testingdata/` 仅用于 `dev`/`test`，`prod` 初始数据由运维导入，操作前必须 `pg_dump hr_db_prod`。
-- 三环境主数据字典独立，不自动同步。
+- 种子/导入：`testingdata/` 仅用于 `dev`/`test`，`prod` 初始数据由运维导入，操作前必须完成 `.db` 文件备份。
+- v2.5 迁移：PG 存量主数据经 `scripts/migrate_pg_master_data.py --source <pg_url>` 幂等合入（仅字典表；users/岗位域不迁移）。
+- 三环境主数据字典独立（三文件互不相通），不自动同步。
 
 ---
 
@@ -573,8 +572,9 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 | **V2.1** | **7D 三环境 DB 隔离（hr_db_{env}、同机不同库、prod 防删、.env.* 文件约定）**，其余同 V2.0 |
 | **V2.2** | **单文件 .env 合并（DATABASE_URL_{dev,test,prod} + APP_ENV 切换，含 ${POSTGRES_PASSKEY} 展开）、速率限制（slowapi 全局 120/min + 登录 10/min + 公共 60/min）、外部 API JWT 鉴权落地**，其余同 V2.1 |
 | **V2.3** | **编号系统重制（源编号一律忽视、系统正式分配 P/PA 双系列、清洗期 T 占位、幂等键=职位名+公司+国家+开启日、两段式识别）、数据清洗仅支持 Org-Chart3 格式（权责说明续行、真实树祖先经理推断）、权限模型（admin/hr + user_companies 行级隔离）、挂编联动、成本税区化、三库岗位域数据清空重置（prod 先备份）** |
-| **V2.4（本 PRD）** | **公司主数据改造：隶属公司加开业/关闭日期、股权结构子表（三来源股东互斥：内部公司/外部合作公司/自然人；pct 软校验）、外部合作公司独立主数据、三库 companies 受控清理（绑岗位的跳过）**，其余同 V2.3 |
-| V2.5+（待评估） | CSV 导出、公司分组组织树视图、外包岗管理、转岗历史时间线、编制审批、完善用户角色管理、虚线关系单独矩阵视图 |
+| **V2.4** | **公司主数据改造：隶属公司加开业/关闭日期、股权结构子表（三来源股东互斥：内部公司/外部合作公司/自然人；pct 软校验）、外部合作公司独立主数据、三库 companies 受控清理（绑岗位的跳过）**，其余同 V2.3 |
+| **V2.5（本 PRD）** | **存储底座切换：PostgreSQL → SQLite 同机三文件 `data/hr_db_{env}.db`（WAL + 每连接 PRAGMA foreign_keys=ON；psycopg2 移出运行时依赖）；存量主数据一次性迁移（`scripts/migrate_pg_master_data.py`，仅字典表）；挂编联动触发器改 SQLite 语法；LLM+Embedding 扩展能力确认（embeddings BLOB + numpy/sqlite-vec 路线，见 DESIGN §15）** |
+| V2.6+（待评估） | CSV 导出、公司分组组织树视图、外包岗管理、转岗历史时间线、编制审批、完善用户角色管理、虚线关系单独矩阵视图 |
 
 ---
 
@@ -638,8 +638,16 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 - **CSV 导入链路零改动**：导入自动建档仅填公司名，公司新字段留空由用户在主数据页补录。
 - **员工工号自动生成与外包虚拟建档（v2.4.2）**：工号由系统按类型生成——正式 `G{seq:05d}` 从 G00001 起、实习/劳务共用 `V{seq:05d}`、外包 `O{seq:05d}`；外包人员可**不挂岗虚拟建档**（由外包公司管理、系统仅登记名单，DB CHECK 豁免 `OUTSOURCED`），其余类型仍强制挂岗；后续可正常挂编 External Employee 岗位。
 
+### 已确认决策（2026-08-24，v2.5）
+- **存储底座切换：PostgreSQL → SQLite 同机三文件（§7D 重写）**：dev/test/prod = `data/hr_db_{env}.db` 三文件物理隔离；每连接 `PRAGMA foreign_keys=ON` + WAL + `busy_timeout=30s`；文件名与 `APP_ENV` 不一致拒启；仅支持 `sqlite:///` scheme。彻底移除 psycopg2 运行时依赖，无数据库服务。
+- **存量数据迁移范围（仅主数据字典）**：`scripts/migrate_pg_master_data.py --source <pg_url>` 一次性幂等合入 11 张字典表（companies 含开业/关闭日、external_companies、company_shareholders、countries、levels、work_locations、scopes、legal_categories、position_types、tax_zones、employment_tax_items）；users 不迁移（admin/admin123 种子重建）、岗位域不迁移（Org-Chart3 清洗可随时重建）。
+- **PG 专属特性替换**：股权三来源互斥 CHECK 由 `num_nonnulls()` 改为可移植布尔求和写法；编号序列号查询去 `regexp_replace/~` 改 Python 侧解析；挂编联动触发器由 plpgsql 重写为 SQLite 触发器（INSERT/UPDATE 各一，`RAISE(ABORT)`）；历史 PG 轻量迁移函数整体移除（新库 create_all 一次到位）。
+- **并发语义确认**：事务统一以 `BEGIN IMMEDIATE` 开启（`app/db.py` begin event listener）承接原 PG 行锁守卫语义（`with_for_update()` 在 SQLite 为 no-op），并发抢岗回归实测稳定为 [200,400] 无一人双岗；乐观锁 `version` 不受影响。
+- **LLM+Embedding 扩展能力确认**：SQLite 可支撑——向量以 BLOB 存 float32 + numpy 余弦暴力检索（万级文本毫秒级），或 `sqlite-vec` 扩展 KNN；将来如需 pgvector/HNSW 规模可经 ORM 层切回 PostgreSQL（见 DESIGN §15）。本轮仅架构预留，不落码。
+
 ### 待确认 / 开放问题
 - [ ] **Org-Chart.md 同步修订**（非系统功能，需人工处理）：P086~P088 及上海汇报关系与 CSV 不一致，建议以 CSV 为准后回写 Org-Chart.md。
-- [ ] **成本字段精度与单位**：金额精度（两位小数）、币种（EUR？）、年度 vs 月度口径，待确认。
+- [ ] **成本字段精度与单位**：金额精度（两位小数）、币种（EUR？）、年度 vs 月度口径，待确认。（注：v2.5 起 SQLite 下 Numeric 以 float 存储）
 - [ ] **主数据删除策略**：被岗位引用时禁止删除或仅停用，待确认。
-- [ ] **生产重置受控流程**：生产确需重置时的审批与 `pg_dump` 备份责任人，待确认。
+- [ ] **生产重置受控流程**：生产确需重置时的审批与 `.db` 备份责任人，待确认。
+- [ ] **旧 PostgreSQL 三库下线**：主数据迁移核对无误后，旧 PG 实例归档下线时间点，待确认。

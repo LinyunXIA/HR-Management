@@ -2,10 +2,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | v2.4 |
-| 更新日期 | 2026-08-26 |
-| 关联 | [PRD.md](./PRD.md)（v2.4，需求与决策） |
-| 目标版本 | V2.4 |
+| 文档版本 | v2.5 |
+| 更新日期 | 2026-08-24 |
+| 关联 | [PRD.md](./PRD.md)（v2.5，需求与决策） |
+| 目标版本 | V2.5 |
 
 ---
 
@@ -26,7 +26,7 @@
 - **岗位成本字段**：自动（按税区科目）/ 手动两种模式互斥；税率挂载点可配置（国家级或城市级），城市级分拆后**无国家兜底**，未配置地区成本无法自动计算。
 - **挂编联动**：岗位 `position_type` ↔ 员工 `employee_type` 按映射强制联动，数据层兜底（Consultant→正式 / External Employee→外包 / Employee→正式·实习·劳务）。
 - **组织图导出 MD**：公司+岗位 / 直线汇报线 / 虚线汇报线 3 种格式。
-- **三环境 DB 隔离（PRD §7D 合并版）**：单文件 `.env` 内 `DATABASE_URL_{dev,test,prod}` + `APP_ENV` 切换，含 `${POSTGRES_PASSKEY}` 展开。
+- **三环境 DB 隔离（PRD §7D，v2.5 SQLite 三文件）**：单文件 `.env` 内 `DATABASE_URL_{dev,test,prod}` sqlite 三段 + `APP_ENV` 切换，同机 `data/hr_db_{env}.db` 物理隔离。
 - **权限（v2.3）**：`users` 加角色 admin/hr；`user_companies` 多对多；关闭自主注册、仅 admin 建号+分配可管实体；**读可跨司、写按实体隔离**（岗位全局读、员工/成本按实体写隔离、组织图可读他司员工姓名）；汇报接线由目标岗位操作者维护、源岗位只读不限管。
 - **安全**：JWT（`PyJWT`/`bcrypt`）+ 乐观锁（`version`）+ 速率限制（`slowapi`）。
 
@@ -38,28 +38,28 @@
 | Web 框架 | FastAPI（同步端点） | REST API + 托管静态文件 |
 | ORM | SQLAlchemy 2.x（同步） | 单用户本地工具，无需异步 |
 | 校验 | Pydantic v2 | 与 FastAPI 集成 |
-| 数据库 | **PostgreSQL 同机三库 `hr_db_dev/test/prod`** | 持久化关系型数据库，全部新建（无历史迁移），`APP_ENV` 分流（`app/db.py:1`） |
-| 驱动 | psycopg2-binary | Python PostgreSQL 适配器 |
+| 数据库 | **SQLite 同机三文件 `data/hr_db_dev/test/prod.db`**（v2.5 起） | 标准库内置零部署；WAL + 每连接 `PRAGMA foreign_keys=ON`；`APP_ENV` 分流（`app/db.py:1`） |
+| 驱动 | Python 标准库 `sqlite3`（无外部驱动） | psycopg2 已移出运行时依赖；仅一次性主数据迁移脚本临时使用 |
 | 认证 | PyJWT + bcrypt | JWT HS256（`sub/role/exp`），`Authorization: Bearer`（`app/auth.py:1`） |
 | 限流 | slowapi + limits | 全局 `120/min` / 登录 `10/min` / 公共 `60/min`（`app/limiter.py:1`） |
 | 前端 | 原生 JS + 自定义 SVG 树渲染 | **零依赖、无 npm、无构建** |
-| 启动 | `uvicorn main:app --reload` | 一条命令，打印 `APP_ENV` 脱敏库名（`main.py:1`） |
+| 启动 | `uvicorn main:app --reload` | 一条命令，打印 `APP_ENV` 与库文件路径（`main.py:1`） |
 
 **组织架构图渲染决策**：自定义 SVG 树渲染器（约 350 行，零依赖）。理由：汇报线树结构明确、需同时绘制实线（直线）与跨树虚线（虚线汇报），SVG 完全可控，符合「轻量级」定位。备选：`vis-network`（vendored，hierarchical 布局 + dashes 边），若自定义布局工作量失控时启用。
 
-依赖清单（`requirements.txt`）：`fastapi`、`uvicorn[standard]`、`sqlalchemy>=2.0`、`pydantic>=2.7`、`python-multipart`、`psycopg2-binary`、`PyJWT>=2.8`、`bcrypt>=4.1`、`slowapi`、`limits`。
+依赖清单（`requirements.txt`）：`fastapi`、`uvicorn[standard]`、`sqlalchemy>=2.0`、`pydantic>=2.7`、`python-multipart`、`PyJWT>=2.8`、`bcrypt>=4.1`、`slowapi`、`limits`。（SQLite 用标准库 `sqlite3`，无数据库服务；将来 Embedding 可选 `numpy` / `sqlite-vec`。）
 
 ## 3. 项目结构
 
 ```
 HR_Management/
-├── main.py                 # FastAPI 入口：建表（PostgreSQL）、注册路由、限流、version 迁移
+├── main.py                 # FastAPI 入口：建表（SQLite create_all + 触发器）、注册路由、限流
 ├── requirements.txt
 ├── .env                    # 单文件合并版：DATABASE_URL_{dev,test,prod} + APP_ENV + JWT/limiter（gitignored）
 ├── .env.example            # 模版（含三环境 + JWT + limiter 示例）
 ├── app/                    # 数据库连接由 APP_ENV + DATABASE_URL_{env} 驱动
 │   ├── __init__.py
-│   ├── db.py               # engine / SessionLocal / Base + 三环境分流 + ${POSTGRES_PASSKEY} 展开 + 护栏
+│   ├── db.py               # engine / SessionLocal / Base + 三环境分流 + SQLite PRAGMA 注入 + 护栏
 │   ├── limiter.py          # 全局限流器（120/min）
 │   ├── auth.py             # JWT 签发/校验 + bcrypt（app/auth.py:1）
 │   ├── models.py           # SQLAlchemy 模型（14 表，含 users + version）
@@ -240,11 +240,11 @@ class Employee(Base):              # 人员档案
     #   DB 层约束兜底（应用层校验 + 可选 CHECK），防「外包挂 Employee 编制」四不像
 ```
 
-> 实现说明：`level / work_location / legal_category` 在 `position_numbers` 上保留**字符串**（与 CSV 一致），由字典表提供下拉选项并在创建/更新时校验；`scope` 保留枚举，由 `scopes` 字典驱动下拉展示与编号。成本字段为新增列，导入时置空（人工模式默认）。`version` 存量库由 `main.py:1` 的 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 轻量迁移补齐。`company_id` / `prev_company_id` 双外键需在 `relationship` 上显式 `foreign_keys`（`prev_company = relationship(Company, foreign_keys=[prev_company_id])`）避免 `AmbiguousForeignKeys`（#12）。
+> 实现说明：`level / work_location / legal_category` 在 `position_numbers` 上保留**字符串**（与 CSV 一致），由字典表提供下拉选项并在创建/更新时校验；`scope` 保留枚举，由 `scopes` 字典驱动下拉展示与编号。成本字段导入时置空（人工模式默认）。v2.5 起全新 SQLite 库由 `create_all` 一次建出全部列与约束，无历史迁移。`company_id` / `prev_company_id` 双外键需在 `relationship` 上显式 `foreign_keys`（`prev_company = relationship(Company, foreign_keys=[prev_company_id])`）避免 `AmbiguousForeignKeys`（#12）。
 
 > 创建校验：`PositionNumberCreate` **不接收 `number`**（新建只能自动生成，编辑不改编号）；`EmployeeCreate` 中 `birth_date / phone / email / remark` 可空。`PATCH` 需携带 `version`，`app/helpers.py:1` 的 `assert_version` 负责 409。`LegalCategory` 枚举为历史兼容，运行时以 `legal_categories` 字典表为准（#16）。
 
-> `employees` 的 `CHECK (employment_status IN (...) OR position_number_id IS NOT NULL)` 约束值派生自 `EmploymentStatus.TERMINATED` 枚举（兼容历史 `'TERMINATED'`），迁移脚本 `main.py` 同步派生（#13）。
+> `employees` 的 `CHECK (employment_status IN (...) OR position_number_id IS NOT NULL)` 约束值派生自 `EmploymentStatus.TERMINATED` 枚举（兼容历史 `'TERMINATED'`）；v2.5 起约束随 `models.py` 声明在 `create_all` 时直接创建（#13）。
 
 ### 4.2 约束与索引
 
@@ -254,17 +254,22 @@ class Employee(Base):              # 人员档案
 - 删除保护：岗位有在职员工或已有 `position_events` 时禁止删除，仅允许状态关闭。主数据被岗位引用时禁止删除（可停用）。
 - 编号规则校验（v2.3）：编号由系统分配，格式仅校验 `P{seq}` / `PA{seq}` 纯序号；与 scope/country **解耦**（范围/国家存独立字段）。
 - **管理岗限定**：设置直线/虚线经理时，目标岗位级别必须 `is_management=True`（M 开头）。
-- **乐观锁**：`position_numbers.version`、`employees.version`（`main.py` 兜底迁移；`PATCH` 携带 `version`，`app/helpers.py:assert_version`）。
-- **挂编联动**：员工 `employee_type` 必须匹配所挂岗位的 `position_type`（Consultant→正式 / External Employee→外包 / Employee→正式·实习·劳务），应用层校验 + 数据层约束兜底（防四不像）。**#50 落地：`trg_employees_attach_type` 触发器（BEFORE INSERT/UPDATE ON employees）为 DB 层硬兜底，绕过 API 直写库同样拦截；claim/promote/transfer 路径补应用层校验返回 400。**
+- **乐观锁**：`position_numbers.version`、`employees.version`（`PATCH` 携带 `version`，`app/helpers.py:assert_version`）。
+- **挂编联动**：员工 `employee_type` 必须匹配所挂岗位的 `position_type`（Consultant→正式 / External Employee→外包 / Employee→正式·实习·劳务），应用层校验 + 数据层约束兜底（防四不像）。**#50 落地（v2.5 SQLite 语法）：`trg_employees_attach_type_insert/update` 触发器（BEFORE INSERT / BEFORE UPDATE OF employee_type, position_number_id ON employees，`RAISE(ABORT)`）为 DB 层硬兜底，绕过 API 直写库同样拦截；claim/promote/transfer 路径补应用层校验返回 400。**
+- **股权三来源互斥 CHECK（v2.5 可移植化）**：`((internal_company_id IS NOT NULL) + (external_company_id IS NOT NULL) + (person_name IS NOT NULL)) = 1`（原 PG 专属 `num_nonnulls()` 已替换）。
 - 索引：`position_numbers(status)`、`position_numbers(solid_line_manager_id)`、`position_events(position_number_id, changed_at)`、`employees(position_number_id)`、`employment_tax_items(tax_zone_id)`。
 
-### 4.3 三环境 DB 隔离（`app/db.py:1`，PRD §7D 合并版）
+### 4.3 三环境 DB 隔离（`app/db.py:1`，PRD §7D，v2.5 SQLite 三文件）
 
-- 单文件 `.env` 内三段 `DATABASE_URL_{dev,test,prod}` + `APP_ENV` 切换；`DATABASE_URL` 显式值优先（含 `${POSTGRES_PASSKEY}` 展开）。
-- 加载后按 `APP_ENV` 选择 `DATABASE_URL_{env}`，否则拼默认 `postgresql://.../hr_db_{env}`。
-- 校验库名 == `hr_db_{env}`，不一致拒绝启动；启动打印脱敏库名。
-- 旧的 `.env.test`/`.env.prod` 仍兼容（按 `APP_ENV` 追加加载）。
-- `assert_writable()` 在 `prod` 拦截 `drop_all`/`--reset`（`scripts/import_csv.py`）；`POST /imports` 与 `POST /data-clean-jobs/{id}/imports` 为幂等 upsert 非破坏性操作，**各环境均允许**（v2.4.1 移除原 #14 prod 400 拦截）。
+- SQLite 同机三文件：`data/hr_db_dev.db` / `hr_db_test.db` / `hr_db_prod.db`；单文件 `.env` 内三段 `DATABASE_URL_{dev,test,prod}` + `APP_ENV` 切换；`DATABASE_URL` 显式值优先。
+- 相对路径基于项目根规范化（`_absolutize_sqlite_url`），任意 cwd 启动行为一致；仅支持 `sqlite:///` scheme，其他 scheme 拒绝启动。
+- 校验文件名 == `hr_db_{env}.db`，与 `APP_ENV` 不一致拒绝启动；启动打印库文件路径。
+- **每连接 PRAGMA（event listener，勿删）**：`foreign_keys=ON`（SQLite 默认不启用外键）、`journal_mode=WAL`、`busy_timeout=30000`、`synchronous=NORMAL`。
+- **事务模式（v2.5 并发语义修复，勿删 begin event listener）**：pysqlite 关闭隐式事务（`isolation_level=None`），所有事务经 `begin` 事件以 **`BEGIN IMMEDIATE`** 开启——写锁在事务首条语句（含「先 SELECT 守卫后 UPDATE」的守卫读）前取得；否则 SELECT 走 autocommit 快照，「两 HR 同时认领同一空闲岗」会双双放行产生一人双岗。该机制与 PostgreSQL `SELECT … FOR UPDATE` 行锁守卫语义等价。
+- 连接参数：`check_same_thread=False`（FastAPI 线程池必需）+ `timeout=30`。
+- 并发语义：`BEGIN IMMEDIATE` 整库写串行 + 守卫读在锁内重放，承接原 PG 行锁行为（`with_for_update()` 仍为 no-op 但不再依赖）；乐观锁 `version` 照常生效；并发抢岗实测稳定 [200,400] 无一人双岗。
+- `assert_writable()` 在 `prod` 拦截 `drop_all`/`--reset`（`scripts/import_csv.py`）；`POST /imports` 与 `POST /data-clean-jobs/{id}/imports` 为幂等 upsert 非破坏性操作，**各环境均允许**。
+- 历史 PG 轻量迁移函数（列补齐/CHECK 修复/值迁移）已整体移除：全新 SQLite 库由 `create_all` 一次到位，仅保留挂编联动触发器 DDL。
 
 ## 5. 生命周期状态机（app/lifecycle.py）
 
@@ -448,7 +453,7 @@ CLI：`python -m scripts.import_csv data/Position.csv`（首次 `--reset` 语义
 
 ## 9. 前端设计
 
-- **单页 + Tab**：数据清洗 / 主数据配置 / 岗位 / 员工 / 组织架构 / 导入；顶部显示库状态（岗位数、员工数）+ 右侧登录徽章（`static/js/auth.js`）。
+- **单页 + Tab**：数据清洗 / 主数据配置 / 岗位 / 员工 / 组织架构 / 导入；顶部显示库状态（岗位数、员工数）+ **环境徽章**（`#env-badge`，dev=绿/test=黄/prod=红 + 库文件名，读取后端注入的 `window.APP_ENV`/`window.APP_DB`，登录弹窗内同步显示当前环境防误登）+ 右侧登录徽章（`static/js/auth.js`）。
 - **全局 fetch（`api.js`）**：自动携带 `Authorization: Bearer`，统一处理 `401`（弹登录）、`409`（乐观锁冲突）、`429`（限流）。
 - **登录态（`auth.js`）**：JWT 存 `localStorage:hr_token`，`GET /auth/me` 校验，`admin/admin123` 默认账号。
 - **主数据配置（master_data.js）**：左列表 + 右表单（或 Tab 页签），维护公司/级别/工作地点/工作范围/国家/法律强制/员工用工税额；用工税额按国家分组展示科目与税率。
@@ -473,7 +478,7 @@ CLI：`python -m scripts.import_csv data/Position.csv`（首次 `--reset` 语义
 3. **生命周期模块**：`lifecycle.py` 状态机 + 事件；`schemas.py`（含 `version`）；`routers/positions.py`（CRUD + transition + 编号生成 + 环检测 + 成本字段/cost-calculation + `version` 409）。
 4. **员工模块**：`routers/employees.py`（CRUD + transfer + offboard + 岗位联动 + `version` 409）。
 5. **认证与限流**：`app/auth.py`（JWT/bcrypt）+ `app/limiter.py`（`120/min`）+ `routers/auth.py`（`POST /auth/login` `10/min`）+ 前端 `api.js`/`auth.js`。
-6. **组织数据**：`orgchart.py` 构建 `/api/org-charts`；`export_md.py` 3 格式导出；三环境 `.env` 合并版（`DATABASE_URL_{dev,test,prod}` + `APP_ENV` + `${POSTGRES_PASSKEY}`）。
+6. **组织数据**：`orgchart.py` 构建 `/api/org-charts`；`export_md.py` 3 格式导出；三环境 `.env` 合并版（`DATABASE_URL_{dev,test,prod}` + `APP_ENV`）。
 7. **导入**：`import_csv.py` 适配字典外键 + 路由 + CLI（含 `prod --reset` 拦截）。
 8. **前端基础**：`index.html`/`style.css`/`api.js`/`auth.js`/`app.js`/`master_data.js`/`positions.js`（含 `version`/`409`/`429`）/`employees.js`。
 9. **组织架构图前端**：`orgchart.js`（SVG 树渲染 + 公司聚焦 + 缩放优化 + 导出按钮）。
@@ -501,7 +506,7 @@ CLI：`python -m scripts.import_csv data/Position.csv`（首次 `--reset` 语义
 9. **UI 走查**：登录 → 数据清洗 → 导入 → 主数据配置 → 岗位详情（`version`/`409`） → 成本字段 → 员工管理（`version`） → 组织图 → 导出 MD。
 10. **组织图**：实线/虚线正确渲染；虚拟根开关生效；公司聚焦视图正确；缩放/平移可用；导出 MD 3 种格式内容正确；关闭岗置灰可隐藏。
 11. **数据清洗验证**：上传 Org-Chart3.md（或 `?source_file=`）→ 4 岗位全部解析、8 个关键字段正确读取、权责说明续行写入职责描述；旧格式（Org-Chart.md/Org-Chart2.md）不再解析。
-12. 数据备份：PostgreSQL `pg_dump` 定期备份；无需历史迁移，全新建库。
+12. 数据备份：SQLite `.db` 文件复制备份（连同 `-wal/-shm` 或先 wal_checkpoint）；无需历史迁移，全新建库。
 
 ## 12. 风险与注意点
 
@@ -510,7 +515,8 @@ CLI：`python -m scripts.import_csv data/Position.csv`（首次 `--reset` 语义
 - **Org-Chart.md 不一致项**：以 CSV 为准，系统内不提示冲突（PRD §3.8）。
 - **虚线解析**：虚线列多为单值，按 `;`/`、` 分割支持多值（模型为 0~N）。
 - **组织图性能**：91 节点量级自定义 SVG 足够；节点折叠控制渲染量。
-- **PostgreSQL 部署**：需确保 PostgreSQL 服务可用；数据库**全部新建**，无需从 SQLite 迁移；连接信息通过单文件 `.env` 的 `DATABASE_URL_{dev,test,prod}` + `APP_ENV` + `${POSTGRES_PASSKEY}` 配置（`app/db.py:1`）。
+- **SQLite 运行注意（v2.5）**：①外键靠每连接 `PRAGMA foreign_keys=ON`（`app/db.py` listener，勿删）；②并发写靠事务 `BEGIN IMMEDIATE` + `busy_timeout=30s`（见 §4.3，勿移除 begin event listener）；③`Numeric` 以 float 存储（SQLAlchemy 自动转换，金额量级可接受）；④`DateTime` 读回 naive——应用内统一 UTC；⑤备份 = 复制 `.db` 文件（先 wal_checkpoint 或连同 `-wal/-shm` 三件套）；⑥将来 Embedding 见 §15。
+- 连接信息通过单文件 `.env` 的 `DATABASE_URL_{dev,test,prod}` + `APP_ENV` 配置，仅支持 `sqlite:///` scheme（`app/db.py:1`）。
 - **成本计算精度/口径**：税率按百分比存 Numeric；自动计算保留两位小数；币种/年度月度口径待确认（PRD §10）。
 - **税区无兜底**：城市级分拆后不作国家兜底，未配置税率的地区成本返回「未配置」——需前端明确提示引导用户配税率，避免「空成本」被误读为 0。
 - **管理岗过滤**：直线/虚线经理下拉用 `levels.is_management` 过滤；导入历史数据若含 B 级经理引用需兼容（跳过或告警）。
@@ -648,3 +654,74 @@ CLI：`python -m scripts.import_csv data/Position.csv`（首次 `--reset` 语义
 - [x] 执行点：登录门槛（API 用户须持「认证」）；`/public/companies` scope 门禁 + 非 admin 按可管实体过滤返回。
 - [x] users 路由：建号支持 user_type/apis、`PUT /admin/users/{id}/apis` 全量覆盖、`PATCH /admin/users/{id}/type` 切换类型（转 UI 清空授权）。
 - [x] 前端用户管理：列表加「类型/API 权限」列；建号表单类型选择 + API 复选联动显隐；「API 权限」分配弹窗；UI↔API 类型切换。
+
+---
+
+## 15. LLM + Embedding 扩展能力预留（v2.5 确认，本轮不落码）
+
+SQLite 完全可支撑本项目的 LLM+Embedding 需求（91 岗位 + 万级员工量级）。LLM 本身是外部 API 调用，与存储选型无关；向量检索两条路线：
+
+### 15.1 路线 A：BLOB 存 float32 + numpy 暴力检索（推荐起步）
+- 表结构草案（`create_all` 幂等自动建，与业务表零耦合）：
+  ```sql
+  CREATE TABLE embeddings (
+      id INTEGER PRIMARY KEY,
+      entity_type VARCHAR(30),      -- position_number | employee | ...
+      entity_id   INTEGER,          -- 对应业务行 id
+      model_name  VARCHAR(100),     -- 如 text-embedding-3-small
+      dim         INTEGER,          -- 向量维度
+      vector      BLOB,             -- numpy float32 .tobytes()
+      content_hash CHAR(64),        -- 源文本哈希（增量重嵌判断）
+      created_at  DATETIME
+  );
+  ```
+- 写入：`np.asarray(vec, dtype=np.float32).tobytes()` 入 BLOB；
+- 检索：一次性载入该 entity_type 全部向量 → numpy 矩阵点积/余弦取 top-k。万级 × 1536 维 ≈ 60MB 内存、毫秒级返回；配合进程内缓存更佳。
+- 优点：零新增依赖（numpy 可选安装）、实现约百行。
+
+### 15.2 路线 B：sqlite-vec 扩展 KNN
+- `pip install sqlite-vec`；连接后 `conn.enable_load_extension(True)` 加载，建 `vec0` 虚拟表：
+  ```sql
+  CREATE VIRTUAL TABLE vec_items USING vec0(
+      embedding float[1536]
+  );
+  -- KNN 查询
+  SELECT rowid, distance FROM vec_items WHERE embedding MATCH :q AND k = 10;
+  ```
+- C 实现 brute-force，十万级向量仍毫秒级；无需独立向量库服务。
+
+### 15.3 规模升级路径
+- ORM 层已隔离 SQL 方言；若将来需要 pgvector/HNSW/百万级规模，可将 embeddings 表迁回 PostgreSQL + pgvector，业务代码不动。
+
+---
+
+## 16. Phase v2.5 实施清单（PostgreSQL → SQLite 切换）
+
+> 依据 PRD §7D（v2.5）/ §10 决策（2026-08-24）。**2026-08-24 开发完成**，回归基线：`tests/test_integration.py` 45/45、`tests/test_v23.py` 43/43。
+
+### S1 连接层（`app/db.py`）
+- [x] 默认 URL 改 `sqlite:///{PROJECT_ROOT}/data/hr_db_{env}.db`（绝对路径）；相对路径 `_absolutize_sqlite_url` 规范化。
+- [x] 仅接受 `sqlite:///` scheme；文件名强制 `hr_db_{env}.db`，与 `APP_ENV` 不一致拒启。
+- [x] 每连接 event listener 注入 `PRAGMA foreign_keys=ON / WAL / busy_timeout=30000 / synchronous=NORMAL`。
+- [x] **事务改 `BEGIN IMMEDIATE` 开启**（pysqlite `isolation_level=None` + begin event listener）——修复「守卫读 autocommit 快照→并发认领双放行 [200,200]」竞态，与 PG 行锁语义对齐。
+- [x] 引擎参数 `check_same_thread=False` + `timeout=30`；库文件父目录自动创建。
+- [x] `assert_writable()` 文案改「复制 .db 文件备份」。
+
+### S2 方言去 PG 化
+- [x] `models.py`：股权三来源互斥 CHECK 改布尔求和写法。
+- [x] `helpers.py`：岗位编号/员工工号序列查询去 `regexp_replace/~`，改 LIKE 过滤 + Python 正则解析 max。
+- [x] `main.py`：删除全部 9 个历史 PG 轻量迁移函数（列补齐/CHECK 修复/值迁移），新库 create_all 一次到位；挂编联动触发器重写为 SQLite 语法（INSERT/UPDATE 各一，`IF NOT EXISTS` 幂等）。
+
+### S3 配置与周边
+- [x] `requirements.txt` 移除 psycopg2-binary；`.env.example` / `.env` 三段改 sqlite URL。
+- [x] `tests/test_integration.py` S7 用例改 sqlite 路径断言（含非 sqlite scheme 拒绝用例）。
+
+### S4 数据迁移
+- [x] 新增 `scripts/migrate_pg_master_data.py`：11 张主数据字典表 PG→SQLite 幂等合入（seed 后按唯一键 upsert；税区/股东按名称解析关联）；users 与岗位域不迁移。
+- [x] dev 执行完成：companies=4（含股权）、countries=12、levels=20、work_locations=13、tax_zones=1、employment_tax_items=2；重跑验证幂等。
+
+### S5 验证
+- [x] 启动冒烟：banner 打印 sqlite 文件路径；20 表全建；FK/WAL/触发器就绪。
+- [x] 直写探针：三来源互斥 CHECK、拒自环 CHECK、悬空外键 FK 拦截、挂编联动触发器（含中文 RAISE 信息）均生效。
+- [x] prod 护栏：`APP_ENV=prod --reset` → FATAL exit 1；文件名不符拒启；三文件隔离确认。
+- [x] 回归：清洗导入 P1~P4、组织图、导出 MD、乐观锁 409、并发抢岗 [200,400] 连跑 5 轮稳定、转调/升职/权限隔离全过。

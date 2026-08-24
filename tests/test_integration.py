@@ -75,14 +75,19 @@ def s7_env_config():
     section("S7 三环境配置解析")
     from app import db as appdb
 
-    # 库名一致性校验
-    got = appdb._validate_database_url("postgresql://u:p@localhost:5432/hr_db_dev", "dev")
-    check(got == "hr_db_dev", "_validate_database_url 匹配通过 (hr_db_dev)")
+    # 库名一致性校验（v2.5 SQLite 三文件）
+    got = appdb._validate_database_url("sqlite:///./data/hr_db_dev.db", "dev")
+    check(got == "hr_db_dev.db", "_validate_database_url 匹配通过 (hr_db_dev.db)")
     try:
-        appdb._validate_database_url("postgresql://u:p@localhost:5432/hr_db_prod", "dev")
+        appdb._validate_database_url("sqlite:///./data/hr_db_prod.db", "dev")
         check(False, "库名不一致应拒绝")
     except RuntimeError as e:
         check("hr_db_prod" in str(e) and "dev" in str(e), "库名与 APP_ENV 不一致拒绝启动")
+    try:
+        appdb._validate_database_url("postgresql://u:p@localhost:5432/hr_db_dev", "dev")
+        check(False, "非 SQLite scheme 应拒绝")
+    except RuntimeError:
+        check(True, "仅支持 sqlite:///，其他 scheme 拒绝")
 
     # APP_ENV 解析优先级与合法性
     old = os.environ.pop("APP_ENV", None)
@@ -110,7 +115,7 @@ def s7_env_config():
             appdb.assert_writable("--reset")
             check(False, "prod 下应拦截 --reset")
         except RuntimeError as e:
-            check("pg_dump" in str(e), "prod 下 assert_writable 拦截并提示受控迁移")
+            check("备份" in str(e), "prod 下 assert_writable 拦截并提示文件复制备份")
     finally:
         appdb.APP_ENV = saved
 

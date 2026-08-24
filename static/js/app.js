@@ -68,7 +68,26 @@ const App = {
     }
   },
 
+  renderEnvBadge() {
+    // 同步渲染环境徽章：读取后端注入的 window.APP_ENV / window.APP_DB，无网络请求
+    const el = document.getElementById('env-badge');
+    if (!el) return;
+    const env = (window.APP_ENV || '').toLowerCase();
+    const db = window.APP_DB || '';
+    const labels = { dev: '开发 DEV', test: '测试 TEST', prod: '生产 PROD' };
+    el.className = `env-badge ${env}`;
+    el.textContent = labels[env] || (env ? env.toUpperCase() : '未知环境');
+    if (db) {
+      el.title = `连接数据库：${db}`;
+      const t = document.createElement('span');
+      t.style.cssText = 'font-weight:400;font-size:11px;opacity:.85';
+      t.textContent = db;
+      el.appendChild(t);
+    }
+  },
+
   async initWithAuth() {
+    this.renderEnvBadge();
     // 先检查登录态
     if (window.Auth) {
       await Auth.fetchMe();
