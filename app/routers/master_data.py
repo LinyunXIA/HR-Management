@@ -60,7 +60,7 @@ def _crud(model, out_schema, create_schema, update_schema, path: str,
     """通用字典 CRUD。"""
 
     @router.get(path, response_model=list[out_schema])
-    def list_items(db: Session = Depends(get_db)):
+    def list_items(_user=Depends(get_current_user), db: Session = Depends(get_db)):
         return db.query(model).order_by(getattr(model, order_by), model.id).all()
 
     @router.post(path, response_model=out_schema, status_code=201)
@@ -175,7 +175,7 @@ def public_companies(request: Request, db: Session = Depends(get_db), _user=Depe
 # ---------------------------------------------------------------- 员工用工税额（v2.3：按税区）
 @router.get("/employment-tax-items", response_model=list[EmploymentTaxItemOut])
 def list_tax_items(country_id: int | None = None, tax_zone_id: int | None = None,
-                   db: Session = Depends(get_db)):
+                   _user=Depends(get_current_user), db: Session = Depends(get_db)):
     q = db.query(EmploymentTaxItem)
     if tax_zone_id:
         q = q.filter(EmploymentTaxItem.tax_zone_id == tax_zone_id)
@@ -267,7 +267,7 @@ def _serialize_zone(db: Session, z: TaxZone) -> dict:
 
 
 @router.get("/tax-zones", response_model=list[TaxZoneOut])
-def list_tax_zones(country_id: int | None = None, db: Session = Depends(get_db)):
+def list_tax_zones(country_id: int | None = None, _user=Depends(get_current_user), db: Session = Depends(get_db)):
     q = db.query(TaxZone)
     if country_id:
         q = q.filter(TaxZone.country_id == country_id)

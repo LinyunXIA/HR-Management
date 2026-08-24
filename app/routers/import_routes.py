@@ -5,6 +5,7 @@ import io
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
+from app.auth import get_current_user
 from app.db import APP_ENV, get_db
 from app.import_csv import import_csv
 
@@ -28,13 +29,13 @@ async def create_import(file: UploadFile = File(...), db: Session = Depends(get_
 
 
 @router.get("/imports")
-def list_imports():
+def list_imports(_user=Depends(get_current_user)):
     """导入作业列表（当前为无状态，返回空）。"""
     return {"total": 0, "items": []}
 
 
 @router.get("/imports/{import_id}")
-def get_import(import_id: int):
+def get_import(import_id: int, _user=Depends(get_current_user)):
     """单条导入作业（无持久化，返回 404）。"""
     from fastapi import HTTPException
     raise HTTPException(404, "导入作业无持久化，请通过 POST /imports 创建")

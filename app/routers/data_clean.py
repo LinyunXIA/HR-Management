@@ -4,9 +4,10 @@ import csv as csv_mod
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 
+from app.auth import get_current_user
 from app.data_clean import run_clean
 from app.db import APP_ENV, SessionLocal
 from app.import_csv import import_csv
@@ -25,13 +26,13 @@ class ParseRequest(BaseModel):
 
 
 @router.get("/data-clean-jobs")
-def list_data_clean_jobs():
+def list_data_clean_jobs(_user=Depends(get_current_user)):
     """作业列表。"""
     return {"total": len(_JOBS), "items": list(_JOBS.values())}
 
 
 @router.get("/data-clean-jobs/{job_id}")
-def get_data_clean_job(job_id: str):
+def get_data_clean_job(job_id: str, _user=Depends(get_current_user)):
     job = _JOBS.get(job_id)
     if not job:
         raise HTTPException(404, "清洗作业不存在")
@@ -39,7 +40,7 @@ def get_data_clean_job(job_id: str):
 
 
 @router.get("/data-clean-jobs/files/list")
-def list_raw_files():
+def list_raw_files(_user=Depends(get_current_user)):
     """列出原始文件（兼容保留）。"""
     files = []
     if RAW_DIR.exists():
