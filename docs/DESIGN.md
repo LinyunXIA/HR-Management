@@ -2,10 +2,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | v2.5 |
+| 文档版本 | v2.6 |
 | 更新日期 | 2026-08-24 |
-| 关联 | [PRD.md](./PRD.md)（v2.5，需求与决策） |
-| 目标版本 | V2.5 |
+| 关联 | [PRD.md](./PRD.md)（v2.6，需求与决策） |
+| 目标版本 | V2.6 |
 
 ---
 
@@ -692,6 +692,34 @@ SQLite 完全可支撑本项目的 LLM+Embedding 需求（91 岗位 + 万级员�
 
 ### 15.3 规模升级路径
 - ORM 层已隔离 SQL 方言；若将来需要 pgvector/HNSW/百万级规模，可将 embeddings 表迁回 PostgreSQL + pgvector，业务代码不动。
+
+---
+
+## 17. Phase v2.6 实施清单（年度用工成本预估 + 成本六栏）
+
+> 依据 PRD §4 F6 / §10 grilling 决策（2026-08-24）。**开发完成**，回归基线：`tests/test_benchmark.py` 28/28、`tests/test_integration.py` 45/45、`tests/test_v23.py` 51/51。
+
+### S1 数据模型（`app/models.py` + `main.py` 幂等迁移）
+- [x] 新表 `labor_benchmarks`（整年快照行，Unique(year,company_id,level,country_id,work_location)）。
+- [x] 新表 `benchmark_reports`（year 唯一，status=pending|ready|failed，payload JSON）。
+- [x] 成本六栏：position_numbers/employees 各 +4 列（mandatory_tax/mandatory_fixed_fee/fixed_bonus/floating_bonus 及 actual_ 前缀），**物理删除 company_share/actual_company_share**。
+- [x] `employment_tax_items` + item_kind('rate'|'fixed') + fixed_amount。
+- [x] main.py `_ensure_v26_cost_columns`：反射在事务外构建 DDL 计划再单事务执行（**教训：BEGIN IMMEDIATE 配方下事务内做 inspector 反射＝自死锁**）；dev/test 删废弃列、prod 仅告警走受控迁移（§7D.3）。
+
+### S2 税额引擎
+- [x] `calc_cost_by_zone` 升级：强制扣税=税前×Σrate%、定额=Σfixed、用工成本=五栏之和；cost-calculation 返回分项。
+
+### S3 基准引擎与 API
+- [x] `app/benchmark.py`：active_positions_in_year（日期交集）/ months_factor（含首尾自然月/12）/ coverage_missing（L4 与报告共用）/ compute_report / run_report_task。
+- [x] `app/routers/benchmarks.py`：POST 推送（L1~L4 整批原子 → 202 + BackgroundTasks）+ GET 报告（pending/ready/failed；报告行缺失自愈重算）。
+- [x] `API_SCOPES` += benchmarks、public.levels；`GET /public/levels` 字典端点。
+
+### S4 测试
+- [x] `tests/test_benchmark.py` 28 项：鉴权矩阵 / L2·L3·L4 拒收 / 整年 replace / 公式与月折算 / pending→ready / public.levels。
+- [x] 回归：integration 45/45、v23 51/51（六栏字段断言同步更新）。
+
+### S5 文档
+- [x] PRD F6 新章 + F1.6 六栏注记 + V2.6 规划行 + §10 决策块；API.md 基准章节；AGENTS.md 状态。
 
 ---
 

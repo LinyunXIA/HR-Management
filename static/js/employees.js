@@ -170,8 +170,12 @@ const Employees = {
 
   async openDetail(id) {
     const e = await get('/employees/' + id);
-    const hasActual = e.actual_salary_before_tax != null || e.actual_company_share != null || e.actual_labor_cost != null;
+    const hasActual = [e.actual_salary_before_tax, e.actual_mandatory_tax, e.actual_mandatory_fixed_fee,
+                       e.actual_fixed_bonus, e.actual_floating_bonus, e.actual_labor_cost]
+                      .some((v) => v != null);
     const isAuto = e.actual_cost_mode === 'auto';
+    const dis = isAuto ? 'disabled' : '';
+    const num = (v) => (v != null ? v : '');
     const modal = openModal(`
       <header><h2>${esc(e.name)} · ${esc(e.employee_no)}</h2><button class="btn small" onclick="closeModal()">✕</button></header>
       <div class="body">
@@ -192,9 +196,12 @@ const Employees = {
           <button class="btn" id="emp-calccost" style="${isAuto && hasActual ? '' : 'display:none'}">重算</button>
         </div>
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px" id="emp-costfields">
-          <div class="cost-field"><label>税前薪资（实际）</label><input type="number" step="0.01" id="emp-salary" value="${e.actual_salary_before_tax != null ? e.actual_salary_before_tax : ''}" ${isAuto ? 'disabled' : ''}></div>
-          <div class="cost-field"><label>公司份额（实际）</label><input type="number" step="0.01" id="emp-share" value="${e.actual_company_share != null ? e.actual_company_share : ''}" ${isAuto ? 'disabled' : ''}></div>
-          <div class="cost-field"><label>用工成本（实际）</label><input type="number" step="0.01" id="emp-labor" value="${e.actual_labor_cost != null ? e.actual_labor_cost : ''}" ${isAuto ? 'disabled' : ''}></div>
+          <div class="cost-field"><label>税前（年薪，实际）</label><input type="number" step="0.01" id="emp-salary" value="${num(e.actual_salary_before_tax)}" ${dis}></div>
+          <div class="cost-field"><label>强制扣税（实际）</label><input type="number" step="0.01" id="emp-mtax" value="${num(e.actual_mandatory_tax)}" ${dis}></div>
+          <div class="cost-field"><label>强制定额扣费（实际）</label><input type="number" step="0.01" id="emp-mfee" value="${num(e.actual_mandatory_fixed_fee)}" ${dis}></div>
+          <div class="cost-field"><label>固定奖金（实际）</label><input type="number" step="0.01" id="emp-fbonus" value="${num(e.actual_fixed_bonus)}" ${dis}></div>
+          <div class="cost-field"><label>浮动奖金（实际）</label><input type="number" step="0.01" id="emp-vbonus" value="${num(e.actual_floating_bonus)}" ${dis}></div>
+          <div class="cost-field"><label>用工成本（实际）</label><input type="number" step="0.01" id="emp-labor" value="${num(e.actual_labor_cost)}" ${dis}></div>
         </div>
         <div class="hint" id="emp-costhint"></div>
         ${e.remark ? `<div class="section-title">备注</div><div style="font-size:13px">${esc(e.remark)}</div>` : ''}
@@ -216,24 +223,33 @@ const Employees = {
         const salary = val('#emp-salary') ? +val('#emp-salary') : null;
         if (salary == null) { toast('请先填写税前薪资'); return; }
         const c = await this.fetchCalc(id, salary);
-        await this.saveCalc(id, { actual_cost_mode: 'auto', actual_salary_before_tax: salary, actual_company_share: c.company_share, actual_labor_cost: c.labor_cost });
+        await this.saveCalc(id, {
+          actual_cost_mode: 'auto', actual_salary_before_tax: salary,
+          actual_mandatory_tax: c.mandatory_tax, actual_mandatory_fixed_fee: c.mandatory_fixed_fee,
+          actual_labor_cost: c.labor_cost,
+        });
         modal.querySelector('#emp-salary').value = c.salary_before_tax ?? '';
-        modal.querySelector('#emp-share').value = c.company_share ?? '';
+        modal.querySelector('#emp-mtax').value = c.mandatory_tax ?? '';
+        modal.querySelector('#emp-mfee').value = c.mandatory_fixed_fee ?? '';
         modal.querySelector('#emp-labor').value = c.labor_cost ?? '';
-        toast(`已重算并保存：公司份额 ${fmtMoney(c.company_share)} · 用工成本 ${fmtMoney(c.labor_cost)}`, 'ok');
+        toast(`已重算并保存：强制扣税 ${fmtMoney(c.mandatory_tax)} · 定额 ${fmtMoney(c.mandatory_fixed_fee)} · 用工成本 ${fmtMoney(c.labor_cost)}`, 'ok');
       } catch (err) { toast(err.message); }
     };
     modal.querySelector('#ed-cost-edit').onclick = async () => {
-      // 保存手动模式下的修改
+      // 保存手动模式下的修改（六栏）
       const mode = modal.querySelector('input[name="emp-costmode"]:checked').value;
       const body = {
         version: e.version,
         actual_cost_mode: mode,
       };
       if (mode === 'manual') {
-        body.actual_salary_before_tax = val('#emp-salary') ? +val('#emp-salary') : null;
-        body.actual_company_share = val('#emp-share') ? +val('#emp-share') : null;
-        body.actual_labor_cost = val('#emp-labor') ? +val('#emp-labor') : null;
+        for (const [f, id] of [
+          ['actual_salary_before_tax', '#emp-salary'], ['actual_mandatory_tax', '#emp-mtax'],
+          ['actual_mandatory_fixed_fee', '#emp-mfee'], ['actual_fixed_bonus', '#emp-fbonus'],
+          ['actual_floating_bonus', '#emp-vbonus'], ['actual_labor_cost', '#emp-labor'],
+        ]) {
+          body[f] = val(id) !== '' ? +val(id) : null;
+        }
       }
       try {
         await patch(`/employees/${id}`, body);

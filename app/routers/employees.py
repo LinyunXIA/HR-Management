@@ -83,10 +83,13 @@ def serialize_employee(db: Session, emp: Employee) -> dict:
         "company_name": pn.company.name if pn else None,
         "target_company_id": emp.target_company_id,
         "target_company_name": tc.name if tc else None,
-        # ---- 实际成本（跟人走）----
+        # ---- 实际成本六栏（跟人走，v2.6）----
         "actual_cost_mode": emp.actual_cost_mode.value if emp.actual_cost_mode else None,
         "actual_salary_before_tax": float(emp.actual_salary_before_tax) if emp.actual_salary_before_tax is not None else None,
-        "actual_company_share": float(emp.actual_company_share) if emp.actual_company_share is not None else None,
+        "actual_mandatory_tax": float(emp.actual_mandatory_tax) if emp.actual_mandatory_tax is not None else None,
+        "actual_mandatory_fixed_fee": float(emp.actual_mandatory_fixed_fee) if emp.actual_mandatory_fixed_fee is not None else None,
+        "actual_fixed_bonus": float(emp.actual_fixed_bonus) if emp.actual_fixed_bonus is not None else None,
+        "actual_floating_bonus": float(emp.actual_floating_bonus) if emp.actual_floating_bonus is not None else None,
         "actual_labor_cost": float(emp.actual_labor_cost) if emp.actual_labor_cost is not None else None,
         "solid_line_manager_id": pn.solid_line_manager_id if pn else None,
         "solid_line_number": sl.number if sl else None,
@@ -214,7 +217,8 @@ def update_employee(eid: int, payload: EmployeeUpdate,
             emp.actual_cost_mode = CostMode(payload.actual_cost_mode or CostMode.MANUAL.value)
         except ValueError:
             raise HTTPException(400, "actual_cost_mode 仅支持 auto / manual")
-    for field in ("actual_salary_before_tax", "actual_company_share", "actual_labor_cost"):
+    for field in ("actual_salary_before_tax", "actual_mandatory_tax", "actual_mandatory_fixed_fee",
+                  "actual_fixed_bonus", "actual_floating_bonus", "actual_labor_cost"):
         if field in payload.model_fields_set:
             setattr(emp, field, getattr(payload, field))
     # 转调目标公司（v2.3）：直接修正需校验公司存在；常规流程走 /transfers/initiate|claim

@@ -443,7 +443,18 @@ def public_companies(request: Request, db: Session = Depends(get_db),
     return out
 
 
-# ---------------------------------------------------------------- 员工用工税额（v2.3：按税区）
+# ---------------------------------------------------------------- 对外接口：获取级别字典（v2.6 外部基准对接）
+@router.get("/public/levels")
+@limiter.limit("60/minute")
+def public_levels(request: Request, db: Session = Depends(get_db),
+                  _user: User = Depends(require_api_scope("public.levels"))):
+    """对外暴露：级别字典（code/label/is_management），供外部系统按我方 code 下发基准。"""
+    from app.models import Level
+    return [{"code": lv.code, "label": lv.label, "is_management": lv.is_management}
+            for lv in db.query(Level).order_by(Level.sort_order).all()]
+
+
+# ---------------------------------------------------------------- 员工用工税额（v2.3：按税区；v2.6 两类科目）
 @router.get("/employment-tax-items", response_model=list[EmploymentTaxItemOut])
 def list_tax_items(country_id: int | None = None, tax_zone_id: int | None = None,
                    _user=Depends(get_current_user), db: Session = Depends(get_db)):
@@ -465,15 +476,32 @@ def list_tax_items(country_id: int | None = None, tax_zone_id: int | None = None
         out.append({
             "id": it.id, "country_id": it.country_id,
             "tax_zone_id": it.tax_zone_id, "tax_zone_label": zone_label,
-            "item_name": it.item_name, "tax_rate": float(it.tax_rate or 0),
+            "item_name": it.item_name,
+            "item_kind": it.item_kind or "rate",
+            "tax_rate": float(it.tax_rate or 0),
+            "fixed_amount": float(it.fixed_amount) if it.fixed_amount is not None else None,
             "is_active": it.is_active,
         })
     return out
 
 
+def _serialize_tax_item(it: EmploymentTaxItem) -> dict:
+    return {"id": it.id, "country_id": it.country_id,
+            "tax_zone_id": it.tax_zone_id, "tax_zone_label": None,
+            "item_name": it.item_name,
+            "item_kind": it.item_kind or "rate",
+            "tax_rate": float(it.tax_rate or 0),
+            "fixed_amount": float(it.fixed_amount) if it.fixed_amount is not None else None,
+            "is_active": it.is_active}
+
+
 @router.post("/employment-tax-items", response_model=EmploymentTaxItemOut, status_code=201)
 def create_tax_item(payload: EmploymentTaxItemCreate, response: Response,
                     _admin=Depends(require_admin), db: Session = Depends(get_db)):
+    if payload.item_kind not in ("rate", "fixed"):
+        raise HTTPException(400, "item_kind 仅支持 rate（强制税率%）/ fixed（强制定额扣费）")
+    if payload.item_kind == "fixed" and payload.fixed_amount is None:
+        raise HTTPException(400, "定额科目（item_kind=fixed）必须填写 fixed_amount")
     if not payload.tax_zone_id and not payload.country_id:
         raise HTTPException(400, "必须指定税区（tax_zone_id）")
     if payload.tax_zone_id and payload.country_id:
@@ -485,27 +513,42 @@ def create_tax_item(payload: EmploymentTaxItemCreate, response: Response,
     # 互斥：新口径仅用 tax_zone_id，country_id 置空防脏数据
     it = EmploymentTaxItem(
         tax_zone_id=payload.tax_zone_id, country_id=None if payload.tax_zone_id else payload.country_id,
-        item_name=payload.item_name, tax_rate=payload.tax_rate, is_active=payload.is_active,
+        item_name=payload.item_name, item_kind=payload.item_kind,
+        tax_rate=0 if payload.item_kind == "fixed" else payload.tax_rate,
+        fixed_amount=payload.fixed_amount if payload.item_kind == "fixed" else None,
+        is_active=payload.is_active,
     )
     db.add(it)
     db.commit()
     db.refresh(it)
     response.headers["Location"] = f"/api/v1/employment-tax-items/{it.id}"
-    return {"id": it.id, "country_id": it.country_id, "tax_zone_id": it.tax_zone_id,
-            "tax_zone_label": None, "item_name": it.item_name,
-            "tax_rate": float(it.tax_rate or 0), "is_active": it.is_active}
+    return _serialize_tax_item(it)
 
 
 @router.patch("/employment-tax-items/{item_id}", response_model=EmploymentTaxItemOut)
 def update_tax_item(item_id: int, payload: EmploymentTaxItemUpdate,
                     _admin=Depends(require_admin), db: Session = Depends(get_db)):
     it = get_or_404(db, EmploymentTaxItem, item_id)
-    for k, v in payload.model_dump(exclude_unset=True).items():
-        setattr(it, k, v)
+    data = payload.model_dump(exclude_unset=True)
+    kind = data.get("item_kind") or (it.item_kind or "rate")
+    if kind not in ("rate", "fixed"):
+        raise HTTPException(400, "item_kind 仅支持 rate（强制税率%）/ fixed（强制定额扣费）")
+    if "item_kind" in data:
+        it.item_kind = kind
+    if "fixed_amount" in data:
+        it.fixed_amount = data["fixed_amount"]
+    if "tax_rate" in data:
+        it.tax_rate = data["tax_rate"]
+    if kind == "fixed" and it.fixed_amount is None:
+        raise HTTPException(400, "定额科目（item_kind=fixed）必须填写 fixed_amount")
+    if kind == "fixed":
+        it.tax_rate = 0  # 定额科目不参与百分比计算，置 0 防脏读
+    if "is_active" in data:
+        it.is_active = data["is_active"]
+    if "item_name" in data:
+        it.item_name = data["item_name"]
     db.commit()
-    return {"id": it.id, "country_id": it.country_id, "tax_zone_id": it.tax_zone_id,
-            "tax_zone_label": None, "item_name": it.item_name,
-            "tax_rate": float(it.tax_rate or 0), "is_active": it.is_active}
+    return _serialize_tax_item(it)
 
 
 @router.delete("/employment-tax-items/{item_id}")

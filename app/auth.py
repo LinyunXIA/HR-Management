@@ -135,6 +135,8 @@ def get_current_user_optional(request: Request, db: Session = Depends(get_db)) -
 API_SCOPES = {
     "auth.login": "认证（登录换取 JWT）",
     "public.companies": "获取隶属公司列表",
+    "public.levels": "获取级别字典（外部基准对接）",
+    "benchmarks": "用工成本基准推送与预估报告获取",
 }
 
 

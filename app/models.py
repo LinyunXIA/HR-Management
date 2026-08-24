@@ -254,14 +254,20 @@ class PositionType(Base):
 
 
 class EmploymentTaxItem(Base):
-    """员工用工税额（v2.3：按税区 TaxZone 挂载；科目 + 税率）。"""
+    """员工用工税额（v2.3：按税区 TaxZone 挂载；v2.6 起支持两类科目）。
+
+    - item_kind='rate'  强制税率科目：tax_rate 为百分比 %，计提基数=税前
+    - item_kind='fixed' 强制定额扣费科目：fixed_amount 为年度固定金额
+    """
     __tablename__ = "employment_tax_items"
 
     id = Column(Integer, primary_key=True)
     tax_zone_id = Column(Integer, ForeignKey("tax_zones.id"), nullable=True)  # v2.3 税区
     country_id = Column(Integer, ForeignKey("countries.id"), nullable=True)  # 旧口径保留兼容
     item_name = Column(String(100), nullable=False)
-    tax_rate = Column(Numeric(6, 2), nullable=False, default=0)  # 百分比 %
+    item_kind = Column(String(10), nullable=False, default="rate")   # v2.6: rate | fixed
+    tax_rate = Column(Numeric(7, 4), nullable=False, default=0)      # 百分比 %（rate 科目）
+    fixed_amount = Column(Numeric(14, 2), nullable=True)             # 年度定额（fixed 科目）
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=_now)
 
@@ -379,12 +385,15 @@ class PositionNumber(Base):
         nullable=False,
         default=PositionStatus.PLANNED,
     )
-    # ---- 预算成本字段（v2.3 双口径：岗位预算，空岗可录、不随人走、按岗位税区计算）----
+    # ---- 预算成本六栏（v2.6：公司份额拆分为强制扣税+强制定额扣费，新增奖金两栏）----
     cost_mode = Column(SAEnum(CostMode, native_enum=False, length=10),
                        nullable=False, default=CostMode.MANUAL)
-    salary_before_tax = Column(Numeric(14, 2), nullable=True)   # 预算·税前薪资
-    company_share = Column(Numeric(14, 2), nullable=True)       # 预算·公司份额
-    labor_cost = Column(Numeric(14, 2), nullable=True)          # 预算·用工成本
+    salary_before_tax = Column(Numeric(14, 2), nullable=True)        # 预算·税前（年薪）
+    mandatory_tax = Column(Numeric(14, 2), nullable=True)            # 预算·强制扣税（=税前×税率%，金额）
+    mandatory_fixed_fee = Column(Numeric(14, 2), nullable=True)      # 预算·强制定额扣费
+    fixed_bonus = Column(Numeric(14, 2), nullable=True)              # 预算·固定奖金
+    floating_bonus = Column(Numeric(14, 2), nullable=True)           # 预算·浮动奖金
+    labor_cost = Column(Numeric(14, 2), nullable=True)               # 预算·用工成本=五栏之和
     version = Column(Integer, nullable=False, default=1)        # 乐观锁版本号（PRD §7C）
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
@@ -497,12 +506,15 @@ class Employee(Base):
     target_company_id = Column(
         Integer, ForeignKey("companies.id", ondelete="SET NULL"), nullable=True
     )  # v2.3 转调中：目标公司（认领前原岗保持 Filled）
-    # ---- 实际成本字段（v2.3 双口径：跟人走、按人属税区计算、升职转调不丢、离职留档）----
+    # ---- 实际成本六栏（v2.6：跟人走，结构同岗位预算口径）----
     actual_cost_mode = Column(SAEnum(CostMode, native_enum=False, length=10),
                               nullable=False, default=CostMode.MANUAL)
-    actual_salary_before_tax = Column(Numeric(14, 2), nullable=True)   # 实际·税前薪资
-    actual_company_share = Column(Numeric(14, 2), nullable=True)       # 实际·公司份额
-    actual_labor_cost = Column(Numeric(14, 2), nullable=True)          # 实际·用工成本
+    actual_salary_before_tax = Column(Numeric(14, 2), nullable=True)     # 实际·税前（年薪）
+    actual_mandatory_tax = Column(Numeric(14, 2), nullable=True)         # 实际·强制扣税
+    actual_mandatory_fixed_fee = Column(Numeric(14, 2), nullable=True)   # 实际·强制定额扣费
+    actual_fixed_bonus = Column(Numeric(14, 2), nullable=True)           # 实际·固定奖金
+    actual_floating_bonus = Column(Numeric(14, 2), nullable=True)        # 实际·浮动奖金
+    actual_labor_cost = Column(Numeric(14, 2), nullable=True)            # 实际·用工成本=五栏之和
     remark = Column(Text, nullable=True)
     version = Column(Integer, nullable=False, default=1)        # 乐观锁版本号（PRD §7C）
     created_at = Column(DateTime, default=_now)
@@ -510,3 +522,43 @@ class Employee(Base):
 
     position = relationship("PositionNumber")
     target_company = relationship("Company")
+
+
+class LaborBenchmark(Base):
+    """外部用工成本基准包（v2.6，整年快照行）。
+
+    外部系统按我方 schema 经 POST /benchmarks 推送，整批原子、整年替换
+    （最后一次提交为准）。匹配键 = (year, company_id, level, country_id,
+    work_location)，与岗位同名字段全等值精确对应（PRD §4 F6）。
+    """
+    __tablename__ = "labor_benchmarks"
+    __table_args__ = (
+        UniqueConstraint("year", "company_id", "level", "country_id", "work_location",
+                         name="uq_labor_benchmarks_key"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    year = Column(Integer, nullable=False)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    level = Column(String(20), nullable=False)                 # levels.code（如 M8a）
+    country_id = Column(Integer, ForeignKey("countries.id"), nullable=False)
+    work_location = Column(String(255), nullable=False)        # work_locations.name
+    salary_before_tax = Column(Numeric(14, 2), nullable=False)  # 税前（年薪）
+    tax_rate = Column(Numeric(7, 4), nullable=False, default=0)     # 强制税率 %
+    mandatory_fixed_fee = Column(Numeric(14, 2), nullable=False, default=0)  # 强制定额扣费
+    created_at = Column(DateTime, default=_now)
+
+    company = relationship("Company")
+    country = relationship("Country")
+
+
+class BenchmarkReport(Base):
+    """年度用工成本预估报告（v2.6）：一年一份最新结果，推送后异步生成覆盖。"""
+    __tablename__ = "benchmark_reports"
+
+    id = Column(Integer, primary_key=True)
+    year = Column(Integer, unique=True, nullable=False)
+    status = Column(String(20), nullable=False, default="pending")  # pending|ready|failed
+    payload = Column(Text, nullable=True)          # 报告 JSON（公司汇总 + 岗位明细 + 缺失清单）
+    error_count = Column(Integer, nullable=False, default=0)
+    generated_at = Column(DateTime, nullable=True)
