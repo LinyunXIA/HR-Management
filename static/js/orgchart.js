@@ -290,7 +290,7 @@ const OrgChart = {
   hideTip() { if (this._tip) { this._tip.remove(); this._tip = null; } },
 
   async exportMd(fmt) {
-    const res = await fetch(`/api/v1/org-charts?report=${fmt}`, { headers: { 'Accept': 'text/markdown' } });
+    const res = await fetch(`/api/v1/org-charts?report=${fmt}`, { headers: { 'Accept': 'text/markdown', ..._authHeader() } });
     if (!res.ok) { const d = await res.json().catch(() => null); throw new Error(d?.detail || '导出失败'); }
     const text = await res.text();
     const names = { org: 'orgchart-公司岗位', solid: 'orgchart-直线汇报线', dotted: 'orgchart-虚线汇报线' };

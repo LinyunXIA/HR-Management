@@ -69,7 +69,7 @@ const DataClean = {
     const fd = new FormData();
     fd.append('orgchart', file);
     try {
-      const r = await fetch('/api/v1/data-clean-jobs', { method: 'POST', body: fd });
+      const r = await fetch('/api/v1/data-clean-jobs', { method: 'POST', body: fd, headers: _authHeader() });
       if (!r.ok) {
         const err = await r.json().catch(() => ({ detail: '解析失败' }));
         throw new Error(err.detail || '解析失败');

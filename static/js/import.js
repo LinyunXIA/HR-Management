@@ -30,7 +30,7 @@ const Import = {
     const fd = new FormData();
     fd.append('file', file);
     try {
-      const r = await fetch('/api/v1/imports', { method: 'POST', body: fd });
+      const r = await fetch('/api/v1/imports', { method: 'POST', body: fd, headers: _authHeader() });
       const data = await r.json();
       if (!r.ok) throw new Error(data.detail || '导入失败');
       const issues = [...(data.errors || []), ...(data.warnings || [])];
