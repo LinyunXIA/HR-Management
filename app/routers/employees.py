@@ -181,22 +181,24 @@ def update_employee(eid: int, payload: EmployeeUpdate,
     # 行级隔离：员工修改按其实体隔离（转调中仍归属原岗公司）
     cur_pn = db.get(PositionNumber, emp.position_number_id) if emp.position_number_id else None
     assert_can_write_company(db, user, cur_pn.company_id if cur_pn else None, label="该员工")
-    for field in ("name", "gender", "birth_date", "phone", "email",
-                  "hire_date", "employee_type", "remark"):
+    # 必填字段保持非空守卫；可空字段按 model_fields_set 区分「未提供」与「显式 null=清空」
+    for field in ("name", "gender", "employee_type"):
         val = getattr(payload, field)
         if val is not None:
             setattr(emp, field, val)
-    # 实际成本字段（v2.3：跟人走）
-    for field in ("actual_salary_before_tax", "actual_company_share", "actual_labor_cost"):
-        val = getattr(payload, field)
-        if val is not None:
-            setattr(emp, field, val)
-    if payload.actual_cost_mode is not None:
+    for field in ("birth_date", "phone", "email", "hire_date", "remark"):
+        if field in payload.model_fields_set:
+            setattr(emp, field, getattr(payload, field))
+    # 实际成本字段（v2.3：跟人走）；手动模式清空输入框 → 显式 null 清空
+    if "actual_cost_mode" in payload.model_fields_set:
         from app.models import CostMode
         try:
-            emp.actual_cost_mode = CostMode(payload.actual_cost_mode)
+            emp.actual_cost_mode = CostMode(payload.actual_cost_mode or CostMode.MANUAL.value)
         except ValueError:
             raise HTTPException(400, "actual_cost_mode 仅支持 auto / manual")
+    for field in ("actual_salary_before_tax", "actual_company_share", "actual_labor_cost"):
+        if field in payload.model_fields_set:
+            setattr(emp, field, getattr(payload, field))
     # 转调目标公司（v2.3）：直接修正需校验公司存在；常规流程走 /transfers/initiate|claim
     if payload.target_company_id is not None:
         tc = db.get(Company, payload.target_company_id)

@@ -51,7 +51,7 @@ const Positions = {
           <button class="btn primary" id="pf-new">＋ 新建岗位</button>
         </div>
         <table>
-          <thead><tr><th>岗位编号</th><th>职位</th><th>职位类型</th><th>隶属公司</th><th>级别</th><th>范围</th><th>状态</th><th>占用员工</th><th>税前薪资</th><th>公司份额</th><th>用工成本</th><th></th></tr></thead>
+          <thead><tr><th>岗位编号</th><th>职位</th><th>职位类型</th><th>隶属公司</th><th>级别</th><th>范围</th><th>状态</th><th>占用员工</th><th>直线经理</th><th>虚线经理</th><th></th></tr></thead>
           <tbody>${this.rows()}</tbody>
         </table>
         ${this.pager()}
@@ -68,7 +68,7 @@ const Positions = {
   },
 
   rows() {
-    if (!this.result.items.length) return '<tr><td colspan="12" class="empty">暂无岗位</td></tr>';
+    if (!this.result.items.length) return '<tr><td colspan="11" class="empty">暂无岗位</td></tr>';
     return this.result.items.map((p) => `
       <tr>
         <td class="num">${esc(p.number)}</td>
@@ -79,9 +79,8 @@ const Positions = {
         <td>${esc(scopeDisplay(p))}</td>
         <td>${statusBadge(p.status)}</td>
         <td>${esc(p.incumbent_name || '—')}</td>
-        <td class="num">${fmtMoney(p.salary_before_tax)}</td>
-        <td class="num">${fmtMoney(p.company_share)}</td>
-        <td class="num">${fmtMoney(p.labor_cost)}</td>
+        <td>${esc(p.solid_line_number ? `${p.solid_line_number} ${p.solid_line_manager_name || ''}` : '—')}</td>
+        <td>${esc((p.dotted_manager_numbers || []).join('、') || '—')}</td>
         <td><button class="btn small" data-open="${p.id}">详情</button></td>
       </tr>`).join('');
   },
@@ -95,8 +94,8 @@ const Positions = {
     </div>`;
   },
 
-  async managerOptions() {
-    if (!this._managers.length) {
+  async managerOptions(force = false) {
+    if (force || !this._managers.length) {
       const r = await get('/positions?role=manager&page_size=500');
       this._managers = r.items.map((p) => ({ id: p.id, number: p.number, position_name: p.position_name, level: p.level }));
     }
@@ -110,7 +109,7 @@ const Positions = {
   },
 
   async openCreate() {
-    this._managers = await this.managerOptions();
+    this._managers = await this.managerOptions(true);  // 强制刷新，避免缓存导致新管理岗缺失
     const modal = openModal(`
       <header><h2>新建岗位（编号自动生成）</h2><button class="btn small" onclick="closeModal()">✕</button></header>
       <div class="body">
@@ -286,7 +285,7 @@ const Positions = {
   },
 
   async openEdit(p) {
-    this._managers = await this.managerOptions();
+    this._managers = await this.managerOptions(true);  // 强制刷新，避免缓存导致新管理岗缺失
     // 预填虚线标签
     const dottedLabels = (p.dotted_manager_labels || []).join('\n');
     const modal = openModal(`
@@ -390,7 +389,12 @@ const Positions = {
   },
 };
 
-function val(id) { return document.getElementById(id).value.trim(); }
+function val(sel) {
+  /* 兼容两种调用风格：'#pe-x'（querySelector）与 'pe-x'（getElementById）；
+     元素缺失返回 '' 而非抛错（修复表单保存静默失败） */
+  const el = sel && sel.startsWith('#') ? document.querySelector(sel) : document.getElementById(sel);
+  return el ? el.value.trim() : '';
+}
 
 /* ---------------- 成本字段区共享实现（新建/编辑/详情复用，#41） ---------------- */
 
