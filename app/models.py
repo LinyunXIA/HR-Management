@@ -270,6 +270,8 @@ class PositionNumber(Base):
     # DESIGN §4.1：String 引用 legal_categories 字典，允许运行时扩展（issue #2）
     legal_category = Column(String(50), nullable=True)
 
+    # 直线经理：未声明 ORM relationship，避免 AmbiguousForeignKeys（company_id / prev_company_id 双外键冲突）
+    # 查询时一律使用 db.get(PositionNumber, id) 而非 relationship
     solid_line_manager_id = Column(
         Integer, ForeignKey("position_numbers.id", ondelete="SET NULL"), nullable=True
     )

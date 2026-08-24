@@ -153,7 +153,7 @@ def assert_can_write_company(db: Session, user, company_id: int | None,
                              label: str = "该公司"):
     """写操作按实体隔离：hr 仅能修改其可管实体下的员工/成本（PRD §7B.3）。
 
-    未授权 → 403；company_id 为空视为不涉及实体归属，放行。
+    未授权 → 403；company_id 为空视为不涉及实体归属（如已离职员工），放行。
     """
     allowed = get_operable_company_ids(db, user)
     if allowed == ALL_COMPANIES:
