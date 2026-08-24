@@ -153,13 +153,10 @@ const Positions = {
           <div class="field full"><label>Org-Chart 显示名</label><input type="text" id="pc-display"></div>
           <div class="field full"><label>备注（可留空）</label><textarea id="pc-remark" rows="2"></textarea></div>
         </div>
-
-        ${costSectionHtml('pc', { heading: '人工成本（可留空）' })}
       </div>
       <footer><button class="btn" onclick="closeModal()">取消</button><button class="btn primary" id="pc-save">保存</button></footer>`);
 
     this.bindScopeToggle(modal, 'pc');
-    modal.querySelectorAll('input[name="pc-costmode"]').forEach((r) => r.onchange = () => this.applyCostMode(modal, 'pc'));
     modal.querySelector('#pc-save').onclick = async () => {
       if (!val('#pc-posname')) { toast('请填写职位'); return; }
       const dottedIds = [...modal.querySelector('#pc-dotted').selectedOptions].map((o) => +o.value);
@@ -181,28 +178,12 @@ const Positions = {
         dotted_manager_labels: dottedLabels,
         org_chart_display: val('#pc-display') || null,
         remark: val('#pc-remark') || null,
-        ...readCostBody('pc'),
       };
       try {
         await post('/positions', body);
         closeModal(); toast('岗位已创建，编号自动生成', 'ok'); this.page = 1; this.render(); App.loadStats();
       } catch (e) { toast(e.message); }
     };
-  },
-
-  applyCostMode(modal, prefix) {
-    const mode = modal.querySelector(`input[name="${prefix}-costmode"]:checked`).value;
-    const salary = modal.querySelector(`#${prefix}-salary`);
-    const share = modal.querySelector(`#${prefix}-share`);
-    const labor = modal.querySelector(`#${prefix}-labor`);
-    const hint = modal.querySelector(`#${prefix}-costhint`);
-    if (mode === 'auto') {
-      salary.disabled = false; share.disabled = true; labor.disabled = true;
-      hint.textContent = '自动模式：公司份额 = 税前薪资 × Σ(该岗位工作地点所挂税区全部有效科目税率)，用工成本 = 税前 + 份额；城市级分拆后无国家兜底，未配置税率将提示「未配置」。保存后可在详情「重算」。';
-    } else {
-      salary.disabled = false; share.disabled = false; labor.disabled = false;
-      hint.textContent = '手动模式：三个字段均可填写。';
-    }
   },
 
   bindScopeToggle(modal, prefix) {
@@ -230,21 +211,8 @@ const Positions = {
           ${ditem('Org-Chart显示', p.org_chart_display)}
           ${ditem('之前的职位', p.prev_position_number || '—')}
           ${ditem('之前的公司', p.prev_company_name || '—')}
-          ${ditem('成本模式', p.cost_mode === 'auto' ? '自动计算' : '手动输入')}
-          ${ditem('税前薪资（预算）', fmtMoney(p.salary_before_tax))}
-          ${ditem('公司份额（预算）', fmtMoney(p.company_share))}
-          ${ditem('用工成本（预算）', fmtMoney(p.labor_cost))}
         </div>
-        ${p.incumbent_name ? `
-          <div class="section-title">实际成本（${esc(p.incumbent_name)} · 跟人走）</div>
-          <div class="grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;font-size:13px">
-            ${ditem('税前薪资（实际）', fmtMoney(p.actual_salary_before_tax))}
-            ${ditem('公司份额（实际）', fmtMoney(p.actual_company_share))}
-            ${ditem('用工成本（实际）', fmtMoney(p.actual_labor_cost))}
-            <div></div>
-          </div>` : ''}
         ${p.remark ? `<div class="section-title">备注</div><div style="font-size:13px">${esc(p.remark)}</div>` : ''}
-        ${p.cost_mode === 'auto' && p.salary_before_tax != null ? `<div class="transition-bar"><button class="btn" id="pd-calccost">重算用工成本</button></div>` : ''}
 
         <div class="section-title">生命周期流转</div>
         <div class="transition-bar" id="pd-trans"></div>
@@ -258,16 +226,6 @@ const Positions = {
             </div>`).join('') || '<div class="empty">暂无事件</div>'}
         </div>
       </div>`);
-
-    const calcBtn = modal.querySelector('#pd-calccost');
-    if (calcBtn) calcBtn.onclick = async () => {
-      try {
-        const c = await fetchCalc(id);
-        await saveCalc(id, { company_share: c.company_share, labor_cost: c.labor_cost });
-        toast(`已重算并保存：公司份额 ${fmtMoney(c.company_share)} · 用工成本 ${fmtMoney(c.labor_cost)}`, 'ok');
-        this.openDetail(id);
-      } catch (e) { handleApiError(e, '重算失败'); }
-    };
 
     const trans = Positions.TRANSITIONS[p.status] || [];
     modal.querySelector('#pd-trans').innerHTML =
@@ -331,31 +289,10 @@ const Positions = {
           <div class="field full"><label>Org-Chart 显示名</label><input type="text" id="pe-display" value="${esc(p.org_chart_display || '')}"></div>
           <div class="field full"><label>备注</label><textarea id="pe-remark" rows="2">${esc(p.remark || '')}</textarea></div>
         </div>
-
-        ${costSectionHtml('pe', { position: p, heading: '人工成本', withRecalc: true })}
       </div>
       <footer><button class="btn" onclick="closeModal()">取消</button><button class="btn primary" id="pe-save">保存</button></footer>`);
 
     this.bindScopeToggle(modal, 'pe');
-    const applyEditCost = () => {
-      this.applyCostMode(modal, 'pe');
-      modal.querySelector('#pe-calccost').style.display = modal.querySelector('input[name="pe-costmode"]:checked').value === 'auto' ? '' : 'none';
-    };
-    modal.querySelectorAll('input[name="pe-costmode"]').forEach((r) => r.onchange = applyEditCost);
-    applyEditCost();
-    modal.querySelector('#pe-calccost').onclick = async () => {
-      try {
-        const salary = val('#pe-salary') ? +val('#pe-salary') : null;
-        if (salary == null) { toast('请先填写税前薪资'); return; }
-        const c = await fetchCalc(p.id, salary);
-        const updated = await saveCalc(p.id, { cost_mode: 'auto', salary_before_tax: salary, company_share: c.company_share, labor_cost: c.labor_cost });
-        modal.querySelector('#pe-salary').value = c.salary_before_tax ?? '';
-        modal.querySelector('#pe-share').value = c.company_share ?? '';
-        modal.querySelector('#pe-labor').value = c.labor_cost ?? '';
-        toast(`已重算并保存：公司份额 ${fmtMoney(c.company_share)} · 用工成本 ${fmtMoney(c.labor_cost)}`, 'ok');
-        p.version = updated.version;
-      } catch (e) { handleApiError(e, '重算失败'); }
-    };
     modal.querySelector('#pe-save').onclick = async () => {
       const dottedIds = [...modal.querySelector('#pe-dotted').selectedOptions].map((o) => +o.value);
       const dottedLabels = val('#pe-dotted-labels').split('\n').map(s => s.trim()).filter(s => s);
@@ -378,7 +315,6 @@ const Positions = {
         dotted_manager_labels: dottedLabels,
         org_chart_display: val('#pe-display') || null,
         remark: val('#pe-remark') || null,
-        ...readCostBody('pe'),
       };
       try {
         const updated = await patch('/positions/' + p.id, body);
@@ -394,48 +330,6 @@ function val(sel) {
      元素缺失返回 '' 而非抛错（修复表单保存静默失败） */
   const el = sel && sel.startsWith('#') ? document.querySelector(sel) : document.getElementById(sel);
   return el ? el.value.trim() : '';
-}
-
-/* ---------------- 成本字段区共享实现（新建/编辑/详情复用，#41） ---------------- */
-
-function costSectionHtml(prefix, { position = null, heading = null, withRecalc = false } = {}) {
-  const isAuto = position ? position.cost_mode === 'auto' : false;
-  const v = (k) => (position && position[k] != null ? position[k] : '');
-  return `
-    <div class="section-title">${heading || '人工成本'}</div>
-    <div class="cost-toggle">
-      <label class="cost-mode"><input type="radio" name="${prefix}-costmode" value="manual" ${!isAuto ? 'checked' : ''}> 手动输入</label>
-      <label class="cost-mode"><input type="radio" name="${prefix}-costmode" value="auto" ${isAuto ? 'checked' : ''}> 自动计算（按税区用工税额）</label>
-      ${withRecalc ? `<button class="btn" id="${prefix}-calccost" style="${isAuto ? '' : 'display:none'}">重算</button>` : ''}
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:10px" id="${prefix}-costfields">
-      <div class="cost-field"><label>税前薪资（人工）</label><input type="number" step="0.01" id="${prefix}-salary" value="${v('salary_before_tax')}"></div>
-      <div class="cost-field"><label>公司份额（人工）</label><input type="number" step="0.01" id="${prefix}-share" value="${v('company_share')}"></div>
-      <div class="cost-field"><label>用工成本（人工）</label><input type="number" step="0.01" id="${prefix}-labor" value="${v('labor_cost')}"></div>
-    </div>
-    <div class="hint" id="${prefix}-costhint"></div>`;
-}
-
-function readCostBody(prefix) {
-  const num = (k) => { const v = val(`#${prefix}-${k}`); return v ? +v : null; };
-  return {
-    cost_mode: document.querySelector(`input[name="${prefix}-costmode"]:checked`).value,
-    salary_before_tax: num('salary'),
-    company_share: num('share'),
-    labor_cost: num('labor'),
-  };
-}
-
-async function fetchCalc(positionId, salary = null) {
-  const q = salary != null ? `?salary_before_tax=${salary}` : '';
-  const c = await get(`/positions/${positionId}/cost-calculation${q}`);
-  if (c.configured === false) throw new Error(c.message || '该税区未配置税率，无法自动计算');
-  return c;
-}
-
-async function saveCalc(positionId, patchBody) {
-  const fresh = await get('/positions/' + positionId);
-  return patch('/positions/' + positionId, { ...patchBody, version: fresh.version });
 }
 
 function ditem(k, v) {
