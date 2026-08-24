@@ -13,7 +13,8 @@ router = APIRouter(prefix="/api/v1", tags=["import"])
 
 
 @router.post("/imports", status_code=201)
-async def create_import(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def create_import(file: UploadFile = File(...), _user=Depends(get_current_user),
+                        db: Session = Depends(get_db)):
     """创建导入作业：上传 Position.csv 并幂等入库（非破坏性 upsert；v2.4.1 起各环境均允许，
     破坏性操作仍由 assert_writable 拦截）。"""
     content = await file.read()

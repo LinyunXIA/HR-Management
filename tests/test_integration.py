@@ -116,32 +116,32 @@ def s7_env_config():
 
 
 def s8_ui_smoke():
-    """headless Chrome 渲染冒烟：组织图 SVG 节点 + 岗位管理表格。"""
-    section("S8 UI 冒烟（headless Chromium 系浏览器，可选）")
-    candidates = [
-        shutil.which("Chrome"), shutil.which("google-chrome"),
-        shutil.which("chromium"), shutil.which("Microsoft Edge"),
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-        "/Applications/Chromium.app/Contents/MacOS/Chromium",
-    ]
-    chrome = next((c for c in candidates if c and os.path.exists(c)), None)
-    if not chrome:
-        print("  ⏭ 未检测到 Chrome/Edge/Chromium，跳过 UI 冒烟")
+    """headless 浏览器渲染冒烟：登录后组织图 SVG 节点 + 岗位管理表格（Playwright）。"""
+    section("S8 UI 冒烟（headless Chromium，可选）")
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        print("  ⏭ 未安装 playwright，跳过 UI 冒烟")
         return
-    def dump(url):
-        p = subprocess.run(
-            [chrome, "--headless=new", "--disable-gpu", "--no-sandbox",
-             "--virtual-time-budget=6000", "--dump-dom", url],
-            capture_output=True, text=True, timeout=60)
-        return p.stdout
-
-    dom = dump("http://127.0.0.1:7273/#orgchart")
-    check("org-svg" in dom, "#orgchart 渲染出 SVG 容器")
-    check("org-node" in dom, "组织图渲染出岗位节点卡片")
-    dom2 = dump("http://127.0.0.1:7273/#positions")
-    check("tab-positions" in dom2 and ("<table" in dom2 or "暂无数据" in dom2),
-          "#positions 列表容器渲染")
+    root = BASE.rsplit("/api", 1)[0]
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        page = browser.new_page()
+        page.goto(root + "/")
+        page.wait_for_timeout(1200)
+        if page.locator("#btn-login").count():
+            page.click("#btn-login")
+            page.wait_for_timeout(300)
+            page.click("#lg-submit")
+            page.wait_for_timeout(1200)
+        page.click('nav button[data-tab="orgchart"]')
+        page.wait_for_timeout(1500)
+        check(page.locator("#org-svg").count() > 0, "#orgchart 渲染出 SVG 容器")
+        check(page.locator(".org-node").count() >= 1, "组织图渲染出岗位节点卡片")
+        page.click('nav button[data-tab="positions"]')
+        page.wait_for_timeout(1000)
+        check(page.locator("#tab-positions table").count() > 0, "#positions 列表容器渲染")
+        browser.close()
 
 
 def main():
@@ -154,7 +154,7 @@ def main():
     # ---------- S2 数据清洗 ----------
     section("S2 数据清洗（Org-Chart3.md）")
     code, job, _ = req("POST", "/data-clean-jobs?source_file=" + urllib.parse.quote("Org-Chart3.md"),
-                       expect=201)
+                       token=admin, expect=201)
     total = job.get("total_positions", 0)
     report = job.get("report", {})
     check(total >= 1, f"清洗解析出 {total} 个岗位")
@@ -178,7 +178,7 @@ def main():
 
     # ---------- S4 组织图 JSON ----------
     section("S4 组织图结构")
-    _, oc, _ = req("GET", "/org-charts")
+    _, oc, _ = req("GET", "/org-charts", token=admin)
     for key in ("nodes", "solid_edges", "dotted_edges", "roots"):
         check(key in oc, f"返回含 {key}")
     nodes = oc.get("nodes", [])
@@ -194,7 +194,7 @@ def main():
     section("S5 导出 MD 三格式（Accept: text/markdown 协商）")
     titles = {"org": "组织架构", "solid": "直线汇报线", "dotted": "虚线汇报线"}
     for fmt, kw in titles.items():
-        c, body, hdr = req("GET", f"/org-charts?report={fmt}", raw=True,
+        c, body, hdr = req("GET", f"/org-charts?report={fmt}", raw=True, token=admin,
                            headers={"Accept": "text/markdown"})
         text = body.decode("utf-8") if isinstance(body, bytes) else str(body)
         ctype = hdr.get("content-type", "")

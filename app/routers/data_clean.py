@@ -54,6 +54,7 @@ def list_raw_files(_user=Depends(get_current_user)):
 async def create_data_clean_job(
     orgchart: UploadFile | None = File(None),
     source_file: str | None = None,
+    _user=Depends(get_current_user),
 ):
     """创建清洗作业：上传 Org-Chart.md，或用 ?source_file= 指定服务器原始文件（仅限 testingdata/原始文件/ 下的 .md）。
 
