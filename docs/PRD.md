@@ -499,6 +499,7 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
   - **UI 用户**：仅数据权限（内部系统使用），不持有任何 API 权限；
   - **外部 API 用户**：**数据权限 + API 权限 结合**——调接口须有对应 API 授权，返回数据按实体绑定过滤。
 - **执行点**：登录门槛（API 用户须持「认证」授权，未授予 403）；`/public/companies` 挂 `require_api_scope('public.companies')` 且非 admin 按可管实体过滤。admin 角色天然全量。
+- **注册/用户管理不对外部开放（v2.4.3）**：外部 API 账号仅可登录与调用其已授权的外部 API——`POST /auth/register`、`GET /users`、全部 `/admin/users*` 及 require_admin 类内部管理接口对 `user_type=api` 账号一律 403（即使角色被误配为 admin）。
 
 ### 7B.3 行级权限隔离（v2.3，读可跨司·写按实体）
 - **岗位不隔离**：所有 HR 可读可见岗位（含列表/详情/组织图）；`hr` 仍可维护岗位（直线/虚线接线、状态、字段）。
