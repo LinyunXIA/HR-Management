@@ -89,9 +89,9 @@ X-Token: <access_token>               # 兼容内部 Token 头
 | --- | --- |
 | 方法 | `GET` |
 | 路径 | `/public/companies` |
-| 认证 | **JWT**（`Authorization: Bearer`） |
+| 认证 | **JWT**（`Authorization: Bearer`）+ **「获取隶属公司列表」API 权限**（v2.4.3） |
 | 限流 | `60/minute` / IP |
-| 返回 | JSON 数组，仅含 `id` 与 `name` |
+| 返回 | JSON 数组：公司ID / 名称 / 开业日期 / 关闭日期 / 股权结构 / 状态（v1.2 扩展） |
 
 ### 请求
 
@@ -111,13 +111,30 @@ curl -s http://127.0.0.1:7273/api/v1/public/companies \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-### 响应 `200 OK`
+### 响应 `200 OK`（v1.2 全字段）
 
 ```json
 [
-  { "id": 1,  "name": "Peeters Capital Holding SPRL" },
-  { "id": 12, "name": "Peeters Americas Holdings Inc." },
-  { "id": 18, "name": "Family Asset Management SPRL" }
+  {
+    "id": 5,
+    "name": "Peeters Luxembourg S.à r.l.",
+    "is_active": true,
+    "opening_date": null,
+    "closing_date": null,
+    "shareholders": [
+      {
+        "id": 12,
+        "internal_company_id": 1,
+        "internal_company_name": "Family Asset Management SPRL",
+        "external_company_id": null,
+        "external_company_name": null,
+        "person_name": null,
+        "ownership_pct": 100.0,
+        "sort_order": 0
+      }
+    ],
+    "status": "opened"
+  }
 ]
 ```
 
@@ -125,16 +142,26 @@ curl -s http://127.0.0.1:7273/api/v1/public/companies \
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| id | integer | 公司主键 |
+| id | integer | 公司主键（数据库内部值） |
 | name | string | 隶属公司名称（唯一） |
+| is_active | boolean | 是否启用（与关闭日期联动） |
+| opening_date | string\|null | 开业日期（`YYYY-MM-DD`；年份精度按 `YYYY-01-01` 存） |
+| closing_date | string\|null | 关闭日期（有值视为已关闭） |
+| shareholders | array | 股权结构（0..N 行，三来源互斥：内部公司 / 外部合作公司 / 自然人） |
+| shareholders[].ownership_pct | number\|null | 持股比例 %（可选填） |
+| status | string | `opened` / `closed` |
 
-- 返回全部公司，按名称升序排列，数量随主数据增减变化。
-- 无分页；无其他字段（不返回岗位数等统计）。
-- 实现：`app/routers/master_data.py:144`，`app/auth.py:get_current_user` 强制校验。
+- 按名称升序排列；无分页。
+- **权限结合（v2.4.3）**：admin 返回全部；其余账号仅返回其可管实体（数据权限过滤）。
+
+### 错误示例
 
 ### 错误示例
 
 ```http
+HTTP/1.1 403 Forbidden
+{"detail":"该账号未被授予 API 权限「获取隶属公司列表」（public.companies）"}
+
 HTTP/1.1 401 Unauthorized
 {"detail":"未提供认证 Token（请在 Authorization: Bearer <token> 头中携带）"}
 
@@ -150,3 +177,4 @@ HTTP/1.1 429 Too Many Requests
 | --- | --- | --- |
 | 2026-08-04 | v1.0 | 新增 `GET /public/companies` 对外接口（无认证） |
 | 2026-08-22 | v1.1 | **Breaking**: `GET /public/companies` 改为 **JWT 必需** + `60/min` 限流；新增 `§0 认证`（`POST /auth/login` 等，登录 `10/min`，`bcrypt`）；Base URL 修正为 `/api/v1`；补充 `401/429` 错误码 |
+| 2026-08-24 | v1.2 | 响应扩展为**全字段**：开业/关闭日期、股权结构（三来源股东 + 持股比例）、状态；需「获取隶属公司列表」API 权限（v2.4.3 权限拆分）；非 admin 按可管实体过滤 |

@@ -107,11 +107,11 @@
 
 对外暴露的只读接口已**单独成文**，见 **[API_PUBLIC.md](./API_PUBLIC.md)**。
 
-当前对外接口（**需 JWT**，`app/routers/master_data.py:144`）：
+当前对外接口（**需 JWT + 对应 API 权限**，v2.4.3 权限拆分；详见 [API_PUBLIC.md](./API_PUBLIC.md)）：
 
 | 方法 | 路径 | 说明 | 认证 | 限流 |
 | --- | --- | --- | --- | --- |
-| GET | `/public/companies` | 所有隶属公司（仅 `id` + `name`） | JWT | `60/min` |
+| GET | `/public/companies` | 隶属公司全字段：ID/名称/开业·关闭日期/股权结构/状态；非 admin 按可管实体过滤 | JWT + `public.companies` 授权 | `60/min` |
 
 ### 2.4 认证（Auth，PRD §7B）
 

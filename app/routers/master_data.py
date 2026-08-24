@@ -426,7 +426,7 @@ _crud(PositionType, PositionTypeOut, PositionTypeCreate, PositionTypeUpdate,
 @limiter.limit("60/minute")
 def public_companies(request: Request, db: Session = Depends(get_db),
                      user: User = Depends(require_api_scope("public.companies"))):
-    """对外暴露：隶属公司列表。需 JWT + 「获取隶属公司列表」API 权限（v2.4.3）。
+    """对外暴露：隶属公司完整信息（v2.4.3：公司ID / 名称 / 开业日期 / 关闭日期 / 股权结构 / 状态）。
 
     数据权限结合：admin 返回全部；其余按其可管实体绑定过滤。
     """
@@ -435,10 +435,12 @@ def public_companies(request: Request, db: Session = Depends(get_db),
     operable = get_operable_company_ids(db, user)
     if operable is not ALL_COMPANIES:  # 非 admin：仅可见可管实体
         q = q.filter(Company.id.in_(operable))
-    return [
-        {"id": c.id, "name": c.name, "is_active": c.is_active, "status": "opened" if c.is_active else "closed"}
-        for c in q.all()
-    ]
+    out = []
+    for c in q.all():
+        body = _serialize_company(c)  # id/name/is_active/opening_date/closing_date/shareholders[]
+        body["status"] = "opened" if c.is_active else "closed"
+        out.append(body)
+    return out
 
 
 # ---------------------------------------------------------------- 员工用工税额（v2.3：按税区）
