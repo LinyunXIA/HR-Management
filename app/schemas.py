@@ -14,11 +14,57 @@ from app.models import (
 
 
 # ---------------------------------------------------------------- 基础字典
+class CompanyShareholderIn(BaseModel):
+    """股东行输入（v2.4）：三来源互斥，恰好其一非空。"""
+    internal_company_id: int | None = None
+    external_company_id: int | None = None
+    person_name: str | None = None
+    ownership_pct: float | None = None
+    sort_order: int = 0
+
+
+class CompanyShareholderOut(CompanyShareholderIn):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    # 冗余展示字段（序列化时填充）
+    internal_company_name: str | None = None
+    external_company_name: str | None = None
+
+
 class CompanyOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     name: str
     is_active: bool
+    opening_date: date | None = None
+    closing_date: date | None = None
+    shareholders: list[CompanyShareholderOut] = []
+
+
+class ExternalCompanyOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    remark: str | None = None
+    is_active: bool
+    opening_date: date | None = None
+    closing_date: date | None = None
+
+
+class ExternalCompanyCreate(BaseModel):
+    name: str
+    remark: str | None = None
+    opening_date: date | None = None
+    closing_date: date | None = None
+    is_active: bool | None = True  # 兼容旧调用；closing_date 有值时强制 False
+
+
+class ExternalCompanyUpdate(BaseModel):
+    name: str | None = None
+    remark: str | None = None
+    opening_date: date | None = None
+    closing_date: date | None = None
+    is_active: bool | None = None  # 兼容旧调用；传 closing_date 时以联动为准
 
 
 class CountryOut(BaseModel):
@@ -184,11 +230,18 @@ class PromoteRequest(BaseModel):
 class CompanyCreate(BaseModel):
     name: str
     is_active: bool | None = True
+    opening_date: date | None = None
+    closing_date: date | None = None
+    shareholders: list[CompanyShareholderIn] | None = None
 
 
 class CompanyUpdate(BaseModel):
     name: str | None = None
     is_active: bool | None = None
+    opening_date: date | None = None
+    closing_date: date | None = None
+    # 股东行整组 replace-all：None=不改动；[] = 清空全部
+    shareholders: list[CompanyShareholderIn] | None = None
 
 
 class CountryCreate(BaseModel):

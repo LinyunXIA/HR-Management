@@ -168,6 +168,28 @@ def _ensure_v23_columns():
         print(f"[migrate] v23 columns ensure failed: {e}", file=sys.stderr)
 
 _ensure_v23_columns()
+
+# 轻量迁移：v2.4 公司主数据改造（开业/关闭日期；
+# 新表 external_companies / company_shareholders 由 create_all 幂等创建）
+def _ensure_v24_company_columns():
+    stmts = [
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS opening_date DATE",
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS closing_date DATE",
+        # v2.4.1：外部合作公司同样以开业/关闭日期管理启停
+        "ALTER TABLE external_companies ADD COLUMN IF NOT EXISTS opening_date DATE",
+        "ALTER TABLE external_companies ADD COLUMN IF NOT EXISTS closing_date DATE",
+    ]
+    try:
+        with engine.begin() as conn:
+            for sql in stmts:
+                try:
+                    conn.execute(text(sql))
+                except Exception as e:
+                    print(f"[migrate] skipped: {sql[:60]}...: {e}", file=sys.stderr)
+    except Exception as e:
+        print(f"[migrate] v24 company columns ensure failed: {e}", file=sys.stderr)
+
+_ensure_v24_company_columns()
 # 轻量迁移：users.role 由旧 String 值('admin'/'hr') → 枚举名('ADMIN'/'HR')
 def _migrate_user_role_values():
     try:

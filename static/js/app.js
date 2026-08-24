@@ -8,13 +8,14 @@ const App = {
   scopes: [],
   legalCategories: [],
   positionTypes: [],
+  externalCompanies: [],
 
   async loadDicts() {
-    const [companies, countries, functions, levels, workLocations, scopes, legalCategories, positionTypes] =
+    const [companies, countries, functions, levels, workLocations, scopes, legalCategories, positionTypes, externalCompanies] =
       await Promise.all([
         get('/companies'), get('/countries'), get('/position-functions'),
         get('/levels'), get('/work-locations'), get('/scopes'), get('/legal-categories'),
-        get('/position-types'),
+        get('/position-types'), get('/external-companies'),
       ]);
     this.companies = companies;
     this.countries = countries;
@@ -24,6 +25,7 @@ const App = {
     this.scopes = scopes;
     this.legalCategories = legalCategories;
     this.positionTypes = positionTypes;
+    this.externalCompanies = externalCompanies || [];
   },
 
   async loadStats() {

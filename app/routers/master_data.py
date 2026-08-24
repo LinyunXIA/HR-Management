@@ -12,19 +12,25 @@ from app.helpers import get_or_404
 from app.limiter import limiter
 from app.models import (
     Company,
+    CompanyShareholder,
     Country,
+    Employee,
     EmploymentTaxItem,
+    ExternalCompany,
     LegalCategoryDef,
     Level,
     PositionNumber,
+    PositionStatus,
     PositionType,
     ScopeDef,
     TaxZone,
+    UserCompany,
     WorkLocation,
 )
 from app.schemas import (
     CompanyCreate,
     CompanyOut,
+    CompanyShareholderIn,
     CompanyUpdate,
     CountryCreate,
     CountryOut,
@@ -32,6 +38,9 @@ from app.schemas import (
     EmploymentTaxItemCreate,
     EmploymentTaxItemOut,
     EmploymentTaxItemUpdate,
+    ExternalCompanyCreate,
+    ExternalCompanyOut,
+    ExternalCompanyUpdate,
     LegalCategoryCreate,
     LegalCategoryOut,
     LegalCategoryUpdate,
@@ -91,12 +100,6 @@ def _crud(model, out_schema, create_schema, update_schema, path: str,
     @router.delete(path + "/{obj_id}")
     def delete_item(obj_id: int, db: Session = Depends(get_db)):
         obj = get_or_404(db, model, obj_id)
-        # 公司软删除：id 保留，仅标记 is_active=False (closed)，被引用时也允许停用
-        if model == Company:
-            obj.is_active = False
-            db.commit()
-            db.refresh(obj)
-            return {"ok": True, "id": obj_id, "is_active": False, "status": "closed"}
         if ref_check:
             ref_check(db, obj)
         db.delete(obj)
@@ -105,12 +108,268 @@ def _crud(model, out_schema, create_schema, update_schema, path: str,
 
 
 # ---------------------------------------------------------------- 各字典
-def _company_ref(db: Session, obj: Company):
-    used = db.query(PositionNumber).filter(
-        (PositionNumber.company_id == obj.id) | (PositionNumber.prev_company_id == obj.id)
-    ).first()
+# ---------------------------------------------------------------- 隶属公司（v2.4 专用路由：开业/关闭日期 + 股权结构）
+def _serialize_shareholder(sh: CompanyShareholder) -> dict:
+    return {
+        "id": sh.id,
+        "internal_company_id": sh.internal_company_id,
+        "internal_company_name": sh.internal_company.name if sh.internal_company else None,
+        "external_company_id": sh.external_company_id,
+        "external_company_name": sh.external_company.name if sh.external_company else None,
+        "person_name": sh.person_name,
+        "ownership_pct": float(sh.ownership_pct) if sh.ownership_pct is not None else None,
+        "sort_order": sh.sort_order,
+    }
+
+
+def _serialize_company(company: Company) -> dict:
+    return {
+        "id": company.id,
+        "name": company.name,
+        "is_active": company.is_active,
+        "opening_date": company.opening_date.isoformat() if company.opening_date else None,
+        "closing_date": company.closing_date.isoformat() if company.closing_date else None,
+        "shareholders": [_serialize_shareholder(sh) for sh in (company.shareholders or [])],
+    }
+
+
+def _validate_shareholders(db: Session, rows: list[CompanyShareholderIn],
+                           self_id: int | None = None) -> list[CompanyShareholder]:
+    """股东行校验：三来源互斥、内部股东拒自环、引用存在性、同源去重。"""
+    out: list[CompanyShareholder] = []
+    seen_internal, seen_external, seen_person = set(), set(), set()
+    for i, row in enumerate(rows):
+        sources = [row.internal_company_id, row.external_company_id,
+                   (row.person_name or "").strip() or None]
+        if sum(1 for v in sources if v not in (None, "")) != 1:
+            raise HTTPException(400, f"第 {i + 1} 行股东：内部公司 / 外部合作公司 / 自然人必须恰好填写其一")
+        pct = row.ownership_pct
+        if pct is not None and not (0 < pct <= 100):
+            raise HTTPException(400, f"第 {i + 1} 行股东：持股比例须在 (0, 100] 区间")
+        if row.internal_company_id is not None:
+            if self_id is not None and row.internal_company_id == self_id:
+                raise HTTPException(400, "股权结构不允许自环：公司不能以自身为股东")
+            if row.internal_company_id in seen_internal:
+                raise HTTPException(400, f"同一内部公司股东重复出现（id={row.internal_company_id}）")
+            seen_internal.add(row.internal_company_id)
+            if not db.get(Company, row.internal_company_id):
+                raise HTTPException(400, f"内部公司不存在（id={row.internal_company_id}）")
+        if row.external_company_id is not None:
+            if row.external_company_id in seen_external:
+                raise HTTPException(400, f"同一外部合作公司股东重复出现（id={row.external_company_id}）")
+            seen_external.add(row.external_company_id)
+            if not db.get(ExternalCompany, row.external_company_id):
+                raise HTTPException(400, f"外部合作公司不存在（id={row.external_company_id}），请先在主数据中维护")
+        if sources[2] is not None:
+            key = sources[2]
+            if key in seen_person:
+                raise HTTPException(400, f"自然人股东「{key}」重复出现")
+            seen_person.add(key)
+        out.append(CompanyShareholder(
+            internal_company_id=row.internal_company_id,
+            external_company_id=row.external_company_id,
+            person_name=sources[2],
+            ownership_pct=pct,
+            sort_order=row.sort_order if row.sort_order else i,
+        ))
+    return out
+
+
+def _check_ownership_cycle(db: Session, company: Company) -> None:
+    """沿内部公司股东链上溯环检测（A→B→A 拒绝）。
+
+    基于会话当前（含本次 replace-all 后、commit 前）状态；新环必经过本公司，
+    故从本公司出发 DFS 即可覆盖。
+    """
+    target = company.id
+    seen: set[int] = set()
+    stack = [target]
+    while stack:
+        cid = stack.pop()
+        if cid == target and seen:
+            raise HTTPException(400, "股权结构存在环路（A→B→A），请检查内部公司股东链")
+        if cid in seen:
+            continue
+        seen.add(cid)
+        owners = db.query(CompanyShareholder.internal_company_id).filter(
+            CompanyShareholder.company_id == cid,
+            CompanyShareholder.internal_company_id.isnot(None),
+        ).all()
+        stack.extend(o[0] for o in owners)
+
+
+def _pct_warning(rows: list[CompanyShareholder]) -> str | None:
+    """pct 合计 ≠100% 软校验（不拦截保存，仅告警）。"""
+    pcts = [float(r.ownership_pct) for r in rows if r.ownership_pct is not None]
+    if pcts and abs(sum(pcts) - 100) > 0.005:
+        return f"股东持股比例合计为 {sum(pcts):g}%（≠100%），请确认"
+    return None
+
+
+def _assert_company_closable(db: Session, company_id: int) -> None:
+    """关闭前置校验：公司名下全部岗位须为 Closed 才允许设置关闭日期（v2.4.1）。"""
+    n = db.query(PositionNumber).filter(
+        PositionNumber.company_id == company_id,
+        PositionNumber.status != PositionStatus.CLOSED.name,
+    ).count()
+    if n:
+        raise HTTPException(
+            400, f"该公司仍有 {n} 个岗位未关闭（仅当名下全部岗位均为「关闭」后才可设置关闭日期）")
+
+
+@router.get("/companies", response_model=list[CompanyOut])
+def list_companies(_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    return [_serialize_company(c) for c in
+            db.query(Company).order_by(Company.name, Company.id).all()]
+
+
+@router.post("/companies", status_code=201)
+def create_company(payload: CompanyCreate, response: Response,
+                   db: Session = Depends(get_db)):
+    company = Company(
+        name=payload.name,
+        opening_date=payload.opening_date,
+        closing_date=payload.closing_date,
+        # 填关闭日 ⇔ 自动置停用（PRD F0.1 联动）
+        is_active=False if payload.closing_date else (payload.is_active if payload.is_active is not None else True),
+    )
+    db.add(company)
+    try:
+        db.flush()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(400, f"公司创建失败（名称重复或约束冲突）: {e}")
+    if payload.shareholders is not None:
+        company.shareholders = _validate_shareholders(db, payload.shareholders, self_id=company.id)
+        db.flush()  # 先落会话再查链，保证环检测基于本次提交后的全图
+        _check_ownership_cycle(db, company)
+    if payload.closing_date:
+        _assert_company_closable(db, company.id)
+    db.commit()
+    db.refresh(company)
+    response.headers["Location"] = f"/api/v1/companies/{company.id}"
+    body = _serialize_company(company)
+    warning = _pct_warning(company.shareholders or [])
+    if warning:
+        body["warning"] = warning
+    return body
+
+
+@router.patch("/companies/{company_id}", response_model=None)
+def update_company(company_id: int, payload: CompanyUpdate, db: Session = Depends(get_db)):
+    company = get_or_404(db, Company, company_id)
+    data = payload.model_dump(exclude_unset=True)
+    closing_changed = "closing_date" in data
+    # shareholders 由下方专用逻辑处理（model_dump 产出 dict，不可直接塞给 relationship）
+    for k, v in {k2: v2 for k2, v2 in data.items() if k2 != "shareholders"}.items():
+        setattr(company, k, v)
+    # closing_date ↔ is_active 联动：填关闭日自动置停用；清空恢复启用（显式传 is_active 时以联动为准）
+    if closing_changed:
+        company.is_active = company.closing_date is None
+    if company.closing_date and closing_changed:
+        _assert_company_closable(db, company.id)
+    if payload.shareholders is not None:
+        company.shareholders = []  # 先删旧行再插新行，避免 replace-all 撞 Unique(company_id, *_id)
+        db.flush()
+        company.shareholders = _validate_shareholders(db, payload.shareholders, self_id=company.id)
+        db.flush()  # 先落会话再查链，保证环检测基于本次提交后的全图
+        _check_ownership_cycle(db, company)
+    db.commit()
+    db.refresh(company)
+    body = _serialize_company(company)
+    warning = _pct_warning(company.shareholders or [])
+    if warning:
+        body["warning"] = warning
+    return body
+
+
+@router.delete("/companies/{company_id}")
+def delete_company(company_id: int, db: Session = Depends(get_db),
+                   _user=Depends(get_current_user)):
+    """物理删除（v2.4.1）：被岗位/股权/转调目标/HR 绑定引用时禁止，需先解除。"""
+    company = get_or_404(db, Company, company_id)
+    n_pos = db.query(PositionNumber).filter(
+        (PositionNumber.company_id == company_id)
+        | (PositionNumber.prev_company_id == company_id)).count()
+    if n_pos:
+        raise HTTPException(400, f"公司「{company.name}」已被 {n_pos} 个岗位（隶属/转岗来源）引用，禁止删除")
+    n_sh = db.query(CompanyShareholder).filter(
+        CompanyShareholder.internal_company_id == company_id).count()
+    if n_sh:
+        raise HTTPException(400, f"公司「{company.name}」被 {n_sh} 条股权结构记录作为内部股东引用，禁止删除")
+    n_emp = db.query(Employee).filter(Employee.target_company_id == company_id).count()
+    if n_emp:
+        raise HTTPException(400, f"公司「{company.name}」是 {n_emp} 名「转调中」员工的目标公司，禁止删除")
+    n_uc = db.query(UserCompany).filter(UserCompany.company_id == company_id).count()
+    if n_uc:
+        raise HTTPException(400, f"公司「{company.name}」绑定了 {n_uc} 个 HR 账号的可管实体，请先在用户管理中解除")
+    db.delete(company)  # 自身股东行由 ORM cascade 一并删除
+    db.commit()
+    return {"ok": True, "id": company_id, "deleted": True}
+
+
+def _external_company_ref(db: Session, obj: ExternalCompany):
+    used = db.query(CompanyShareholder).filter(
+        CompanyShareholder.external_company_id == obj.id).first()
     if used:
-        raise HTTPException(400, f"公司「{obj.name}」已被岗位引用，禁止删除（可停用）")
+        raise HTTPException(400, f"外部合作公司「{obj.name}」已被股权结构引用，禁止删除")
+
+
+# ---------------------------------------------------------------- 外部合作公司（v2.4.1：关闭日期管理启停，弃用启用开关）
+@router.get("/external-companies", response_model=list[ExternalCompanyOut])
+def list_external_companies(_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    return db.query(ExternalCompany).order_by(ExternalCompany.name, ExternalCompany.id).all()
+
+
+@router.post("/external-companies", response_model=ExternalCompanyOut, status_code=201)
+def create_external_company(payload: ExternalCompanyCreate, response: Response,
+                            db: Session = Depends(get_db)):
+    obj = ExternalCompany(
+        name=payload.name,
+        remark=payload.remark,
+        opening_date=payload.opening_date,
+        closing_date=payload.closing_date,
+        is_active=False if payload.closing_date else payload.is_active,
+    )
+    db.add(obj)
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(400, f"外部合作公司创建失败（名称重复或约束冲突）: {e}")
+    db.refresh(obj)
+    response.headers["Location"] = f"/api/v1/external-companies/{obj.id}"
+    return obj
+
+
+@router.patch("/external-companies/{obj_id}", response_model=None)
+def update_external_company(obj_id: int, payload: ExternalCompanyUpdate,
+                            db: Session = Depends(get_db)):
+    obj = get_or_404(db, ExternalCompany, obj_id)
+    data = payload.model_dump(exclude_unset=True)
+    closing_changed = "closing_date" in data
+    for k, v in data.items():
+        setattr(obj, k, v)
+    # 关闭日期 ↔ 启用联动：填关闭日自动置停用；清空恢复启用
+    if closing_changed:
+        obj.is_active = obj.closing_date is None
+    db.commit()
+    db.refresh(obj)
+    return {
+        "id": obj.id, "name": obj.name, "remark": obj.remark, "is_active": obj.is_active,
+        "opening_date": obj.opening_date.isoformat() if obj.opening_date else None,
+        "closing_date": obj.closing_date.isoformat() if obj.closing_date else None,
+    }
+
+
+@router.delete("/external-companies/{obj_id}")
+def delete_external_company(obj_id: int, db: Session = Depends(get_db),
+                            _user=Depends(get_current_user)):
+    obj = get_or_404(db, ExternalCompany, obj_id)
+    _external_company_ref(db, obj)
+    db.delete(obj)
+    db.commit()
+    return {"ok": True, "id": obj_id}
 
 
 def _country_ref(db: Session, obj: Country):
@@ -149,7 +408,7 @@ def _position_type_ref(db: Session, obj: PositionType):
         raise HTTPException(400, f"职位类型「{obj.name}」已被岗位引用，禁止删除")
 
 
-_crud(Company, CompanyOut, CompanyCreate, CompanyUpdate, "/companies", order_by="name", ref_check=_company_ref)
+# 公司与外部合作公司均走上方 v2.4 专用路由（开业/关闭日期管理启停；公司含股权结构）
 _crud(Country, CountryOut, CountryCreate, CountryUpdate, "/countries", order_by="name", ref_check=_country_ref)
 _crud(Level, LevelOut, LevelCreate, LevelUpdate, "/levels", order_by="sort_order", ref_check=_level_ref)
 _crud(WorkLocation, WorkLocationOut, WorkLocationCreate, WorkLocationUpdate,
