@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
+from app.auth import get_current_user
 from app.db import get_db
 from app.export_md import export_md
 from app.orgchart import build_orgchart
@@ -11,7 +12,7 @@ router = APIRouter(prefix="/api/v1", tags=["orgchart"])
 
 
 @router.get("/org-charts")
-def get_org_charts(request: Request, report: str | None = None, db: Session = Depends(get_db)):
+def get_org_charts(request: Request, report: str | None = None, _user=Depends(get_current_user), db: Session = Depends(get_db)):
     """获取组织架构：JSON 或 Markdown（通过 Accept: text/markdown 协商）。
 
     - Accept: application/json（默认）→ {nodes, solid_edges, dotted_edges, roots}

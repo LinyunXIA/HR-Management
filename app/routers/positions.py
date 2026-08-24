@@ -60,7 +60,7 @@ def _assert_level(db: Session, level: str | None):
 
 # ---------------------------------------------------------------- 基础字典
 @router.get("/position-functions", response_model=list[PositionFunctionOut])
-def list_functions(db: Session = Depends(get_db)):
+def list_functions(_user=Depends(get_current_user), db: Session = Depends(get_db)):
     return db.query(Position).order_by(Position.name).all()
 
 
@@ -88,6 +88,7 @@ def list_positions(
     role: str | None = None,
     page: int = 1,
     page_size: int = 50,
+    _user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     q = db.query(PositionNumber)
@@ -188,7 +189,7 @@ def create_position(payload: PositionNumberCreate, response: Response,
 
 
 @router.get("/positions/{pid}")
-def get_position(pid: int, db: Session = Depends(get_db)):
+def get_position(pid: int, _user=Depends(get_current_user), db: Session = Depends(get_db)):
     pn = get_or_404(db, PositionNumber, pid, "岗位不存在")
     events = (
         db.query(PositionEvent)
@@ -307,7 +308,7 @@ def transition_position(pid: int, payload: TransitionRequest, response: Response
 
 
 @router.get("/positions/{pid}/transitions")
-def list_position_transitions(pid: int, db: Session = Depends(get_db)):
+def list_position_transitions(pid: int, _user=Depends(get_current_user), db: Session = Depends(get_db)):
     """列出岗位的生命周期流转事件。"""
     get_or_404(db, PositionNumber, pid, "岗位不存在")
     events = (
@@ -324,7 +325,7 @@ def list_position_transitions(pid: int, db: Session = Depends(get_db)):
 
 
 @router.get("/transitions")
-def list_transitions(position_id: int | None = None, db: Session = Depends(get_db)):
+def list_transitions(position_id: int | None = None, _user=Depends(get_current_user), db: Session = Depends(get_db)):
     """全局流转事件列表（可按岗位过滤）。"""
     q = db.query(PositionEvent)
     if position_id:
@@ -339,7 +340,7 @@ def list_transitions(position_id: int | None = None, db: Session = Depends(get_d
 
 @router.get("/positions/{pid}/cost-calculation")
 def get_position_cost(pid: int, salary_before_tax: float | None = None,
-                      scope: str = "budget", db: Session = Depends(get_db)):
+                      scope: str = "budget", _user=Depends(get_current_user), db: Session = Depends(get_db)):
     """成本测算（v2.3 双口径，只读不落库）。
 
     - scope=budget（默认）：按**岗位税区**（工作地点）计算预算成本，空岗可用；

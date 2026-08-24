@@ -114,6 +114,7 @@ def list_employees(
     search: str | None = None,
     page: int = 1,
     page_size: int = 50,
+    _user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     q = db.query(Employee)
@@ -167,7 +168,7 @@ def create_employee(payload: EmployeeCreate, response: Response,
 
 
 @router.get("/employees/{eid}")
-def get_employee(eid: int, db: Session = Depends(get_db)):
+def get_employee(eid: int, _user=Depends(get_current_user), db: Session = Depends(get_db)):
     emp = get_or_404(db, Employee, eid, "员工不存在")
     return serialize_employee(db, emp)
 
