@@ -208,10 +208,16 @@ const MasterData = {
         };
         inp.oninput = syncField;
         inp.onchange = syncField;
-        tr.querySelector('[data-sh-pct]').onchange = (e) => {
-          this._shRows[idx].ownership_pct = e.target.value === '' ? null : e.target.value;
+        // 渲染后立即以 DOM 当前值为准：下拉首选项默认选中不触发 change，
+        // 用户不改选直接保存时状态仍为 null → 「未选择来源」假报错（v2.4.1）
+        syncField();
+        const pctEl = tr.querySelector('[data-sh-pct]');
+        const syncPct = () => {
+          this._shRows[idx].ownership_pct = pctEl.value === '' ? null : pctEl.value;
           refreshWarn();
         };
+        pctEl.oninput = syncPct;
+        pctEl.onchange = syncPct;
         tr.querySelector('[data-sh-del]').onclick = () => { this._shRows.splice(idx, 1); renderRows(); refreshWarn(); };
       });
     };
