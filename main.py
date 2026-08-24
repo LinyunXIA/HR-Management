@@ -14,7 +14,6 @@ from app import models  # noqa: F401  确保模型注册到 Base.metadata
 from app.db import APP_ENV, Base, DATABASE_URL, SessionLocal, engine, startup_banner
 from app.seed import seed_master_data
 from app.routers import auth, data_clean, employees, import_routes, master_data, orgchart, positions, transfers, users
-from app.routers import benchmarks as benchmarks_router
 
 # 启动时打印三环境自检日志（PRD §7D.2）
 print(startup_banner(), file=sys.stderr, flush=True)
@@ -80,15 +79,21 @@ def _ensure_attach_type_triggers():
 _ensure_attach_type_triggers()
 
 
-# 轻量迁移（v2.6）：成本六栏改造 + 外部基准对接
+# 轻量迁移（v2.6，含第二轮修订）：
+# R1 公司绑税区：companies ADD COLUMN tax_zone_id
+# R2 基准对接退役：DROP TABLE labor_benchmarks / benchmark_reports；
+#   清理 user_apis 中已废弃的 'benchmarks' 授权行
 # - 新增列：position_numbers 四栏 / employees.actual_ 四栏 / employment_tax_items 两列
 #   （create_all 只建缺失表不补列，存量库需逐列幂等 ADD）
 # - 废弃列：company_share / actual_company_share（公司份额拆分为强制扣税+定额外，
 #   三库均无数据）。dev/test 直接 DROP；prod 按 §7D.3 走受控迁移，仅告警不动结构
-def _ensure_v26_cost_columns():
+def _ensure_v26_migrations():
     from sqlalchemy import inspect as sa_inspect
 
     adds = {
+        "companies": [
+            ("tax_zone_id", "INTEGER REFERENCES tax_zones(id)"),
+        ],
         "position_numbers": [
             ("mandatory_tax", "NUMERIC(14,2)"),
             ("mandatory_fixed_fee", "NUMERIC(14,2)"),
@@ -106,10 +111,11 @@ def _ensure_v26_cost_columns():
             ("fixed_amount", "NUMERIC(14,2)"),
         ],
     }
-    drops = {
+    drops_col = {
         "position_numbers": ["company_share"],
         "employees": ["actual_company_share"],
     }
+    drop_tables = ["labor_benchmarks", "benchmark_reports"]
     try:
         # 先在事务外完成全部反射，构建 DDL 计划——BEGIN IMMEDIATE 配方下，
         # 事务内再发起任何语句（含 inspector 反射的 SELECT）都会以 IMMEDIATE
@@ -124,18 +130,31 @@ def _ensure_v26_cost_columns():
                     stmts.append(f"ALTER TABLE {tbl} ADD COLUMN {name} {ddl}")
         drop_stmts: list[str] = []
         if APP_ENV != "prod":
-            for tbl, cols in drops.items():
+            for tbl, cols in drops_col.items():
                 existing = {c["name"] for c in sa_inspect(engine).get_columns(tbl)}
                 for name in cols:
                     if name in existing:
                         drop_stmts.append(f"ALTER TABLE {tbl} DROP COLUMN {name}")
+            tables_present = set(sa_inspect(engine).get_table_names())
+            for t in drop_tables:
+                if t in tables_present:
+                    drop_stmts.append(f"DROP TABLE {t}")
+            stmts.append("DELETE FROM user_apis WHERE api_key = 'benchmarks'")
         elif any(c in {x["name"] for x in sa_inspect(engine).get_columns(tbl)}
-                 for tbl, cols in drops.items() for c in cols):
-            pending = [c for tbl, cols in drops.items() for c in cols
+                 for tbl, cols in drops_col.items() for c in cols):
+            pending = [c for tbl, cols in drops_col.items() for c in cols
                        if c in {x["name"] for x in sa_inspect(engine).get_columns(tbl)}]
             if pending:
                 print(f"[migrate] WARNING(prod): 废弃列 {pending} 未删除——"
                       f"生产变更走受控迁移：ALTER TABLE ... DROP COLUMN（§7D.3）", file=sys.stderr)
+        if APP_ENV == "prod":
+            tables_present = set(sa_inspect(engine).get_table_names())
+            leftover = [t for t in drop_tables if t in tables_present]
+            if leftover:
+                print(f"[migrate] WARNING(prod): 基准退役表 {leftover} 未删除——"
+                      f"受控迁移 SQL：DROP TABLE labor_benchmarks; DROP TABLE benchmark_reports;"
+                      f" DELETE FROM user_apis WHERE api_key='benchmarks';（带列/带表运行无功能影响，§7D.3）",
+                      file=sys.stderr)
 
         if not stmts and not drop_stmts:
             return
@@ -155,10 +174,10 @@ def _ensure_v26_cost_columns():
                 print(f"[migrate] v26 迁移第 {attempt + 1} 次尝试失败（{e}），重试…", file=sys.stderr)
                 time.sleep(1)
     except Exception as e:
-        print(f"[migrate] v26 cost columns ensure failed: {e}", file=sys.stderr)
+        print(f"[migrate] v26 migrations ensure failed: {e}", file=sys.stderr)
 
 
-_ensure_v26_cost_columns()
+_ensure_v26_migrations()
 
 with SessionLocal() as db:
     seed_master_data(db)
@@ -182,7 +201,6 @@ app.include_router(employees.router)
 app.include_router(orgchart.router)
 app.include_router(import_routes.router)
 app.include_router(transfers.router)
-app.include_router(benchmarks_router.router)
 
 
 @app.get("/api/v1/health")

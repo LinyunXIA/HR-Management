@@ -122,7 +122,7 @@ APP_ENV=prod .venv/bin/python -m scripts.import_csv testingdata/原始文件/Pos
 
 ## 10. 当前运行状态（2026-08-24 更新）
 
-- **v2.6 年度用工成本预估已落地**：`POST /benchmarks`（L1~L4 整批原子校验，方案甲缺一拒收）→ 异步报告 → `GET /benchmarks/reports/{year}`；成本六栏改造（公司份额列已删，税额科目分 rate/fixed）；scope 新增 benchmarks/public.levels；`tests/test_benchmark.py` 28 项
+- **v2.6 已落地（第二轮修订定稿）**：对外 `GET /public/positions` 在岗岗位数据导出（第三方计算用工成本，原基准推送/报告链路整体废弃）；成本六栏 + 税额科目 rate/fixed 两类；**Company 绑税区一对一，全部成本场景统一公司税区口径**（resolve_tax_zone 退役）；scope=public.positions + GET /admin/scopes；`tests/test_public_positions.py` 24 项
 - **v2.5 存储切换已落地：PostgreSQL → SQLite 同机三文件**（`data/hr_db_{dev,test,prod}.db`，WAL + 每连接 `PRAGMA foreign_keys=ON`）；psycopg2 已移出运行时依赖；主数据字典已从 PG 迁入（`scripts/migrate_pg_master_data.py`，幂等可重跑）
 - **编号系统重制已落地（PRD v2.3）**：源编号一律忽视，导入/创建时系统分配——正式 `P{seq}` / 外包 `PA{seq}`；幂等键=职位名+公司+国家或地区+开启日；经理引用按职位名解析
 - **数据清洗仅支持 Org-Chart3 格式**：无编号树 + 权责说明续行；直线经理=真实树祖先（兄弟不互挂、公司清栈）

@@ -20,6 +20,7 @@ from app.models import (
     LegalCategoryDef,
     Level,
     PositionNumber,
+    PositionNumberDottedLine,
     PositionStatus,
     PositionType,
     ScopeDef,
@@ -123,15 +124,32 @@ def _serialize_shareholder(sh: CompanyShareholder) -> dict:
     }
 
 
-def _serialize_company(company: Company) -> dict:
+def _tax_zone_label(db: Session, zone: TaxZone | None) -> str | None:
+    """税区展示标签：国家·城市（级别）。"""
+    if not zone:
+        return None
+    cname = zone.country.name if zone.country else "?"
+    base = f"{cname}·{zone.city}" if zone.level == "city" and zone.city else cname
+    return f"{base}（{'城市级' if zone.level == 'city' else '国家级'}）"
+
+
+def _serialize_company(db: Session, company: Company) -> dict:
+    zone = company.tax_zone
     return {
         "id": company.id,
         "name": company.name,
         "is_active": company.is_active,
         "opening_date": company.opening_date.isoformat() if company.opening_date else None,
         "closing_date": company.closing_date.isoformat() if company.closing_date else None,
+        "tax_zone_id": company.tax_zone_id,
+        "tax_zone_label": _tax_zone_label(db, zone),
         "shareholders": [_serialize_shareholder(sh) for sh in (company.shareholders or [])],
     }
+
+
+def _assert_tax_zone(db: Session, tax_zone_id: int | None) -> None:
+    if tax_zone_id is not None:
+        get_or_404(db, TaxZone, tax_zone_id, f"税区不存在 (id={tax_zone_id})")
 
 
 def _validate_shareholders(db: Session, rows: list[CompanyShareholderIn],
@@ -220,17 +238,19 @@ def _assert_company_closable(db: Session, company_id: int) -> None:
 
 @router.get("/companies", response_model=list[CompanyOut])
 def list_companies(_user=Depends(get_current_user), db: Session = Depends(get_db)):
-    return [_serialize_company(c) for c in
+    return [_serialize_company(db, c) for c in
             db.query(Company).order_by(Company.name, Company.id).all()]
 
 
 @router.post("/companies", status_code=201)
 def create_company(payload: CompanyCreate, response: Response,
                    db: Session = Depends(get_db)):
+    _assert_tax_zone(db, payload.tax_zone_id)
     company = Company(
         name=payload.name,
         opening_date=payload.opening_date,
         closing_date=payload.closing_date,
+        tax_zone_id=payload.tax_zone_id,
         # 填关闭日 ⇔ 自动置停用（PRD F0.1 联动）
         is_active=False if payload.closing_date else (payload.is_active if payload.is_active is not None else True),
     )
@@ -249,7 +269,7 @@ def create_company(payload: CompanyCreate, response: Response,
     db.commit()
     db.refresh(company)
     response.headers["Location"] = f"/api/v1/companies/{company.id}"
-    body = _serialize_company(company)
+    body = _serialize_company(db, company)
     warning = _pct_warning(company.shareholders or [])
     if warning:
         body["warning"] = warning
@@ -264,6 +284,8 @@ def update_company(company_id: int, payload: CompanyUpdate, db: Session = Depend
     # shareholders 由下方专用逻辑处理（model_dump 产出 dict，不可直接塞给 relationship）
     for k, v in {k2: v2 for k2, v2 in data.items() if k2 != "shareholders"}.items():
         setattr(company, k, v)
+    if "tax_zone_id" in data:
+        _assert_tax_zone(db, data["tax_zone_id"])
     # closing_date ↔ is_active 联动：填关闭日自动置停用；清空恢复启用（显式传 is_active 时以联动为准）
     if closing_changed:
         company.is_active = company.closing_date is None
@@ -277,7 +299,7 @@ def update_company(company_id: int, payload: CompanyUpdate, db: Session = Depend
         _check_ownership_cycle(db, company)
     db.commit()
     db.refresh(company)
-    body = _serialize_company(company)
+    body = _serialize_company(db, company)
     warning = _pct_warning(company.shareholders or [])
     if warning:
         body["warning"] = warning
@@ -437,7 +459,7 @@ def public_companies(request: Request, db: Session = Depends(get_db),
         q = q.filter(Company.id.in_(operable))
     out = []
     for c in q.all():
-        body = _serialize_company(c)  # id/name/is_active/opening_date/closing_date/shareholders[]
+        body = _serialize_company(db, c)  # id/name/is_active/opening_date/closing_date/shareholders[]
         body["status"] = "opened" if c.is_active else "closed"
         out.append(body)
     return out
@@ -452,6 +474,107 @@ def public_levels(request: Request, db: Session = Depends(get_db),
     from app.models import Level
     return [{"code": lv.code, "label": lv.label, "is_management": lv.is_management}
             for lv in db.query(Level).order_by(Level.sort_order).all()]
+
+
+# ---------------------------------------------------------------- 对外接口：在岗岗位数据导出（v2.6 R2：第三方计算，不含成本）
+def _country_or_region_raw(pn: PositionNumber) -> str:
+    """「国家或地区」原始值（与导入 CSV 同构）：Country·X / Family / Global / Regional。"""
+    from app.models import Scope
+    if pn.scope is None:
+        return ""
+    if pn.scope == Scope.COUNTRY:
+        return f"Country·{pn.country.name}" if pn.country else ""
+    return {"family": "Family", "global": "Global", "regional": "Regional"}.get(pn.scope.value, "")
+
+
+@router.get("/public/positions")
+@limiter.limit("60/minute")
+def public_positions(request: Request, year: int,
+                     company_ids: str | None = None,
+                     user: User = Depends(require_api_scope("public.positions")),
+                     db: Session = Depends(get_db)):
+    """对外暴露：指定年份的在岗岗位明细（**不含任何成本字段**）。
+
+    - 在岗判定（公司/岗位同规则）：opening ≤ Y-12-31 且（closing 空 或 ≥ Y-01-01），
+      即与年份至少有一天交集即计入；不看 lifecycle 当前状态。
+    - company_ids 缺省（=all）：先筛「该年在营」的公司（同规则作用于公司开业/关闭日；
+      开业日未知视为在营），再取其旗下在岗岗位。
+    - 传入具体 company_ids（逗号分隔）：仅按 year 过滤这些公司的在岗岗位，
+      不做公司在营过滤。
+    -     计算由第三方完成：本接口只提供岗位业务字段，成本六栏一律不输出。
+    """
+    from app.benchmark import active_positions_in_year, year_bounds
+    from app.models import Employee
+
+    if not (1900 <= year <= 2999):
+        raise HTTPException(400, "year 取值非法（1900~2999）")
+
+    ys, ye = year_bounds(year)
+
+    def _company_alive(cid: int) -> bool:
+        c = db.get(Company, cid)
+        if not c:
+            return False
+        o, cl = c.opening_date, c.closing_date
+        return (o is None or o <= ye) and (cl is None or cl >= ys)
+
+    if company_ids:
+        try:
+            ids = sorted({int(x) for x in company_ids.split(",") if x.strip()})
+        except ValueError:
+            raise HTTPException(400, "company_ids 须为逗号分隔的整数（如 1,2,3）")
+        # 指定公司不做存续过滤，仅按年份交集筛岗位
+        positions = [
+            p for p in db.query(PositionNumber)
+            .filter(PositionNumber.company_id.in_(ids)).all()
+            if p.opening_date is not None and p.opening_date <= ye
+            and (p.closing_date is None or p.closing_date >= ys)
+        ]
+        company_scope = ids
+    else:
+        alive_ids = {c.id for c in db.query(Company).all() if _company_alive(c.id)}
+        positions = [p for p in active_positions_in_year(db, year)
+                     if p.company_id in alive_ids]
+        company_scope = None  # all
+
+    items = []
+    for pn in sorted(positions, key=lambda p: (p.company_id or 0, p.number)):
+        sl = db.get(PositionNumber, pn.solid_line_manager_id) if pn.solid_line_manager_id else None
+        dotted_rows = db.query(PositionNumberDottedLine.dotted_manager_id).filter(
+            PositionNumberDottedLine.position_number_id == pn.id).all()
+        dotted_names = []
+        for (mid,) in dotted_rows:
+            m = db.get(PositionNumber, mid)
+            if m and m.position:
+                dotted_names.append(m.position.name)
+        incumbent = db.query(Employee).filter(Employee.position_number_id == pn.id).first()
+        items.append({
+            # 字段集与导入 CSV 列对齐（映射表见 API_PUBLIC.md §3）；无任何成本字段
+            "number": pn.number,
+            "position_name": (pn.position.name if pn.position else None),
+            "position_type": pn.position_type,
+            "company_id": pn.company_id,
+            "company_name": (pn.company.name if pn.company else None),
+            "level": pn.level,
+            "country_or_region": _country_or_region_raw(pn),
+            "opening_date": (pn.opening_date.isoformat() if pn.opening_date else None),
+            "closing_date": (pn.closing_date.isoformat() if pn.closing_date else None),
+            "work_location": pn.work_location,
+            "job_responsibility": pn.job_responsibility,
+            "solid_line_manager": (sl.position.name if sl and sl.position else None),
+            "dotted_managers": dotted_names,
+            "legal_category": pn.legal_category,
+            "org_chart_display": pn.org_chart_display,
+            "remark": pn.remark,
+            "incumbent_name": (incumbent.name if incumbent else None),
+        })
+
+    return {
+        "year": year,
+        "company_filter": company_scope,
+        "total": len(items),
+        "items": items,
+    }
 
 
 # ---------------------------------------------------------------- 员工用工税额（v2.3：按税区；v2.6 两类科目）
@@ -647,6 +770,10 @@ def delete_tax_zone(zone_id: int, _admin=Depends(require_admin), db: Session = D
     used = db.query(EmploymentTaxItem).filter(EmploymentTaxItem.tax_zone_id == z.id).first()
     if used:
         raise HTTPException(400, "该税区下已有税务科目，禁止删除（请先清空科目）")
+    # v2.6 R1：公司绑定该税区时禁止删除（成本键唯一来源）
+    bound = db.query(Company).filter(Company.tax_zone_id == z.id).count()
+    if bound:
+        raise HTTPException(400, f"该税区已被 {bound} 家隶属公司绑定为成本税区，禁止删除（请先在主数据中解绑）")
     db.delete(z)
     db.commit()
     return {"ok": True, "id": zone_id}

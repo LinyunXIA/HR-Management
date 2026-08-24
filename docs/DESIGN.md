@@ -69,7 +69,7 @@ HR_Management/
 │   ├── orgchart.py         # 组织树构建 + 环检测
 │   ├── data_clean.py       # Org-Chart3.md 解析 + 清洗（仅 Org-Chart3 格式）
 │   ├── export_md.py        # 组织图导出 MD（3 格式）
-│   ├── benchmark.py        # 年度用工成本预估引擎（在岗判定/月折算/覆盖校验/报告计算，v2.6）
+│   ├── benchmark.py        # 在岗岗位判定助手（日期交集/月折算，v2.6 岗位导出复用）
 │   ├── seed.py             # 主数据初始化 + 管理员种子 admin/admin123
 │   ├── import_csv.py       # Position.csv 解析/校验/入库
 │   └── routers/
@@ -359,8 +359,7 @@ REST 规范：名词复数资源、HTTP 方法映射 CRUD（GET 查 / POST 建 /
 | GET | /org-charts | 组织树数据：{nodes, solid_edges, dotted_edges, roots} |
 | GET | /org-charts?report={org\|solid\|dotted} | 导出 Markdown（`Accept: text/markdown`） |
 | POST | /imports | 上传 Position.csv → 校验/幂等入库，返回报告 |
-| POST | /benchmarks | 外部基准包推送（v2.6，scope=benchmarks）：L1~L4 校验链整批原子，通过则整年替换 + 异步生成报告；报告**仅经 API 获取，无前端界面**（PRD F6 定稿） |
-| GET | /benchmarks/reports/{year} | 拉取年度预估报告（v2.6，scope=benchmarks）：ready/pending/failed；无数据 404 |
+| GET | /public/positions | 对外在岗岗位数据导出（v2.6 R2，scope=public.positions）：year+可选 company_ids 过滤，CSV 字段对齐、无成本字段；第三方自行计算用工成本。原 POST /benchmarks + GET reports/{year} 已整体废弃 |
 
 ### 6.3 /org-charts 返回结构（供 SVG 渲染）
 
@@ -702,27 +701,27 @@ SQLite 完全可支撑本项目的 LLM+Embedding 需求（91 岗位 + 万级员�
 
 ## 17. Phase v2.6 实施清单（年度用工成本预估 + 成本六栏）
 
-> 依据 PRD §4 F6 / §10 grilling 决策（2026-08-24）。**开发完成**，回归基线：`tests/test_benchmark.py` 28/28、`tests/test_integration.py` 45/45、`tests/test_v23.py` 51/51。
+> 依据 PRD §4 F6 / §10 grilling 决策（2026-08-24，含第二轮修订 R1/R2）。**开发完成**，回归基线：`tests/test_public_positions.py` 24/24、`tests/test_integration.py` 45/45、`tests/test_v23.py` 52/52。
 
 ### S1 数据模型（`app/models.py` + `main.py` 幂等迁移）
-- [x] 新表 `labor_benchmarks`（整年快照行，Unique(year,company_id,level,country_id,work_location)）。
-- [x] 新表 `benchmark_reports`（year 唯一，status=pending|ready|failed，payload JSON）。
 - [x] 成本六栏：position_numbers/employees 各 +4 列（mandatory_tax/mandatory_fixed_fee/fixed_bonus/floating_bonus 及 actual_ 前缀），**物理删除 company_share/actual_company_share**。
 - [x] `employment_tax_items` + item_kind('rate'|'fixed') + fixed_amount。
-- [x] main.py `_ensure_v26_cost_columns`：反射在事务外构建 DDL 计划再单事务执行（**教训：BEGIN IMMEDIATE 配方下事务内做 inspector 反射＝自死锁**）；dev/test 删废弃列、prod 仅告警走受控迁移（§7D.3）。
+- [x] main.py `_ensure_v26_migrations`：反射在事务外构建 DDL 计划再单事务执行（**教训：BEGIN IMMEDIATE 配方下事务内做 inspector 反射＝自死锁**）；dev/test 删废弃列、prod 仅告警走受控迁移（§7D.3）。
+- [x] **第二轮修订（R1/R2）**：+ `companies.tax_zone_id`（公司绑税区一对一）；− `labor_benchmarks`/`benchmark_reports` 两表 DROP（dev/test 自动，prod 受控 SQL 附注）；user_apis 清理废弃 benchmarks 授权行。
 
 ### S2 税额引擎
 - [x] `calc_cost_by_zone` 升级：强制扣税=税前×Σrate%、定额=Σfixed、用工成本=五栏之和；cost-calculation 返回分项。
+- [x] **R1 口径切换**：税区来源 = `岗位.company.tax_zone_id`；`resolve_tax_zone`（工作地点解析链）退役删除；未绑税区 →「未配置」不猜测。税区被公司绑定 → 禁止删除。
 
-### S3 基准引擎与 API
-- [x] `app/benchmark.py`：active_positions_in_year（日期交集）/ months_factor（含首尾自然月/12）/ coverage_missing（L4 与报告共用）/ compute_report / run_report_task。
-- [x] `app/routers/benchmarks.py`：POST 推送（L1~L4 整批原子 → 202 + BackgroundTasks）+ GET 报告（pending/ready/failed；报告行缺失自愈重算）。
-- [x] `API_SCOPES` += benchmarks、public.levels；`GET /public/levels` 字典端点。
+### S3 岗位数据导出 API（原基准引擎与 API 已按 R2 废弃）
+- [x] ~~POST /benchmarks 推送 + GET reports/{year} 报告~~ **整体退役**（含 L1~L4 校验链、BackgroundTasks、两张基准表）。
+- [x] `GET /public/positions`（scope=public.positions）：year 必填 + 可选 company_ids；模式 A 公司存续过滤/模式 B 跳过；日期交集在岗判定；CSV 字段对齐、**零成本字段**。
+- [x] `API_SCOPES`：−benchmarks、+public.positions；新增 `GET /admin/scopes` 注册表端点 + users.js 动态拉取（消除前端硬编码漂移）。
 - [x] **输出形态定稿（PRD F6）**：报告**仅经 API 获取，无前端界面/Tab**——前端不设基准 Tab、岗位/员工页不展示年度预估结果（见 §9）。
 
 ### S4 测试
-- [x] `tests/test_benchmark.py` 28 项：鉴权矩阵 / L2·L3·L4 拒收 / 整年 replace / 公式与月折算 / pending→ready / public.levels。
-- [x] 回归：integration 45/45、v23 51/51（六栏字段断言同步更新）。
+- [x] `tests/test_public_positions.py` 24 项：鉴权矩阵 / 模式 A 公司存续与岗位交集 / 模式 B 跳过存续 / 字段契约（无成本键泄漏）/ R1 绑定回显与税区删除保护 / admin/scopes。
+- [x] 回归：integration 45/45、v23 52/52（夹具补公司绑税区）。
 
 ### S5 文档
 - [x] PRD F6 新章 + F1.6 六栏注记 + V2.6 规划行 + §10 决策块；API.md 基准章节；AGENTS.md 状态。

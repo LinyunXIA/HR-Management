@@ -131,12 +131,12 @@ def get_current_user_optional(request: Request, db: Session = Depends(get_db)) -
 
 # ---------------------------------------------------------------- API 权限（v2.4.3）
 # 对外 API 授权注册表（单一事实源）：key 存 user_apis.api_key，value 为展示名。
-# 当前对外 2 个：认证登录 / 获取隶属公司列表；新增外部 API 在此登记并挂 require_api_scope。
+# 新增外部 API 在此登记并挂 require_api_scope。
 API_SCOPES = {
     "auth.login": "认证（登录换取 JWT）",
     "public.companies": "获取隶属公司列表",
-    "public.levels": "获取级别字典（外部基准对接）",
-    "benchmarks": "用工成本基准推送与预估报告获取",
+    "public.levels": "获取级别字典",
+    "public.positions": "获取在岗岗位数据（第三方用工成本计算用）",
 }
 
 

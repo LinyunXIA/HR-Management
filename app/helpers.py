@@ -184,44 +184,10 @@ def assert_can_write_company(db: Session, user, company_id: int | None,
         raise HTTPException(403, f"无权操作{label}（未分配该法人实体）")
 
 
-# ---------------------------------------------------------------- 成本引擎（v2.3 F1.6 税区化）
-def resolve_tax_zone(db: Session, work_location: str | None):
-    """按工作地点解析税区（TaxZone）。
-
-    - 工作地点两级（国家+城市）：优先匹配**城市级**税区；
-    - **无国家兜底**：一旦该国存在城市级分拆，未配置的城市不再回落国家级；
-    - 未配置 → 返回 None（成本「无法自动计算」，不猜测）。
-    """
-    from app.models import Country, EmploymentTaxItem, TaxZone, WorkLocation
-    if not work_location:
-        return None
-    loc = db.query(WorkLocation).filter(WorkLocation.name == work_location).first()
-    if not loc or not loc.country:
-        return None
-    country = db.query(Country).filter(Country.name == loc.country).first()
-    if not country:
-        return None
-    has_city_split = (
-        db.query(TaxZone)
-        .filter(TaxZone.level == "city", TaxZone.country_id == country.id)
-        .first()
-    ) is not None
-    if loc.city:
-        zone = (
-            db.query(TaxZone)
-            .filter(TaxZone.level == "city", TaxZone.country_id == country.id,
-                    TaxZone.city == loc.city)
-            .first()
-        )
-        if zone:
-            return zone
-        if has_city_split:
-            return None  # 该国已城市级分拆：未配置的城市无兜底
-    return (
-        db.query(TaxZone)
-        .filter(TaxZone.level == "country", TaxZone.country_id == country.id)
-        .first()
-    )
+# ---------------------------------------------------------------- 成本引擎（v2.6 R1：成本键 = 公司所绑税区）
+# 原 resolve_tax_zone（按岗位工作地点 → 国家 → 税区 的解析链）已退役：
+# v2.6 R1 起全部成本场景统一取 Company.tax_zone_id，不再经工作地点绕行。
+# calc_cost_by_zone(db, zone, salary, ...) 本体不变，由调用方传入公司所绑税区。
 
 
 def calc_cost_by_zone(db: Session, zone, salary, fixed_bonus=0.0, floating_bonus=0.0) -> dict:
@@ -231,6 +197,7 @@ def calc_cost_by_zone(db: Session, zone, salary, fixed_bonus=0.0, floating_bonus
     - 强制定额扣费 = Σ(fixed 科目金额)
     - 用工成本 = 税前 + 强制扣税 + 定额扣费 + 固定奖金 + 浮动奖金
     zone=None → configured=False（未配置，不猜测）。
+    zone 由调用方传入（v2.6 R1：取 Company.tax_zone）。
     """
     from app.models import EmploymentTaxItem
     salary = float(salary or 0)

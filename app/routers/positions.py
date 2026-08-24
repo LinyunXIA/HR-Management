@@ -354,24 +354,24 @@ def list_transitions(position_id: int | None = None, _user=Depends(get_current_u
 @router.get("/positions/{pid}/cost-calculation")
 def get_position_cost(pid: int, salary_before_tax: float | None = None,
                       scope: str = "budget", _user=Depends(get_current_user), db: Session = Depends(get_db)):
-    """成本测算（v2.3 双口径，只读不落库）。
+    """成本测算（v2.3 双口径，只读不落库；v2.6 R1 起税区统一取**公司绑定**）。
 
-    - scope=budget（默认）：按**岗位税区**（工作地点）计算预算成本，空岗可用；
-    - scope=actual：按当前占用员工的**归属税区**计算实际成本（跟人走），需 Filled；
-    - 未配置税率 → configured=false +「未配置」提示，不猜测估值。
+    - scope=budget（默认）：按岗位所属公司绑定的税区计算预算成本，空岗可用；
+    - scope=actual：按当前占用员工所挂岗位所属公司的绑定税区计算实际成本；
+    - 公司未绑税区 → configured=false +「未配置」提示，不猜测估值。
     """
-    from app.helpers import calc_cost_by_zone, resolve_tax_zone
+    from app.helpers import calc_cost_by_zone
     pn = get_or_404(db, PositionNumber, pid, "岗位不存在")
     if scope not in ("budget", "actual"):
         raise HTTPException(400, "scope 仅支持 budget / actual")
+    zone = pn.company.tax_zone if pn.company else None
 
     if scope == "actual":
         emp = db.query(Employee).filter(Employee.position_number_id == pn.id).first()
         if not emp:
             raise HTTPException(400, "该岗位无在职员工，实际成本不可用（请用 scope=budget 查看预算口径）")
-        # 人的归属税区 = 其当前所挂岗位的工作地点
+        # 人的归属税区 = 其当前所挂岗位所属公司的绑定税区（跟人走）
         salary = salary_before_tax if salary_before_tax is not None else emp.actual_salary_before_tax
-        zone = resolve_tax_zone(db, pn.work_location)
         result = calc_cost_by_zone(db, zone, salary,
                                    fixed_bonus=emp.actual_fixed_bonus or 0,
                                    floating_bonus=emp.actual_floating_bonus or 0)
@@ -382,7 +382,6 @@ def get_position_cost(pid: int, salary_before_tax: float | None = None,
     salary = salary_before_tax if salary_before_tax is not None else pn.salary_before_tax
     if salary is None:
         raise HTTPException(400, "请先填写税前薪资（人工）")
-    zone = resolve_tax_zone(db, pn.work_location)
     result = calc_cost_by_zone(db, zone, salary,
                                fixed_bonus=pn.fixed_bonus or 0,
                                floating_bonus=pn.floating_bonus or 0)

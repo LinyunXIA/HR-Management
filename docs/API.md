@@ -421,49 +421,55 @@
 
 ---
 
-## 7A. 年度用工成本预估（外部基准对接，v2.6）
+## 7A. 在岗岗位数据导出（对外，第三方计算，v2.6 第二轮修订）
 
-> **输出形态（PRD F6 定稿）**：报告**只通过本 API 获取**——存库后由外部系统经 JWT API 拉取，**不做前端界面/Tab（含内部管理端）**，亦不提供导出下载入口。
+> **⚠️ v2.6 第二轮修订**：原「POST /benchmarks 推送 + GET /benchmarks/reports/{year} 报告」链路**整体废弃**——计算权移交第三方。我方仅提供在岗岗位数据导出，第三方配合自有费率自行计算用工成本。
 
 | 方法 | 路径 | 说明 | 认证 | 限流 |
 | --- | --- | --- | --- | --- |
-| POST | `/benchmarks` | 推送整年基准快照（L1 格式/L2 引用/L3 查重/L4 覆盖，任一不过整批 400；通过则整年原子替换 + 异步生成报告） | JWT + `benchmarks` 授权 | 全局 |
-| GET | `/benchmarks/reports/{year}` | 拉取预估报告：`ready` 完整 JSON / `pending` / `failed`；从未推送 → 404 | JWT + `benchmarks` 授权 | 全局 |
+| GET | `/public/positions` | 在岗岗位数据导出：`year` 必填 + `company_ids` 可选（逗号分隔）；字段与导入 CSV 列对齐，**无成本字段** | JWT + `public.positions` 授权 | `60/min` |
 
-**POST /benchmarks 请求体**（行键 = year + company_id + level code + country_id + work_location，全用我方 ID/字典值）：
+**过滤语义**
+
+- 在岗判定（公司/岗位同规则）：`opening ≤ Y-12-31` 且（closing 空 或 ≥ Y-01-01）——年内有一天即计入；不看 lifecycle 状态；opening 为空不计入
+- 仅传 `year`（模式 A）：先筛「该年在营」公司（公司开业/关闭日期同规则；开业日未知视为在营），再取旗下在岗岗位
+- 传 `company_ids`（模式 B）：仅按 year 过滤点名公司的在岗岗位，不做公司在营过滤
+
+**请求示例**
+
+```http
+GET /api/v1/public/positions?year=2030&company_ids=3,7 HTTP/1.1
+Authorization: Bearer <access_token>
+```
+
+**响应 `200 OK`**
 
 ```json
 {
   "year": 2030,
+  "company_filter": [3, 7],
+  "total": 2,
   "items": [
-    { "company_id": 3, "level": "M8a", "country_id": 5, "work_location": "卢森堡",
-      "salary_before_tax": 120000, "tax_rate": 27.07, "mandatory_fixed_fee": 500 }
+    {
+      "number": "P11", "position_name": "Statutory Manager",
+      "position_type": "Employee", "company_id": 3,
+      "company_name": "Peeters Luxembourg S.à r.l.", "level": "M8a",
+      "country_or_region": "Country·卢森堡",
+      "opening_date": "2029-01-01", "closing_date": null,
+      "work_location": "卢森堡", "job_responsibility": "…",
+      "solid_line_manager": "Managing Director",
+      "dotted_managers": ["Group AML Officer"],
+      "legal_category": "法律强制·内部全职不可外包",
+      "org_chart_display": "Statutory Manager - 卢森堡法定经理",
+      "remark": null, "incumbent_name": null
+    }
   ]
 }
 ```
 
-- 成功：`202 { "status": "accepted", "year": 2030, "items": N, "report_status": "computing", "coverage": {"positions": X, "matched": X} }`
-- 失败：`400 {"detail": {"stage": "reference|duplicate|coverage", "errors": [...]}}`——coverage 阶段附 `missing[]`（年份内公司/编号/原因），方案甲缺一拒收。
-- **替换语义**：同 year 最后一次成功提交为准（整年快照 replace）；推送后岗位变化需重推刷新报告。
+**字段 ↔ CSV 列映射**：position_name↔职位 · position_type↔职位类型 · number↔岗位编号 · company_name/company_id↔隶属公司 · level↔级别 · country_or_region↔国家或地区 · opening_date/closing_date↔职位开启日/关闭日 · work_location↔工作地点 · job_responsibility↔工作职责描述 · solid_line_manager↔直线经理 · dotted_managers↔虚线经理（数组） · legal_category↔法律强制/可选 · org_chart_display↔Org-Chart中的显示 · remark↔备注。
 
-**GET /benchmarks/reports/{year} 响应（ready）**：
-
-```json
-{ "year": 2030, "status": "ready", "generated_at": "…",
-  "error_count": 0,
-  "report": {
-    "totals": {"benchmark_rows": 12, "matched_positions": 16, "unmatched_positions": 0},
-    "companies": [ { "company_id": 3, "company_name": "…", "annual_labor_cost": 991936.0,
-                     "positions": [ { "number": "P11", "level": "M8a", "months_factor": 1.0,
-                                      "salary_before_tax": 120000, "tax_rate_pct": 27.07,
-                                      "mandatory_tax_amount": 32484, "mandatory_fixed_fee": 500,
-                                      "bonus": 3000, "unit_annual_cost": 155984,
-                                      "annual_labor_cost": 155984 } ] } ],
-    "unmatched": []
-  } }
-```
-
-> 计入判定按日期交集（不看 lifecycle 状态）；月折算 = 自然月数(含首尾)/12；公式 = `(税前+税前×税率%+定额扣费+固定奖金+浮动奖金) × factor`。字典准备：`GET /public/companies`、`GET /public/levels`。
+> **成本六栏一律不输出**——费率与计算完全由第三方掌握。月折算依据 = opening_date/closing_date 与年份的自然交集，由第三方自行折算。
 
 ---
 
@@ -486,8 +492,7 @@
 | GET/POST, PATCH/DELETE | /employment-tax-items、/employment-tax-items/{id} | master_data | 无 | 全局 |
 | GET | /public/companies | master_data | JWT | `60/min` |
 | GET | /public/levels | master_data | JWT + public.levels 授权 | `60/min` |
-| POST | /benchmarks | benchmarks | JWT + benchmarks 授权 | 全局 |
-| GET | /benchmarks/reports/{year} | benchmarks | JWT + benchmarks 授权 | 全局 |
+| GET | /public/positions | master_data | JWT + public.positions 授权 | `60/min` |
 | GET/POST | /position-functions | positions | 无 | 全局 |
 | GET/POST, GET/PATCH/DELETE | /positions、/positions/{id} | positions | 无 | 全局（PATCH 需 `version`，`app/helpers.py:1`） |
 | POST | /positions/{id}/transitions | positions | 无 | 全局 |

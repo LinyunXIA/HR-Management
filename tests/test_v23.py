@@ -153,6 +153,9 @@ def main():
             req("POST", "/employment-tax-items",
                 {"tax_zone_id": zone["id"], "item_name": item, "tax_rate": rate},
                 token=admin, expect=201)
+    # v2.6 R1：成本键 = 公司所绑税区 → 源岗位所属公司绑定该税区
+    req("PATCH", f"/companies/{comp_a['id']}", {"tax_zone_id": zone["id"]},
+        token=admin, expect=200)
 
     # ---------- S5 成本双口径 ----------
     section("S5 成本双口径 + 税区")

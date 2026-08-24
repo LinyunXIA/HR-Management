@@ -120,10 +120,12 @@ const MasterData = {
 
   async openCompanyForm(item) {
     const isEdit = !!item;
-    // 下拉数据现拉现用：内部公司排除自身；外部合作公司独立主数据
-    let allCompanies = [], externals = [];
+    // 下拉数据现拉现用：内部公司排除自身；外部合作公司独立主数据；税区（v2.6 R1 成本键）
+    let allCompanies = [], externals = [], zones = [];
     try {
-      [allCompanies, externals] = await Promise.all([get('/companies'), get('/external-companies')]);
+      [allCompanies, externals, zones] = await Promise.all([
+        get('/companies'), get('/external-companies'), get('/tax-zones'),
+      ]);
     } catch (e) { toast(e.message); return; }
     const internalOpts = allCompanies.filter((c) => !isEdit || c.id !== item.id);
     this._shRows = isEdit && item.shareholders
@@ -135,13 +137,21 @@ const MasterData = {
           ownership_pct: sh.ownership_pct,
         }))
       : [];
+    const zoneLabel = (z) => {
+      const base = z.city ? `${z.country_name}·${z.city}` : (z.country_name || '');
+      return `${base}（${z.level === 'city' ? '城市级' : '国家级'}）`;
+    };
+    const zoneOpts = ['<option value="">未绑定（成本显示「未配置」）</option>']
+      .concat(zones.map((z) =>
+        `<option value="${z.id}" ${item && item.tax_zone_id === z.id ? 'selected' : ''}>${esc(zoneLabel(z))}</option>`))
+      .join('');
 
     const modal = openModal(`
       <header><h2>${isEdit ? '编辑' : '新增'} · 隶属公司</h2><button class="btn small" onclick="closeModal()">✕</button></header>
       <div class="body">
         <div class="form-grid" style="grid-template-columns:1fr 1fr;align-items:end">
           <div class="field"><label>公司名称 *</label><input type="text" id="co-name" value="${esc(item?.name || '')}"></div>
-          <div class="field"></div>
+          <div class="field"><label>绑定税区（全部成本场景的成本键）</label><select id="co-taxzone">${zoneOpts}</select></div>
           <div class="field"><label>开业日期（可空，年份按 YYYY-01-01 存）</label><input type="date" id="co-opening" value="${item?.opening_date || ''}"></div>
           <div class="field"><label>关闭日期（填了视为关闭；须名下全部岗位已「关闭」；清空即恢复启用）</label><input type="date" id="co-closing" value="${item?.closing_date || ''}"></div>
         </div>
@@ -235,6 +245,7 @@ const MasterData = {
       if (!name) { toast('请填写公司名称'); return; }
       const body = {
         name,
+        tax_zone_id: modal.querySelector('#co-taxzone').value ? +modal.querySelector('#co-taxzone').value : null,
         opening_date: modal.querySelector('#co-opening').value || null,
         closing_date: modal.querySelector('#co-closing').value || null,
         shareholders: [],
