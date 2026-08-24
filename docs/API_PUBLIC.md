@@ -2,8 +2,8 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | v1.1 |
-| 更新日期 | 2026-08-22 |
+| 文档版本 | v1.3 |
+| 更新日期 | 2026-08-24 |
 | Base URL | `http://127.0.0.1:8000/api/v1`（端口随 `uvicorn --port` 可变，dev 默认 `7273`） |
 | 说明 | 面向外部系统/第三方调用的**只读对外接口**，**需 JWT 认证**（PRD §7B），限流保护 |
 
@@ -72,11 +72,11 @@ X-Token: <access_token>               # 兼容内部 Token 头
 
 | 方法 | 路径 | 说明 | 认证 |
 | --- | --- | --- | --- |
-| `GET` | `/auth/me` | 当前用户信息 | JWT |
-| `GET` | `/users` | 用户列表（仅 admin） | JWT |
-| `POST` | `/auth/register` | 注册新用户（需 admin） | JWT |
-| `POST` | `/auth/register-first` | 首个用户免认证注册（系统空库时） | 无（`5/min`） |
+| `GET` | `/auth/me` | 当前用户信息（含账号类型） | JWT |
 
+> 建号与用户管理为**内部管理接口**（`/admin/users*`，仅 UI admin），不对外部开放；
+> 遗留的 `/auth/register`、`/users`、`/auth/register-first` 已移除（v2.4.3）。
+>
 > 密码存储：`bcrypt` 哈希（`app/auth.py:29`），明文永不落库。
 
 ---
@@ -178,3 +178,4 @@ HTTP/1.1 429 Too Many Requests
 | 2026-08-04 | v1.0 | 新增 `GET /public/companies` 对外接口（无认证） |
 | 2026-08-22 | v1.1 | **Breaking**: `GET /public/companies` 改为 **JWT 必需** + `60/min` 限流；新增 `§0 认证`（`POST /auth/login` 等，登录 `10/min`，`bcrypt`）；Base URL 修正为 `/api/v1`；补充 `401/429` 错误码 |
 | 2026-08-24 | v1.2 | 响应扩展为**全字段**：开业/关闭日期、股权结构（三来源股东 + 持股比例）、状态；需「获取隶属公司列表」API 权限（v2.4.3 权限拆分）；非 admin 按可管实体过滤 |
+| 2026-08-24 | v1.3 | **移除遗留端点**：`/auth/register`、`/users`、`/auth/register-first` 从代码与文档删除——外部仅「登录」+ 已授权对外 API，建号统一走内部 `/admin/users` |

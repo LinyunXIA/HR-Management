@@ -13,8 +13,8 @@
 
 - **REST 规范**：名词复数资源、HTTP 方法映射 CRUD、创建返回 `201 Created` + `Location` 头、部分更新用 `PATCH`。
 - **请求/响应**：JSON（`Content-Type: application/json`）；导出为 `text/markdown`。
-- **认证**：对外接口 `GET /public/companies` 及 `GET /auth/me`、`GET /users`、`POST /auth/register` 需 JWT（`Authorization: Bearer <token>`，见 §2.4；`app/auth.py:76`）。内部管理接口（岗位/员工/主数据 CRUD）当前不强制 JWT，前端通过 `static/js/api.js:2` 自动携带（若已登录）。
-- **限流**：全局 `120/minute` / IP（`app/limiter.py:1` / `main.py:1`）；敏感接口单独更严：`POST /auth/login` `10/min`、`POST /auth/register-first` `5/min`、`GET /public/companies` `60/min`，超限返回 `429`。
+- **认证**：对外接口 `GET /public/companies` 需 JWT + 对应 API 权限，`GET /auth/me` 及内部管理接口需 JWT（`Authorization: Bearer <token>`，见 §2.4；`app/auth.py:76`）。
+- **限流**：全局 `120/minute` / IP（`app/limiter.py:1` / `main.py:1`）；敏感接口单独更严：`POST /auth/login` `10/min`、`GET /public/companies` `60/min`，超限返回 `429`。
 - **状态码**：
   | 码 | 含义 |
   | --- | --- |
@@ -117,11 +117,11 @@
 
 | 方法 | 路径 | 说明 | 认证 | 限流 |
 | --- | --- | --- | --- | --- |
-| POST | `/auth/login` | 登录换取 JWT | 无 | `10/min` |
-| POST | `/auth/register` | 注册新用户（需 admin） | JWT | `10/min` |
-| POST | `/auth/register-first` | 首个用户免认证注册（空库时） | 无 | `5/min` |
+| POST | `/auth/login` | 登录换取 JWT（API 类型用户须持「认证」授权） | 无 | `10/min` |
 | GET | `/auth/me` | 当前用户信息 | JWT | 全局 |
-| GET | `/users` | 用户列表（仅 admin） | JWT | 全局 |
+
+> 建号/用户管理统一走 `/admin/users*`（§6.0，仅 UI admin）；`/auth/register`、
+> `/auth/register-first`、`/users` 遗留端点已移除（v2.4.3）。
 
 **POST /auth/login 请求体**
 
@@ -418,10 +418,7 @@
 | 方法 | 路径 | 模块 | 认证 | 限流 |
 | --- | --- | --- | --- | --- |
 | POST | /auth/login | auth | 无 | `10/min` |
-| POST | /auth/register | auth | JWT | `10/min` |
-| POST | /auth/register-first | auth | 无 | `5/min` |
 | GET | /auth/me | auth | JWT | 全局 |
-| GET | /users | auth | JWT | 全局 |
 | GET/POST, PATCH/DELETE | /companies、/countries、/levels、/work-locations、/scopes、/legal-categories、/position-types | master_data | 无 | 全局 |
 | GET/POST, PATCH/DELETE | /employment-tax-items、/employment-tax-items/{id} | master_data | 无 | 全局 |
 | GET | /public/companies | master_data | JWT | `60/min` |

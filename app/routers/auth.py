@@ -1,18 +1,18 @@
-"""认证路由：登录 / 注册 / 当前用户（PRD §7B）。"""
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+"""认证路由：登录 / 当前用户（PRD §7B）。
+
+v2.4.3：外部 API 能力边界收敛——仅「认证（登录）」与已授权的外部 API；
+建号统一走内部管理接口 /admin/users（不对任何外部账号开放），/auth/register、
+/users 等遗留端点已移除。
+"""
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.limiter import limiter
 
-from app.auth import (
-    create_access_token,
-    get_current_user,
-    hash_password,
-    verify_password,
-)
+from app.auth import create_access_token, get_current_user, verify_password
 from app.db import get_db
-from app.models import User, UserRole
+from app.models import User
 
 router = APIRouter(prefix="/api/v1", tags=["auth"])
 
@@ -20,12 +20,6 @@ router = APIRouter(prefix="/api/v1", tags=["auth"])
 class LoginRequest(BaseModel):
     username: str
     password: str
-
-
-class RegisterRequest(BaseModel):
-    username: str
-    password: str
-    role: str = "admin"
 
 
 class TokenResponse(BaseModel):
@@ -59,51 +53,8 @@ def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)
     )
 
 
-@router.post("/auth/register", status_code=201)
-@limiter.limit("5/minute")
-def register(request: Request, payload: RegisterRequest, response: Response,
-             current: User = Depends(get_current_user),
-             db: Session = Depends(get_db)):
-    """建号（v2.3：关闭自主注册，仅 admin 可调用；角色限 admin/hr）。
-
-    v2.4.3：外部 API 类型账号一律拒绝——注册不对外部开放，外部仅可登录。
-    """
-    ut = current.user_type.value if hasattr(current.user_type, "value") else str(current.user_type)
-    if ut == "api":
-        raise HTTPException(403, "外部 API 账号不可调用注册接口")
-    if current.role != "admin":
-        raise HTTPException(403, "仅管理员可创建账号")
-    if payload.role not in ("admin", "hr"):
-        raise HTTPException(400, "role 仅支持 admin / hr")
-    if db.query(User).filter(User.username == payload.username).first():
-        raise HTTPException(400, f"用户名已存在: {payload.username}")
-    if len(payload.password) < 6:
-        raise HTTPException(400, "密码至少 6 位")
-    user = User(
-        username=payload.username.strip(),
-        hashed_password=hash_password(payload.password),
-        role=UserRole(payload.role),
-        is_active=True,
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    response.headers["Location"] = f"/api/v1/users/{user.id}"
-    return {"id": user.id, "username": user.username, "role": user.role}
-
-
 @router.get("/auth/me")
 def me(current: User = Depends(get_current_user)):
-    return {"id": current.id, "username": current.username, "role": current.role, "is_active": current.is_active}
-
-
-@router.get("/users")
-def list_users(current: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    ut = current.user_type.value if hasattr(current.user_type, "value") else str(current.user_type)
-    if ut == "api":
-        raise HTTPException(403, "外部 API 账号不可访问内部管理接口")
-    if current.role != "admin":
-        raise HTTPException(403, "仅管理员可查看用户列表")
-    users = db.query(User).order_by(User.id).all()
-    return [{"id": u.id, "username": u.username, "role": u.role, "is_active": u.is_active,
-             "created_at": u.created_at} for u in users]
+    return {"id": current.id, "username": current.username, "role": current.role,
+            "user_type": (current.user_type.value if hasattr(current.user_type, "value") else None),
+            "is_active": current.is_active}
