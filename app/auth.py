@@ -129,6 +129,59 @@ def get_current_user_optional(request: Request, db: Session = Depends(get_db)) -
     return user
 
 
+# ---------------------------------------------------------------- API 权限（v2.4.3）
+# 对外 API 授权注册表（单一事实源）：key 存 user_apis.api_key，value 为展示名。
+# 当前对外 2 个：认证登录 / 获取隶属公司列表；新增外部 API 在此登记并挂 require_api_scope。
+API_SCOPES = {
+    "auth.login": "认证（登录换取 JWT）",
+    "public.companies": "获取隶属公司列表",
+}
+
+
+def get_user_api_keys(db: Session, user: User) -> list[str]:
+    """用户的已授权 api_key 列表（admin 角色视为全量）。"""
+    from app.models import UserApiPermission, UserType
+    if getattr(user, "role", None) and (
+            (user.role.value if hasattr(user.role, "value") else str(user.role)) == "admin"):
+        return list(API_SCOPES.keys())
+    rows = db.query(UserApiPermission).filter(UserApiPermission.user_id == user.id).all()
+    return [r.api_key for r in rows]
+
+
+def has_api_scope(db: Session, user: User, api_key: str) -> bool:
+    """UI 类型用户不持有任何 API 权限；仅 admin 与获授权的 API 类型用户放行。"""
+    from app.models import UserType
+    if (user.role.value if hasattr(user.role, "value") else str(user.role)) == "admin":
+        return True
+    if user.user_type != UserType.API:
+        return False
+    return api_key in get_user_api_keys(db, user)
+
+
+def can_login(db: Session, user: User) -> bool:
+    """登录门槛（v2.4.3）：仅外部 API 用户须持「认证」授权；admin / UI 用户天然可登录。"""
+    from app.models import UserType
+    role = user.role.value if hasattr(user.role, "value") else str(user.role)
+    if role == "admin" or user.user_type != UserType.API:
+        return True
+    return "auth.login" in get_user_api_keys(db, user)
+
+
+def require_api_scope(api_key: str):
+    """依赖工厂：要求当前 JWT 用户具备指定 API 权限（v2.4.3）。
+
+    - admin 角色：全量放行
+    - UI 用户：403（仅数据权限，不含 API 权限）
+    - API 用户：须在用户管理中被授予该 api_key
+    """
+    def dep(current: User = Depends(get_current_user), db: Session = Depends(get_db)) -> User:
+        if not has_api_scope(db, current, api_key):
+            label = API_SCOPES.get(api_key, api_key)
+            raise HTTPException(403, f"该账号未被授予 API 权限「{label}」（{api_key}）")
+        return current
+    return dep
+
+
 def require_admin(current: User = Depends(get_current_user)) -> User:
     """仅 admin 可操作（建号 / 分配可管实体 / 主数据维护等）。"""
     if current.role != "admin":

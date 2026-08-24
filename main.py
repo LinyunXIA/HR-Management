@@ -192,6 +192,18 @@ def _ensure_v24_company_columns():
         print(f"[migrate] v24 company columns ensure failed: {e}", file=sys.stderr)
 
 _ensure_v24_company_columns()
+
+# 轻量迁移：v2.4.3 用户权限拆分（users.user_type；user_apis 表由 create_all 幂等创建）
+def _ensure_v243_user_columns():
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS user_type VARCHAR(10) "
+                "NOT NULL DEFAULT 'UI'"))
+    except Exception as e:
+        print(f"[migrate] users.user_type ensure failed: {e}", file=sys.stderr)
+
+_ensure_v243_user_columns()
 # 轻量迁移：users.role 由旧 String 值('admin'/'hr') → 枚举名('ADMIN'/'HR')
 def _migrate_user_role_values():
     try:

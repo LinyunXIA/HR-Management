@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from fastapi import Request
 
-from app.auth import get_current_user, require_admin
+from app.auth import get_current_user, require_admin, require_api_scope
 from app.db import get_db
 from app.helpers import get_or_404
 from app.limiter import limiter
@@ -24,6 +24,7 @@ from app.models import (
     PositionType,
     ScopeDef,
     TaxZone,
+    User,
     UserCompany,
     WorkLocation,
 )
@@ -423,11 +424,20 @@ _crud(PositionType, PositionTypeOut, PositionTypeCreate, PositionTypeUpdate,
 # ---------------------------------------------------------------- 对外接口：获取所有隶属公司（PRD §7B 外部 API 需 JWT）
 @router.get("/public/companies")
 @limiter.limit("60/minute")
-def public_companies(request: Request, db: Session = Depends(get_db), _user=Depends(get_current_user)):
-    """对外暴露：返回所有隶属公司列表（含状态）。需 JWT。"""
+def public_companies(request: Request, db: Session = Depends(get_db),
+                     user: User = Depends(require_api_scope("public.companies"))):
+    """对外暴露：隶属公司列表。需 JWT + 「获取隶属公司列表」API 权限（v2.4.3）。
+
+    数据权限结合：admin 返回全部；其余按其可管实体绑定过滤。
+    """
+    from app.helpers import ALL_COMPANIES, get_operable_company_ids
+    q = db.query(Company).order_by(Company.name)
+    operable = get_operable_company_ids(db, user)
+    if operable is not ALL_COMPANIES:  # 非 admin：仅可见可管实体
+        q = q.filter(Company.id.in_(operable))
     return [
         {"id": c.id, "name": c.name, "is_active": c.is_active, "status": "opened" if c.is_active else "closed"}
-        for c in db.query(Company).order_by(Company.name).all()
+        for c in q.all()
     ]
 
 
