@@ -11,6 +11,12 @@ const Auth = {
     if (!this.token()) { this.user = null; return null; }
     try {
       const me = await get('/auth/me');
+      // API 类型账号不允许进入 Web 界面（与后端 /auth/ui-login 拦截一致，兜底已持有 JWT 的会话）
+      if ((me.user_type || '').toLowerCase() === 'api') {
+        this.clear();
+        toast('API 账号不支持网页界面登录');
+        return null;
+      }
       this.user = me;
       return me;
     } catch (_) {
@@ -60,7 +66,8 @@ const Auth = {
       const p = document.getElementById('lg-pwd').value;
       if (!u || !p) { document.getElementById('lg-msg').textContent = '请填写用户名和密码'; return; }
       try {
-        const r = await post('/auth/login', { username: u, password: p });
+        // UI 专用登录端点：API 类型账号被后端拒绝（v2.5 登录入口拆分）
+        const r = await post('/auth/ui-login', { username: u, password: p });
         this.setToken(r.access_token);
         this.user = { username: r.username, role: r.role };
         closeModal(); toast('登录成功', 'ok'); this.renderBadge();

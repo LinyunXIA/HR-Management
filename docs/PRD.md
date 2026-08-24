@@ -499,6 +499,7 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
   - **UI 用户**：仅数据权限（内部系统使用），不持有任何 API 权限；
   - **外部 API 用户**：**数据权限 + API 权限 结合**——调接口须有对应 API 授权，返回数据按实体绑定过滤。
 - **执行点**：登录门槛（API 用户须持「认证」授权，未授予 403）；`/public/companies` 挂 `require_api_scope('public.companies')` 且非 admin 按可管实体过滤。admin 角色天然全量。
+- **UI 登录限制（v2.5）**：Web 界面专用登录端点 `POST /auth/ui-login` **仅放行 UI 类型账号**——API 账号即使持有「认证」授权也一律 403（防外部集成账号误入内部系统）；程序化接入走 `POST /auth/login` 不变。前端 SPA 登录弹窗与 `/auth/me` 会话恢复均按此拦截。
 - **注册/用户管理不对外部开放（v2.4.3）**：外部 API 账号仅可登录与调用其已授权的外部 API；遗留 `/auth/register`、`/users`、`/auth/register-first` 端点已移除，建号统一走内部 `/admin/users*`（对 `user_type=api` 账号及 require_admin 类接口一律 403，即使角色被误配为 admin）。
 
 ### 7B.3 行级权限隔离（v2.3，读可跨司·写按实体）
