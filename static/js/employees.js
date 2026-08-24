@@ -175,6 +175,7 @@ const Employees = {
     const modal = openModal(`
       <header><h2>${esc(e.name)} · ${esc(e.employee_no)}</h2><button class="btn small" onclick="closeModal()">✕</button></header>
       <div class="body">
+        <div class="section-title">基本信息 <button class="btn small" id="ed-edit" style="margin-left:8px">编辑</button></div>
         <div class="detail-grid">
           ${ditem('在职状态', e.employment_status)} ${ditem('员工类型', e.employee_type)}
           ${ditem('性别', e.gender)} ${ditem('入职日期', fmtDate(e.hire_date))}
@@ -209,6 +210,7 @@ const Employees = {
     // 实际成本模式切换
     modal.querySelectorAll('input[name="emp-costmode"]').forEach((r) => r.onchange = () => this.applyCostMode(modal, e));
     this.applyCostMode(modal, e);
+    modal.querySelector('#ed-edit').onclick = () => this.openEdit(e);
     modal.querySelector('#emp-calccost').onclick = async () => {
       try {
         const salary = val('#emp-salary') ? +val('#emp-salary') : null;
@@ -256,6 +258,53 @@ const Employees = {
         }
       };
     }
+  },
+
+  async openEdit(e) {
+    const modal = openModal(`
+      <header><h2>编辑员工 · ${esc(e.employee_no)}</h2><button class="btn small" onclick="closeModal()">✕</button></header>
+      <div class="body">
+        <div class="form-grid">
+          <div class="field"><label>姓名 *</label><input type="text" id="ee-name" value="${esc(e.name)}"></div>
+          <div class="field"><label>性别</label><select id="ee-gender">${['男', '女', '其他'].map((g) => `<option ${g === e.gender ? 'selected' : ''}>${g}</option>`).join('')}</select></div>
+          <div class="field"><label>员工类型</label><select id="ee-type">${['正式', '实习', '外包', '劳务'].map((t) => `<option ${t === e.employee_type ? 'selected' : ''}>${t}</option>`).join('')}</select>
+            <div class="hint">挂岗员工的类型须与岗位编制匹配（正式/实习/劳务→Employee，外包→External Employee）</div></div>
+          <div class="field"><label>在职状态 *</label><select id="ee-status">${['试用期', '在职', '休假', '转调中', '离职'].map((s) => `<option ${s === e.employment_status ? 'selected' : ''}>${s}</option>`).join('')}</select>
+            <div class="hint">选「离职」将解绑岗位并转空缺</div></div>
+          <div class="field"><label>入职日期</label><input type="date" id="ee-hire" value="${fmtDate(e.hire_date)}"></div>
+          <div class="field"><label>出生日期</label><input type="date" id="ee-birth" value="${fmtDate(e.birth_date)}"></div>
+          <div class="field"><label>手机</label><input type="text" id="ee-phone" value="${esc(e.phone || '')}"></div>
+          <div class="field"><label>邮箱</label><input type="text" id="ee-email" value="${esc(e.email || '')}"></div>
+          <div class="field full"><label>备注</label><textarea id="ee-remark" rows="2">${esc(e.remark || '')}</textarea></div>
+        </div>
+      </div>
+      <footer><button class="btn" onclick="closeModal()">取消</button><button class="btn primary" id="ee-save">保存</button></footer>`);
+
+    modal.querySelector('#ee-save').onclick = async () => {
+      if (!val('#ee-name')) { toast('请填写姓名'); return; }
+      const body = {
+        version: e.version,
+        name: val('#ee-name'),
+        gender: val('#ee-gender'),
+        employee_type: val('#ee-type'),
+        employment_status: val('#ee-status'),
+        hire_date: val('#ee-hire') || null,
+        birth_date: val('#ee-birth') || null,
+        phone: val('#ee-phone') || null,
+        email: val('#ee-email') || null,
+        remark: val('#ee-remark') || null,
+      };
+      try {
+        const emp = await patch('/employees/' + e.id, body);
+        closeModal();
+        const offboarded = e.employment_status !== '离职' && emp.employment_status === '离职';
+        toast(offboarded ? `已办理离职，岗位转空缺` : '已保存', 'ok');
+        this.render(); App.loadStats();
+      } catch (err) {
+        if (err.status === 409) toast('数据已被他人修改，请刷新后重试', 'error');
+        else toast(err.message);
+      }
+    };
   },
 
   async openTransferInitiate(e) {
