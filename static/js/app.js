@@ -90,3 +90,6 @@ const App = {
 document.addEventListener('DOMContentLoaded', async () => {
   await App.initWithAuth();
 });
+
+/* 经典脚本顶层 const 不挂 window，显式暴露供 auth.js 的 window.App 判断使用 */
+window.App = App;

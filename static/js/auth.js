@@ -75,3 +75,6 @@ const Auth = {
     modal.querySelector('#lg-pwd').onkeydown = (e) => { if (e.key === 'Enter') submit(); };
   },
 };
+
+/* 经典脚本顶层 const 不挂 window，显式暴露供 api.js/app.js 的 window.Auth 判断使用 */
+window.Auth = Auth;
