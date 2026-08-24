@@ -78,6 +78,30 @@ def generate_number(db: Session, position_type: str | None = None, *args) -> str
     return f"{number_series(position_type)}{next_sequence(db, number_series(position_type))}"
 
 
+# v2.4.2：员工工号自动生成系列（key = EmployeeType.name，DB 存储亦为枚举名）
+EMPLOYEE_NO_SERIES = {
+    "REGULAR": "G",     # 正式工 G00001 起
+    "INTERN": "V",      # 实习 V00001 起
+    "LABOR": "V",       # 劳务与实习同系列
+    "OUTSOURCED": "O",  # 外包 O00001 起（可虚拟建档不挂岗）
+}
+
+
+def generate_employee_no(db: Session, employee_type) -> str:
+    """自动生成员工工号：正式 G{seq:05d}、实习/劳务 V{seq:05d}、外包 O{seq:05d}。"""
+    from sqlalchemy import cast, func, Integer
+
+    key = employee_type.name if hasattr(employee_type, "name") else str(employee_type)
+    prefix = EMPLOYEE_NO_SERIES.get(key, "G")
+    digits = func.regexp_replace(Employee.employee_no, rf"^{prefix}", "")
+    max_seq = (
+        db.query(func.max(cast(digits, Integer)))
+        .filter(Employee.employee_no.op("~")(rf"^{prefix}\d{{5}}$"))
+        .scalar()
+    )
+    return f"{prefix}{(max_seq or 0) + 1:05d}"
+
+
 def check_cycle(db: Session, position_id: int, manager_id: int):
     """沿上级链上溯，若回到 position_id 或成环则拦截。"""
     if manager_id == position_id:

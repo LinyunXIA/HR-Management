@@ -165,7 +165,7 @@ class PositionEventOut(BaseModel):
 
 # ---------------------------------------------------------------- 员工
 class EmployeeCreate(BaseModel):
-    employee_no: str
+    employee_no: str | None = None   # 留空自动生成：正式 G00001 起 / 实习·劳务 V00001 / 外包 O00001
     name: str
     gender: Gender
     birth_date: date | None = None
@@ -174,7 +174,7 @@ class EmployeeCreate(BaseModel):
     hire_date: date | None = None
     employee_type: EmployeeType
     employment_status: EmploymentStatus = EmploymentStatus.ACTIVE
-    position_number_id: int
+    position_number_id: int | None = None  # 外包人员可不挂岗（虚拟建档，由外包公司管理）；其余类型必填
     remark: str | None = None
 
 

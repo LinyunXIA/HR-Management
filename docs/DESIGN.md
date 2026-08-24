@@ -634,3 +634,9 @@ CLI：`python -m scripts.import_csv data/Position.csv`（首次 `--reset` 语义
 - [x] 岗位管理「隶属公司」下拉排除已关闭公司（新建不可选；编辑保留当前值并标注「已关闭」）。
 
 > **实施顺序建议**：S1 → S2 → S3 → S4（权限 & 转调/升职是最重、最影响接口面）→ S5（成本）→ S6（导入）→ S7（清洗/前端）→ S8（验证）。PRD/DESIGN 为本清单唯一事实源，开发中发现问题优先回写文档再改代码。
+
+### S7 员工工号自动生成 + 外包虚拟建档（2026-08-24 第三轮反馈，v2.4.2）
+- [x] `helpers.generate_employee_no`：正式 `G{seq:05d}` / 实习·劳务共用 `V{seq:05d}` / 外包 `O{seq:05d}`，SQL 正则取系列 max+1（沿用岗位编号 `next_sequence` 风格）。
+- [x] DB CHECK 放宽：`ck_employees_position_required_if_active` 豁免 `employee_type='OUTSOURCED'`（main.py 启动时按 pg_constraint 定义幂等替换）。
+- [x] `POST /employees`：`employee_no`/`position_number_id` 均可空——缺工号自动生成；非外包缺岗位 400；外包不挂岗跳过 lifecycle 挂编流转。
+- [x] 前端新增员工表单：工号只读自动生成、按类型切换 G/V/O 提示、岗位下拉含「不挂岗（仅外包）」空选项、列表虚拟建档显示「虚拟建档」徽标。

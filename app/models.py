@@ -432,14 +432,14 @@ class Employee(Base):
     """人员档案（必须挂岗 — 在职 NOT NULL，离职解绑可为 NULL）。"""
     __tablename__ = "employees"
     __table_args__ = (
-        # PRD §5 要求「必须挂岗」：在职/试用期/休假时 position_number_id 必须非空，
-        # 仅离职允许解绑为 NULL。DB 层强制，防止绕过应用逻辑产生孤儿记录。
+        # PRD §5「必须挂岗」+ v2.4.2 例外：外包人员可虚拟建档不挂岗（由外包公司管理，
+        # 系统仅登记名单）。在职/试用期/休假时 position_number_id 非空，外包或离职除外。
         # 保持 nullable=True 以支持离职解绑流程（app/routers/employees.py:_vacate），
-        # 但用 CHECK 约束保证在职员工不为 NULL。
-        # SAEnum(native_enum=False) 持久化枚举「名」（'TERMINATED'），中文值不入库
-        # （issue #57：约束仅保留实际存储值，去除误导性冗余项）。
+        # SAEnum(native_enum=False) 持久化枚举「名」（'TERMINATED'/'OUTSOURCED'）。
         CheckConstraint(
-            f"employment_status = '{EmploymentStatus.TERMINATED.name}' OR position_number_id IS NOT NULL",
+            f"employment_status = '{EmploymentStatus.TERMINATED.name}' "
+            f"OR position_number_id IS NOT NULL "
+            f"OR employee_type = '{EmployeeType.OUTSOURCED.name}'",
             name="ck_employees_position_required_if_active",
         ),
     )
