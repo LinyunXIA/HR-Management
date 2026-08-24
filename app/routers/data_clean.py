@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from app.auth import get_current_user
 from app.data_clean import run_clean
-from app.db import APP_ENV, SessionLocal
+from app.db import SessionLocal
 from app.import_csv import import_csv
 
 router = APIRouter(prefix="/api/v1", tags=["data-clean"])
@@ -95,9 +95,8 @@ async def create_data_clean_job(
 
 @router.post("/data-clean-jobs/{job_id}/imports", status_code=201)
 def import_data_clean_job(job_id: str):
-    """将清洗作业的 CSV 导入系统（幂等 upsert）。prod 环境需走受控迁移。"""
-    if APP_ENV == "prod":
-        raise HTTPException(400, "生产环境禁止通过清洗作业直接导入，请走受控迁移（pg_dump 后手工操作）")
+    """将清洗作业的 CSV 导入系统（幂等 upsert，非破坏性；v2.4.1 起各环境均允许，
+    破坏性操作仍由 assert_writable 拦截）。"""
     job = _JOBS.get(job_id)
     if not job:
         raise HTTPException(404, "清洗作业不存在")

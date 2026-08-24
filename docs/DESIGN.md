@@ -264,7 +264,7 @@ class Employee(Base):              # 人员档案
 - 加载后按 `APP_ENV` 选择 `DATABASE_URL_{env}`，否则拼默认 `postgresql://.../hr_db_{env}`。
 - 校验库名 == `hr_db_{env}`，不一致拒绝启动；启动打印脱敏库名。
 - 旧的 `.env.test`/`.env.prod` 仍兼容（按 `APP_ENV` 追加加载）。
-- `assert_writable()` 在 `prod` 拦截 `drop_all`/`--reset`（`scripts/import_csv.py`）；`POST /imports` 与 `POST /data-clean-jobs/{id}/imports` 在 `prod` 直接返回 400（#14）。
+- `assert_writable()` 在 `prod` 拦截 `drop_all`/`--reset`（`scripts/import_csv.py`）；`POST /imports` 与 `POST /data-clean-jobs/{id}/imports` 为幂等 upsert 非破坏性操作，**各环境均允许**（v2.4.1 移除原 #14 prod 400 拦截）。
 
 ## 5. 生命周期状态机（app/lifecycle.py）
 

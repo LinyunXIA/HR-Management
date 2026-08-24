@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
-from app.db import APP_ENV, get_db
+from app.db import get_db
 from app.import_csv import import_csv
 
 router = APIRouter(prefix="/api/v1", tags=["import"])
@@ -14,9 +14,8 @@ router = APIRouter(prefix="/api/v1", tags=["import"])
 
 @router.post("/imports", status_code=201)
 async def create_import(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    """创建导入作业：上传 Position.csv 并幂等入库。prod 环境需走受控迁移。"""
-    if APP_ENV == "prod":
-        raise HTTPException(400, "生产环境禁止通过 Web 直接导入，请走受控迁移（pg_dump 后手工操作）")
+    """创建导入作业：上传 Position.csv 并幂等入库（非破坏性 upsert；v2.4.1 起各环境均允许，
+    破坏性操作仍由 assert_writable 拦截）。"""
     content = await file.read()
     try:
         text = content.decode("utf-8-sig")

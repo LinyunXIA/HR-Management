@@ -547,7 +547,7 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 - 启动自检：打印 `APP_ENV` 与脱敏后库名；若 `DATABASE_URL` 库名与 `APP_ENV` 不一致则拒绝启动。
 
 ### 7D.3 生产护栏（仅 prod 禁止破坏性操作）
-- 禁止：`prod` 下执行 `Base.metadata.drop_all` / `scripts/import_csv --reset` / 任何清空库操作，直接报错退出；`dev`/`test` 无限制（`test` 允许 `--reset`）。另 `POST /imports` 与 `POST /data-clean-jobs/{id}/imports` 在 `prod` 直接返回 400（#14），需走受控迁移。
+- 禁止：`prod` 下执行 `Base.metadata.drop_all` / `scripts/import_csv --reset` / 任何清空库操作，直接报错退出；`dev`/`test` 无限制（`test` 允许 `--reset`）。（v2.4.1 起 `POST /imports` 与 `POST /data-clean-jobs/{id}/imports` **各环境均允许**——导入为幂等 upsert 非破坏性操作，原 #14 prod 拦截移除；破坏性护栏不变。）
 - 仅 `prod` 需拦截，默认一律拦截；如确需重置生产，需走线下备份+受控迁移（`pg_dump hr_db_prod` 后手工操作，不经本系统 `--reset`）。
 - 应用启动 `main.py` 的 `create_all` 在 `prod` 仅建缺失表，不删改已有数据。
 
