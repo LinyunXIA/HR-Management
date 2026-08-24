@@ -110,8 +110,9 @@ def _assert_attachable(db: Session, pn: PositionNumber):
 @router.get("/employees")
 def list_employees(
     company_id: int | None = None,
-    employee_type: str | None = None,
-    employment_status: str | None = None,
+    # 枚举类型参数：FastAPI 按枚举「值」（中文）解析，SQLAlchemy 按存储「名」比较（与 positions 路由一致）
+    employee_type: EmployeeType | None = None,
+    employment_status: EmploymentStatus | None = None,
     search: str | None = None,
     page: int = 1,
     page_size: int = 50,
@@ -192,10 +193,17 @@ def update_employee(eid: int, payload: EmployeeUpdate,
     cur_pn = db.get(PositionNumber, emp.position_number_id) if emp.position_number_id else None
     assert_can_write_company(db, user, cur_pn.company_id if cur_pn else None, label="该员工")
     # 必填字段保持非空守卫；可空字段按 model_fields_set 区分「未提供」与「显式 null=清空」
+    old_type = emp.employee_type
     for field in ("name", "gender", "employee_type"):
         val = getattr(payload, field)
         if val is not None:
             setattr(emp, field, val)
+    # 挂编联动（PRD F1.5）：类型变更且已挂岗时校验与岗位编制匹配，友好 400（DB 触发器兜底）
+    if ("employee_type" in payload.model_fields_set and payload.employee_type != old_type
+            and emp.position_number_id):
+        pn = db.get(PositionNumber, emp.position_number_id)
+        if pn:
+            _assert_type_match(pn, emp.employee_type)
     for field in ("birth_date", "phone", "email", "hire_date", "remark"):
         if field in payload.model_fields_set:
             setattr(emp, field, getattr(payload, field))
