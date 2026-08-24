@@ -56,8 +56,16 @@ const Auth = {
         this.setToken(r.access_token);
         this.user = { username: r.username, role: r.role };
         closeModal(); toast('登录成功', 'ok'); this.renderBadge();
-        // 登录后按需刷新当前 Tab
-        if (window.App) App.loadStats();
+        // 登录成功后初始化应用
+        if (window.App) {
+          const navUsers = document.getElementById('nav-users');
+          if (navUsers && this.user && this.user.role === 'admin') {
+            navUsers.style.display = '';
+          }
+          await App.loadDicts();
+          App.init();
+          App.loadStats();
+        }
       } catch (e) {
         document.getElementById('lg-msg').textContent = e.message;
         document.getElementById('lg-msg').style.color = 'var(--danger)';

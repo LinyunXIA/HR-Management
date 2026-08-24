@@ -65,15 +65,28 @@ const App = {
         `<div class="panel"><div class="empty">加载失败：${esc(e.message)}</div></div>`;
     }
   },
+
+  async initWithAuth() {
+    // 先检查登录态
+    if (window.Auth) {
+      await Auth.fetchMe();
+      Auth.renderBadge();
+      if (!Auth.user) {
+        // 未登录，显示登录弹窗，等待登录成功后再初始化
+        return;
+      }
+    }
+    // 已登录，继续初始化
+    const navUsers = document.getElementById('nav-users');
+    if (navUsers && window.Auth && Auth.user && Auth.user.role === 'admin') {
+      navUsers.style.display = '';
+    }
+    try { await this.loadDicts(); } catch (e) { toast('初始化字典失败：' + e.message); }
+    this.init();
+    this.loadStats();
+  },
 };
 
 document.addEventListener('DOMContentLoaded', async () => {
-  if (window.Auth) { await Auth.fetchMe(); Auth.renderBadge(); }
-  // v2.3：用户管理入口仅 admin 可见
-  const navUsers = document.getElementById('nav-users');
-  if (navUsers && window.Auth && Auth.user && Auth.user.role === 'admin') {
-    navUsers.style.display = '';
-  }
-  try { await App.loadDicts(); } catch (e) { toast('初始化字典失败：' + e.message); }
-  App.init();
+  await App.initWithAuth();
 });
