@@ -84,6 +84,16 @@ class UserRole(str, enum.Enum):
     HR = "hr"
 
 
+class UserType(str, enum.Enum):
+    """账号类型（v2.4.3 权限拆分）：数据权限→实体、API 权限→接口。
+
+    - UI：仅数据权限（内部系统用户，经 user_companies 绑定实体）
+    - API：外部 API 用户 = 数据权限 + API 权限 结合（user_apis 授权表）
+    """
+    UI = "ui"
+    API = "api"
+
+
 class CostMode(str, enum.Enum):
     """岗位成本输入模式（自动计算 / 手动输入，互斥）。"""
     AUTO = "auto"
@@ -265,7 +275,11 @@ class Position(Base):
 
 
 class User(Base):
-    """系统用户（JWT 认证，PRD §7B）。"""
+    """系统用户（JWT 认证，PRD §7B）。
+
+    v2.4.3 权限拆分：user_type=UI 仅数据权限（实体绑定）；
+    user_type=API 为外部 API 用户，数据权限 + API 权限（user_apis）结合。
+    """
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True)
@@ -273,11 +287,27 @@ class User(Base):
     hashed_password = Column(String(255), nullable=False)
     role = Column(SAEnum(UserRole, native_enum=False, length=10),
                   nullable=False, default=UserRole.ADMIN)
+    user_type = Column(SAEnum(UserType, native_enum=False, length=10),
+                       nullable=False, default=UserType.UI)  # UI=仅数据权限 / API=数据+API 结合
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=_now)
 
     companies = relationship("UserCompany", back_populates="user",
                              cascade="all, delete-orphan")
+    api_permissions = relationship("UserApiPermission", back_populates="user",
+                                   cascade="all, delete-orphan")
+
+
+class UserApiPermission(Base):
+    """外部 API 用户的接口授权（v2.4.3，0..N；api_key 见 app/auth.py::API_SCOPES 注册表）。"""
+    __tablename__ = "user_apis"
+    __table_args__ = (UniqueConstraint("user_id", "api_key"),)
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    api_key = Column(String(50), nullable=False)
+
+    user = relationship("User", back_populates="api_permissions")
 
 
 class UserCompany(Base):

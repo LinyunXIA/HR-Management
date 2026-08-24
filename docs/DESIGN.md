@@ -640,3 +640,11 @@ CLI：`python -m scripts.import_csv data/Position.csv`（首次 `--reset` 语义
 - [x] DB CHECK 放宽：`ck_employees_position_required_if_active` 豁免 `employee_type='OUTSOURCED'`（main.py 启动时按 pg_constraint 定义幂等替换）。
 - [x] `POST /employees`：`employee_no`/`position_number_id` 均可空——缺工号自动生成；非外包缺岗位 400；外包不挂岗跳过 lifecycle 挂编流转。
 - [x] 前端新增员工表单：工号只读自动生成、按类型切换 G/V/O 提示、岗位下拉含「不挂岗（仅外包）」空选项、列表虚拟建档显示「虚拟建档」徽标。
+
+### S8 用户权限拆分：数据权限→实体 / API 权限→接口（2026-08-24 第四轮反馈，v2.4.3）
+- [x] `User.user_type`（UI=仅数据权限 / API=数据+API 结合）+ `user_apis` 授权子表（Unique(user_id, api_key)）；main.py 幂等迁移。
+- [x] API_SCOPES 注册表（app/auth.py）：当前 2 个对外接口——auth.login（认证）/ public.companies（获取隶属公司）；新增外部 API 在此登记。
+- [x] `require_api_scope(api_key)` 依赖工厂：admin 全量；UI 用户 403；API 用户按授权放行。
+- [x] 执行点：登录门槛（API 用户须持「认证」）；`/public/companies` scope 门禁 + 非 admin 按可管实体过滤返回。
+- [x] users 路由：建号支持 user_type/apis、`PUT /admin/users/{id}/apis` 全量覆盖、`PATCH /admin/users/{id}/type` 切换类型（转 UI 清空授权）。
+- [x] 前端用户管理：列表加「类型/API 权限」列；建号表单类型选择 + API 复选联动显隐；「API 权限」分配弹窗；UI↔API 类型切换。

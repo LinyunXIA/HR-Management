@@ -44,6 +44,10 @@ def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)
         raise HTTPException(401, "用户名或密码错误")
     if not user.is_active:
         raise HTTPException(401, "账号已停用")
+    # v2.4.3：外部 API 用户的「认证」是可分配的 API 权限——未授予则拒绝换取 JWT
+    from app.auth import can_login
+    if not can_login(db, user):
+        raise HTTPException(403, "该账号未被授予「认证」API 权限，无法登录")
     token = create_access_token(username=user.username, role=user.role)
     # 从 JWT 解出过期秒数（依赖默认配置 720m）
     from app.auth import JWT_EXPIRE_MINUTES
