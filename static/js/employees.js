@@ -83,7 +83,7 @@ const Employees = {
         <td>${esc(e.gender || '—')}</td>
         <td>${esc(e.employee_type || '—')}</td>
         <td>${esc(e.employment_status || '—')}</td>
-        <td>${e.position_number ? `<span class="num">${esc(e.position_number)}</span> ${esc(e.position_name || '')}` : '<span class="hint">已解绑</span>'}</td>
+        <td>${e.position_number ? `<span class="num">${esc(e.position_number)}</span> ${esc(e.position_name || '')}` : (e.employee_type === '外包' ? '<span class="hint">虚拟建档</span>' : '<span class="hint">已解绑</span>')}</td>
         <td>${esc(e.company_name || '—')}</td>
         <td>${e.solid_line_number ? `${esc(e.solid_line_number)} ${esc(e.solid_line_manager_name || '')}` : '—'}</td>
         <td><button class="btn small" data-emp="${e.id}">详情</button></td>
@@ -114,17 +114,18 @@ const Employees = {
   async openCreate() {
     this._attachable = await this.attachablePositions();
     const modal = openModal(`
-      <header><h2>新增员工（必须挂岗）</h2><button class="btn small" onclick="closeModal()">✕</button></header>
+      <header><h2>新增员工</h2><button class="btn small" onclick="closeModal()">✕</button></header>
       <div class="body">
         <div class="form-grid">
-          <div class="field"><label>工号 *</label><input type="text" id="ec-no"></div>
+          <div class="field"><label>工号（自动生成）</label><input type="text" id="ec-no" disabled placeholder="保存后按类型生成"></div>
           <div class="field"><label>姓名 *</label><input type="text" id="ec-name"></div>
           <div class="field"><label>性别 *</label><select id="ec-gender"><option value="男">男</option><option value="女">女</option><option value="其他">其他</option></select></div>
-          <div class="field"><label>员工类型 *</label><select id="ec-type">${['正式', '实习', '外包', '劳务'].map((t) => `<option>${t}</option>`).join('')}</select></div>
+          <div class="field"><label>员工类型 *</label><select id="ec-type">${['正式', '实习', '外包', '劳务'].map((t) => `<option>${t}</option>`).join('')}</select>
+            <div class="hint" id="ec-nohint"></div></div>
           <div class="field"><label>在职状态</label><select id="ec-estatus">${['试用期', '在职', '休假'].map((t) => `<option>${t}</option>`).join('')}<option>离职</option></select></div>
           <div class="field"><label>入职日期</label><input type="date" id="ec-hire"></div>
-          <div class="field full"><label>挂编岗位 *（仅 Open/Vacant/Offered）</label>
-            <select id="ec-pos">${this.posOptions()}</select>
+          <div class="field full"><label>挂编岗位 *（仅 Open/Vacant/Offered；外包可不挂）</label>
+            <select id="ec-pos"><option value="">— 不挂岗（仅外包可虚拟建档）—</option>${this.posOptions()}</select>
           </div>
           <div class="field"><label>出生日期</label><input type="date" id="ec-birth"></div>
           <div class="field"><label>手机</label><input type="text" id="ec-phone"></div>
@@ -132,16 +133,26 @@ const Employees = {
           <div class="field full"><label>备注</label><textarea id="ec-remark" rows="2"></textarea></div>
         </div>
       </div>
-      <footer><button class="btn" onclick="closeModal()">取消</button><button class="btn primary" id="ec-save">保存（入职挂编）</button></footer>`);
+      <footer><button class="btn" onclick="closeModal()">取消</button><button class="btn primary" id="ec-save">保存</button></footer>`);
+
+    // 工号系列提示：正式 G / 实习·劳务 V / 外包 O；外包提示可不挂岗
+    const NO_HINT = { '正式': '工号将生成为 G00001 起', '实习': '工号将生成为 V00001 起', '劳务': '工号将生成为 V00001 起', '外包': '工号将生成为 O00001 起；外包人员由外包公司管理，可不挂岗' };
+    const typeSel = modal.querySelector('#ec-type');
+    const hint = modal.querySelector('#ec-nohint');
+    const syncHint = () => { hint.textContent = NO_HINT[typeSel.value] || ''; };
+    typeSel.onchange = syncHint;
+    syncHint();
+
     modal.querySelector('#ec-save').onclick = async () => {
-      if (!val('#ec-no') || !val('#ec-name') || !val('#ec-pos')) { toast('请填写工号、姓名并选择岗位'); return; }
+      const etype = val('#ec-type');
+      if (!val('#ec-name')) { toast('请填写姓名'); return; }
+      if (etype !== '外包' && !val('#ec-pos')) { toast('该员工类型必须选择挂编岗位（仅外包可不挂岗）'); return; }
       const body = {
-        employee_no: val('#ec-no'),
         name: val('#ec-name'),
         gender: val('#ec-gender'),
-        employee_type: val('#ec-type'),
+        employee_type: etype,
         employment_status: val('#ec-estatus'),
-        position_number_id: +val('#ec-pos'),
+        position_number_id: val('#ec-pos') ? +val('#ec-pos') : null,
         hire_date: val('#ec-hire') || null,
         birth_date: val('#ec-birth') || null,
         phone: val('#ec-phone') || null,
@@ -150,7 +161,8 @@ const Employees = {
       };
       try {
         const emp = await post('/employees', body);
-        closeModal(); toast(`员工已入职，岗位 ${emp.position_number} → 在职`, 'ok');
+        closeModal();
+        toast(emp.position_number ? `员工 ${emp.employee_no} 已入职，岗位 ${emp.position_number} → 在职` : `员工 ${emp.employee_no} 已建档（虚拟挂名单，未挂岗）`, 'ok');
         this.page = 1; this.render(); App.loadStats();
       } catch (e) { toast(e.message); }
     };

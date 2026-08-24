@@ -17,6 +17,7 @@ from app.helpers import (
     assert_can_write_company,
     assert_version,
     dotted_ids,
+    generate_employee_no,
     get_operable_company_ids,
     get_or_404,
 )
@@ -138,15 +139,23 @@ def list_employees(
 @router.post("/employees", status_code=201)
 def create_employee(payload: EmployeeCreate, response: Response,
                     user=Depends(get_current_user), db: Session = Depends(get_db)):
-    if db.query(Employee).filter(Employee.employee_no == payload.employee_no).first():
-        raise HTTPException(400, f"工号已存在: {payload.employee_no}")
-    pn = get_or_404(db, PositionNumber, payload.position_number_id, "岗位不存在")
-    _assert_attachable(db, pn)
-    _assert_type_match(pn, payload.employee_type)
-    # 行级隔离：入职挂编写入目标岗位所属实体，需可管
-    assert_can_write_company(db, user, pn.company_id, label="目标岗位所属公司")
+    # 工号自动生成（v2.4.2）：正式 G00001 起、实习/劳务 V00001 起、外包 O00001 起；
+    # 显式传入仍接受（API 兼容/数据迁移场景），重复时 400
+    emp_no = (payload.employee_no or "").strip() or generate_employee_no(db, payload.employee_type)
+    if db.query(Employee).filter(Employee.employee_no == emp_no).first():
+        raise HTTPException(400, f"工号已存在: {emp_no}")
+    # 挂岗规则（v2.4.2）：外包人员可不挂岗（虚拟建档，由外包公司管理）；其余类型必须挂岗
+    pn = None
+    if payload.position_number_id is not None:
+        pn = get_or_404(db, PositionNumber, payload.position_number_id, "岗位不存在")
+        _assert_attachable(db, pn)
+        _assert_type_match(pn, payload.employee_type)
+        # 行级隔离：入职挂编写入目标岗位所属实体，需可管
+        assert_can_write_company(db, user, pn.company_id, label="目标岗位所属公司")
+    elif payload.employee_type != EmployeeType.OUTSOURCED:
+        raise HTTPException(400, "该员工类型必须挂编岗位（仅外包人员可虚拟建档不挂岗）")
     emp = Employee(
-        employee_no=payload.employee_no,
+        employee_no=emp_no,
         name=payload.name,
         gender=payload.gender,
         birth_date=payload.birth_date,
@@ -155,13 +164,14 @@ def create_employee(payload: EmployeeCreate, response: Response,
         hire_date=payload.hire_date,
         employee_type=payload.employee_type,
         employment_status=payload.employment_status,
-        position_number_id=pn.id,
+        position_number_id=pn.id if pn else None,
         remark=payload.remark,
     )
     db.add(emp)
     db.flush()
-    lifecycle.transition(db, pn, PositionStatus.FILLED, note=f"员工 {payload.name} 入职挂编",
-                         employee_id=emp.id, system=True)
+    if pn:
+        lifecycle.transition(db, pn, PositionStatus.FILLED, note=f"员工 {payload.name} 入职挂编",
+                             employee_id=emp.id, system=True)
     db.commit()
     response.headers["Location"] = f"/api/v1/employees/{emp.id}"
     return serialize_employee(db, emp)

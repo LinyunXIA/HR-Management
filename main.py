@@ -52,29 +52,31 @@ def _ensure_employee_check_constraint():
         # SAEnum(native_enum=False) 持久化枚举「名」（'TERMINATED'），中文值不入库；
         # 约束仅保留实际存储值（#57：去除误导性冗余项 '离职'）
         from app.models import EmploymentStatus as _ES
+        from app.models import EmployeeType as _ETO
         _terminated_name = _ES.TERMINATED.name  # 'TERMINATED'
+        _outsourced_name = _ETO.OUTSOURCED.name  # 'OUTSOURCED'
+        _want_ck = (
+            f"CHECK ((employment_status = '{_terminated_name}'::text) "
+            f"OR (position_number_id IS NOT NULL) "
+            f"OR ((employee_type)::text = '{_outsourced_name}'::text))"
+        )
         with engine.begin() as conn:
-            # 若已存在旧的违反约束的行，先报告（不阻断启动，但约束将添加失败）
-            v = conn.execute(text(
-                f"SELECT count(*) FROM employees "
-                f"WHERE employment_status <> '{_terminated_name}' AND position_number_id IS NULL"
-            )).scalar()
-            if v and v > 0:
-                print(f"[migrate] WARNING: {v} 行在职员工 position_number_id 为 NULL，CHECK 约束将拒绝此数据，请先修复", file=sys.stderr)
             # 幂等添加/修复 CHECK（PostgreSQL 无 IF NOT EXISTS，依赖 pg_constraint 判断）
             exists = conn.execute(text(
                 "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname='ck_employees_position_required_if_active'"
             )).first()
-            need_replace = bool(exists) and "'离职'" in exists[0]
+            cur = exists[0] if exists else None
+            need_replace = bool(cur) and "OUTSOURCED" not in cur
             if need_replace:
                 conn.execute(text("ALTER TABLE employees DROP CONSTRAINT ck_employees_position_required_if_active"))
-                print("[migrate] 旧 ck_employees_position_required_if_active 含冗余枚举值，已删除待重建（#57）", file=sys.stderr)
+                print("[migrate] ck_employees_position_required_if_active 旧版（无外包豁免）已删除待重建（v2.4.2）", file=sys.stderr)
             if not exists or need_replace:
                 conn.execute(text(
                     f"ALTER TABLE employees ADD CONSTRAINT ck_employees_position_required_if_active "
-                    f"CHECK (employment_status = '{_terminated_name}' OR position_number_id IS NOT NULL)"
+                    f"CHECK (employment_status = '{_terminated_name}' OR position_number_id IS NOT NULL "
+                    f"OR employee_type = '{_outsourced_name}')"
                 ))
-                print("[migrate] ck_employees_position_required_if_active 已就绪（仅枚举名，#57）", file=sys.stderr)
+                print("[migrate] ck_employees_position_required_if_active 已就绪（外包可虚拟建档不挂岗，v2.4.2）", file=sys.stderr)
     except Exception as e:
         print(f"[migrate] employees CHECK constraint skipped: {e}", file=sys.stderr)
 
