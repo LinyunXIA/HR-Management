@@ -169,7 +169,10 @@ def create_position(payload: PositionNumberCreate, response: Response,
         status=PositionStatus.PLANNED,
         cost_mode=payload.cost_mode or CostMode.MANUAL,
         salary_before_tax=payload.salary_before_tax,
-        company_share=payload.company_share,
+        mandatory_tax=payload.mandatory_tax,
+        mandatory_fixed_fee=payload.mandatory_fixed_fee,
+        fixed_bonus=payload.fixed_bonus,
+        floating_bonus=payload.floating_bonus,
         labor_cost=payload.labor_cost,
     )
     db.add(pn)
@@ -216,7 +219,8 @@ def update_position(pid: int, payload: PositionNumberUpdate,
     # 行级隔离（PRD §7B.3）：岗位全局可读、hr 可维护；但成本字段按实体隔离
     cost_fields_touched = any(
         getattr(payload, f) is not None
-        for f in ("cost_mode", "salary_before_tax", "company_share", "labor_cost")
+        for f in ("cost_mode", "salary_before_tax", "mandatory_tax",
+                  "mandatory_fixed_fee", "fixed_bonus", "floating_bonus", "labor_cost")
     )
     if cost_fields_touched:
         assert_can_write_company(db, user, pn.company_id, label="该岗位的成本字段")
@@ -267,7 +271,8 @@ def update_position(pid: int, payload: PositionNumberUpdate,
         if incumbent and (pn.position_type or "").strip() in ATTACH_TYPE_MAP:
             _assert_type_match(pn, incumbent.employee_type)
 
-    for field in ("cost_mode", "salary_before_tax", "company_share", "labor_cost"):
+    for field in ("cost_mode", "salary_before_tax", "mandatory_tax",
+                  "mandatory_fixed_fee", "fixed_bonus", "floating_bonus", "labor_cost"):
         val = getattr(payload, field)
         if val is not None:
             setattr(pn, field, val)
@@ -367,7 +372,9 @@ def get_position_cost(pid: int, salary_before_tax: float | None = None,
         # 人的归属税区 = 其当前所挂岗位的工作地点
         salary = salary_before_tax if salary_before_tax is not None else emp.actual_salary_before_tax
         zone = resolve_tax_zone(db, pn.work_location)
-        result = calc_cost_by_zone(db, zone, salary)
+        result = calc_cost_by_zone(db, zone, salary,
+                                   fixed_bonus=emp.actual_fixed_bonus or 0,
+                                   floating_bonus=emp.actual_floating_bonus or 0)
         result.update({"position_id": pn.id, "scope": "actual", "employee_id": emp.id})
         return result
 
@@ -376,7 +383,9 @@ def get_position_cost(pid: int, salary_before_tax: float | None = None,
     if salary is None:
         raise HTTPException(400, "请先填写税前薪资（人工）")
     zone = resolve_tax_zone(db, pn.work_location)
-    result = calc_cost_by_zone(db, zone, salary)
+    result = calc_cost_by_zone(db, zone, salary,
+                               fixed_bonus=pn.fixed_bonus or 0,
+                               floating_bonus=pn.floating_bonus or 0)
     result.update({"position_id": pn.id, "scope": "budget"})
     return result
 

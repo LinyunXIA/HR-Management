@@ -422,6 +422,34 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 - 验证：隶属公司一致性、必填字段完整性、法律分类提取（岗位编号由系统分配，不做源编号校验）
 - 输出清洗报告（通过/修复/警告/错误）供用户确认
 
+### F6 年度用工成本预估（外部基准对接，v2.6）
+
+外部系统按我方定义的 schema 经 JWT API 推送「年度用工成本基准包」，本系统据此对当年在岗岗位计算每公司年度用工成本，报告存库供外部拉取。
+
+#### F6.1 基准包推送（POST /benchmarks，scope=benchmarks）
+- **行键**：`year + company_id + level(code) + country_id + work_location`（全用我方 ID/字典值）；行内容：`salary_before_tax`（税前年薪）、`tax_rate`（强制税率%）、`mandatory_fixed_fee`（强制定额扣费）
+- **校验链（方案甲：同步、整批原子、任一不过整批 400）**：
+  - L1 格式（类型/非负）；L2 引用（四维度必须存在于我方字典）
+  - L3 包内查重；L4 覆盖校验——按日期规则找出该年在岗全部岗位逐个匹配本包，缺一即拒收并列出缺失岗位清单（年份/公司/编号/原因）
+- **替换语义**：同 year 最后一次成功提交为准（整年快照 replace）
+- 配套字典端点：`GET /public/levels`（scope=public.levels）
+
+#### F6.2 在岗判定与计算
+- 计入 = `opening_date ≤ Y-12-31` 且（closing 空 或 ≥ Y-01-01）；**不看 lifecycle 当前状态**；opening 为空视为未生效不计入
+- 月折算系数 = 年内自然月数(含首尾)/12
+- 单岗位年度用工成本 = `(税前 + 税前×税率% + 定额扣费 + 固定奖金 + 浮动奖金) × factor`（奖金取自岗位自身字段）
+- 外包/顾问岗统一公式不特判
+
+#### F6.3 报告获取（GET /benchmarks/reports/{year}，scope=benchmarks）
+- 推送受理后异步生成（202 已收妥）；ready 返回公司汇总+岗位明细+缺失清单 JSON；无数据 404
+- 报告反映最近一次成功推送时刻的系统状态；此后岗位变化需重推刷新
+
+#### F1.6 补充（v2.6 成本六栏）
+成本字段由 3 栏扩为 **6 栏**（岗位预算口径与员工实际口径同构）：
+`税前(年薪)｜强制扣税｜强制定额扣费｜固定奖金｜浮动奖金｜用工成本`
+- 用工成本 = 其余五栏之和；原「公司份额」拆分为 强制扣税 + 强制定额扣费 后废弃
+- 税额引擎科目分两类：`item_kind=rate`（税率%，计提基数=税前）/ `item_kind=fixed`（定额金额）
+
 ---
 
 ## 5. 数据模型（概要）
@@ -574,8 +602,9 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 | **V2.2** | **单文件 .env 合并（DATABASE_URL_{dev,test,prod} + APP_ENV 切换，含 ${POSTGRES_PASSKEY} 展开）、速率限制（slowapi 全局 120/min + 登录 10/min + 公共 60/min）、外部 API JWT 鉴权落地**，其余同 V2.1 |
 | **V2.3** | **编号系统重制（源编号一律忽视、系统正式分配 P/PA 双系列、清洗期 T 占位、幂等键=职位名+公司+国家+开启日、两段式识别）、数据清洗仅支持 Org-Chart3 格式（权责说明续行、真实树祖先经理推断）、权限模型（admin/hr + user_companies 行级隔离）、挂编联动、成本税区化、三库岗位域数据清空重置（prod 先备份）** |
 | **V2.4** | **公司主数据改造：隶属公司加开业/关闭日期、股权结构子表（三来源股东互斥：内部公司/外部合作公司/自然人；pct 软校验）、外部合作公司独立主数据、三库 companies 受控清理（绑岗位的跳过）**，其余同 V2.3 |
-| **V2.5（本 PRD）** | **存储底座切换：PostgreSQL → SQLite 同机三文件 `data/hr_db_{env}.db`（WAL + 每连接 PRAGMA foreign_keys=ON；psycopg2 移出运行时依赖）；存量主数据一次性迁移（`scripts/migrate_pg_master_data.py`，仅字典表）；挂编联动触发器改 SQLite 语法；LLM+Embedding 扩展能力确认（embeddings BLOB + numpy/sqlite-vec 路线，见 DESIGN §15）** |
-| V2.6+（待评估） | CSV 导出、公司分组组织树视图、外包岗管理、转岗历史时间线、编制审批、完善用户角色管理、虚线关系单独矩阵视图 |
+| **V2.5** | **存储底座切换：PostgreSQL → SQLite 同机三文件 `data/hr_db_{env}.db`（WAL + 每连接 PRAGMA foreign_keys=ON；psycopg2 移出运行时依赖）；存量主数据一次性迁移（`scripts/migrate_pg_master_data.py`，仅字典表）；挂编联动触发器改 SQLite 语法；LLM+Embedding 扩展能力确认（embeddings BLOB + numpy/sqlite-vec 路线，见 DESIGN §15）** |
+| **V2.6（本 PRD）** | **年度用工成本预估（F6：外部基准包推送 L1~L4 校验链 + 整年快照 replace + 异步报告 API）；成本六栏改造（公司份额拆分为强制扣税+强制定额扣费，新增固定/浮动奖金；税额引擎科目分 rate/fixed 两类）；登录入口拆分（ui-login，API 账号禁入 UI）；环境徽章与登录弹窗环境标识** |
+| V2.7+（待评估） | CSV 导出、公司分组组织树视图、外包岗管理、转岗历史时间线、编制审批、完善用户角色管理、虚线关系单独矩阵视图 |
 
 ---
 
@@ -645,6 +674,14 @@ Planned (编制规划) ──→ Open (招聘中) ──→ Offered (已录用) 
 - **PG 专属特性替换**：股权三来源互斥 CHECK 由 `num_nonnulls()` 改为可移植布尔求和写法；编号序列号查询去 `regexp_replace/~` 改 Python 侧解析；挂编联动触发器由 plpgsql 重写为 SQLite 触发器（INSERT/UPDATE 各一，`RAISE(ABORT)`）；历史 PG 轻量迁移函数整体移除（新库 create_all 一次到位）。
 - **并发语义确认**：事务统一以 `BEGIN IMMEDIATE` 开启（`app/db.py` begin event listener）承接原 PG 行锁守卫语义（`with_for_update()` 在 SQLite 为 no-op），并发抢岗回归实测稳定为 [200,400] 无一人双岗；乐观锁 `version` 不受影响。
 - **LLM+Embedding 扩展能力确认**：SQLite 可支撑——向量以 BLOB 存 float32 + numpy 余弦暴力检索（万级文本毫秒级），或 `sqlite-vec` 扩展 KNN；将来如需 pgvector/HNSW 规模可经 ORM 层切回 PostgreSQL（见 DESIGN §15）。本轮仅架构预留，不落码。
+
+### 已确认决策（2026-08-24，v2.6 grilling 定稿）
+- **年度用工成本预估（F6）**：外部系统按我方 schema 经 JWT API 推送基准包（方案甲：我方定规则）；匹配键 = year+company_id+level code+country_id+work_location 全用我方 ID（D1/RE），**任何维度不回退、缺即报错**（D3）。
+- **推送校验链（方案甲）**：L1 格式 / L2 引用 / L3 包内查重 / L4 覆盖校验（该年在岗岗位逐一匹配本包，缺一整批拒收并列缺失清单）；同步校验前移到推送时，报告获取零意外。
+- **异步报告**：推送 202 已收妥 → 后台计算 → GET 拉取；同 year 整年快照 replace（最后一次提交为准，D6）；报告反映最近一次成功推送时刻状态，此后岗位变化需重推。
+- **在岗判定与折算**：日期交集判定不看 lifecycle 状态（D4）；自然月数(含首尾)/12 折算（D5）；外包/顾问统一公式（R2）。
+- **成本六栏（QA/QC/R6）**：岗位与员工实际成本同构扩为 税前｜强制扣税｜强制定额扣费｜固定奖金｜浮动奖金｜用工成本；公司份额概念废弃（无存量数据，列物理删除）；税额科目分 rate/fixed 两类，计提基数=税前。
+- **输出形态（D7/RD/R5）**：报告存库供外部 API 拉取，不做前端 Tab；按公司维度汇总；单一 scope=benchmarks。
 
 ### 待确认 / 开放问题
 - [ ] **Org-Chart.md 同步修订**（非系统功能，需人工处理）：P086~P088 及上海汇报关系与 CSV 不一致，建议以 CSV 为准后回写 Org-Chart.md。

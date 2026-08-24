@@ -112,6 +112,7 @@
 | 方法 | 路径 | 说明 | 认证 | 限流 |
 | --- | --- | --- | --- | --- |
 | GET | `/public/companies` | 隶属公司全字段：ID/名称/开业·关闭日期/股权结构/状态；非 admin 按可管实体过滤 | JWT + `public.companies` 授权 | `60/min` |
+| GET | `/public/levels` | 级别字典（code/label/is_management），供外部按我方 code 下发基准（v2.6） | JWT + `public.levels` 授权 | `60/min` |
 
 ### 2.4 认证（Auth，PRD §7B）
 
@@ -198,12 +199,15 @@
   "remark": null,
   "cost_mode": "manual",
   "salary_before_tax": null,
-  "company_share": null,
+  "mandatory_tax": null,
+  "mandatory_fixed_fee": null,
+  "fixed_bonus": null,
+  "floating_bonus": null,
   "labor_cost": null
 }
 ```
 
-响应（201 + `Location: /api/positions/{id}`）：完整岗位对象，含 `number`、`status`、`cost_mode`、`salary_before_tax`、`company_share`、`labor_cost`、`incumbent_name`、`version` 等（键列表见 §3.3）。
+响应（201 + `Location: /api/positions/{id}`）：完整岗位对象，含 `number`、`status`、`cost_mode`、成本六栏（`salary_before_tax`/`mandatory_tax`/`mandatory_fixed_fee`/`fixed_bonus`/`floating_bonus`/`labor_cost`）、`incumbent_name`、`version` 等（键列表见 §3.3）。
 
 **PATCH /positions/{id}（乐观锁，PRD §7C）**
 
@@ -221,7 +225,7 @@
 
 响应（201）：`{ "id", "position_number_id", "from_status", "to_status", "changed_at", "note" }`。非法流转返回 422。不受乐观锁约束（`lifecycle.transition` 原子）。
 
-**GET /positions/{id}/cost-calculation?salary_before_tax=（自动模式成本计算，只读派生资源，#15）**
+**GET /positions/{id}/cost-calculation?salary_before_tax=（自动模式成本计算，只读派生资源，#15；v2.6 六栏口径）**
 
 - 支持 `?salary_before_tax=` 查询参数：传入前端输入的未落库薪资值直接计算，避免编辑页双重 `PATCH` 导致的 409 冲突；不传则使用 DB 已保存的 `salary_before_tax`。
 
@@ -232,13 +236,19 @@
   "position_id": 13,
   "salary_before_tax": 120000,
   "tax_rate_total": 21.93,
-  "tax_items": [ { "item_name": "Social Security", "tax_rate": 13.07 }, { "item_name": "Pension", "tax_rate": 8.86 } ],
-  "company_share": 26316,
-  "labor_cost": 146316
+  "fixed_fee_total": 500,
+  "tax_items": [
+    { "item_name": "Social Security", "item_kind": "rate", "tax_rate": 13.07, "fixed_amount": null },
+    { "item_name": "Pension", "item_kind": "rate", "tax_rate": 8.86, "fixed_amount": null },
+    { "item_name": "Accident Insurance", "item_kind": "fixed", "tax_rate": 0, "fixed_amount": 500 }
+  ],
+  "mandatory_tax": 26316,
+  "mandatory_fixed_fee": 500,
+  "labor_cost": 146816
 }
 ```
 
-> 计算规则：公司份额 = 税前薪资（优先取 `?salary_before_tax=`，否则取 DB 值）× Σ(该岗位国家全部启用科目税率)；用工成本 = 税前薪资 + 公司份额。无税前薪资/无国家 → 400。保存计算值请 `PATCH /positions/{id}`（`company_share` / `labor_cost` + `version`），建议单次 PATCH 完成 `cost_mode`/`salary_before_tax`/`company_share`/`labor_cost` 批量保存。
+> 计算规则（v2.6 六栏）：强制扣税 = 税前（优先取 `?salary_before_tax=`，否则取 DB 值）× Σ(rate 科目税率%)；强制定额扣费 = Σ(fixed 科目金额)；用工成本 = 税前 + 强制扣税 + 定额扣费 + 奖金。未配置税率 → `configured=false`「未配置」，不猜测。保存计算值请 `PATCH /positions/{id}`（六栏 + `version`）。
 
 ### 3.3 岗位对象字段
 
@@ -255,7 +265,9 @@
   "dotted_manager_ids": [5], "dotted_manager_numbers": ["P005-2"],
   "org_chart_display": "SSC Statutory MLRO", "prev_position_id": null, "prev_position_number": null,
   "prev_company_id": null, "prev_company_name": null, "remark": "双线汇报",
-  "status": "open", "cost_mode": "manual", "salary_before_tax": null, "company_share": null, "labor_cost": null,
+  "status": "open", "cost_mode": "manual",
+  "salary_before_tax": null, "mandatory_tax": null, "mandatory_fixed_fee": null,
+  "fixed_bonus": null, "floating_bonus": null, "labor_cost": null,
   "incumbent_id": null, "incumbent_name": null, "version": 3,
   "created_at": "2026-08-04T08:00:00", "updated_at": "2026-08-04T08:00:00"
 }
@@ -409,6 +421,50 @@
 
 ---
 
+## 7A. 年度用工成本预估（外部基准对接，v2.6）
+
+| 方法 | 路径 | 说明 | 认证 | 限流 |
+| --- | --- | --- | --- | --- |
+| POST | `/benchmarks` | 推送整年基准快照（L1 格式/L2 引用/L3 查重/L4 覆盖，任一不过整批 400；通过则整年原子替换 + 异步生成报告） | JWT + `benchmarks` 授权 | 全局 |
+| GET | `/benchmarks/reports/{year}` | 拉取预估报告：`ready` 完整 JSON / `pending` / `failed`；从未推送 → 404 | JWT + `benchmarks` 授权 | 全局 |
+
+**POST /benchmarks 请求体**（行键 = year + company_id + level code + country_id + work_location，全用我方 ID/字典值）：
+
+```json
+{
+  "year": 2030,
+  "items": [
+    { "company_id": 3, "level": "M8a", "country_id": 5, "work_location": "卢森堡",
+      "salary_before_tax": 120000, "tax_rate": 27.07, "mandatory_fixed_fee": 500 }
+  ]
+}
+```
+
+- 成功：`202 { "status": "accepted", "year": 2030, "items": N, "report_status": "computing", "coverage": {"positions": X, "matched": X} }`
+- 失败：`400 {"detail": {"stage": "reference|duplicate|coverage", "errors": [...]}}`——coverage 阶段附 `missing[]`（年份内公司/编号/原因），方案甲缺一拒收。
+- **替换语义**：同 year 最后一次成功提交为准（整年快照 replace）；推送后岗位变化需重推刷新报告。
+
+**GET /benchmarks/reports/{year} 响应（ready）**：
+
+```json
+{ "year": 2030, "status": "ready", "generated_at": "…",
+  "error_count": 0,
+  "report": {
+    "totals": {"benchmark_rows": 12, "matched_positions": 16, "unmatched_positions": 0},
+    "companies": [ { "company_id": 3, "company_name": "…", "annual_labor_cost": 991936.0,
+                     "positions": [ { "number": "P11", "level": "M8a", "months_factor": 1.0,
+                                      "salary_before_tax": 120000, "tax_rate_pct": 27.07,
+                                      "mandatory_tax_amount": 32484, "mandatory_fixed_fee": 500,
+                                      "bonus": 3000, "unit_annual_cost": 155984,
+                                      "annual_labor_cost": 155984 } ] } ],
+    "unmatched": []
+  } }
+```
+
+> 计入判定按日期交集（不看 lifecycle 状态）；月折算 = 自然月数(含首尾)/12；公式 = `(税前+税前×税率%+定额扣费+固定奖金+浮动奖金) × factor`。字典准备：`GET /public/companies`、`GET /public/levels`。
+
+---
+
 ## 8. 健康检查
 
 | 方法 | 路径 | 说明 |
@@ -427,6 +483,9 @@
 | GET/POST, PATCH/DELETE | /companies、/countries、/levels、/work-locations、/scopes、/legal-categories、/position-types | master_data | 无 | 全局 |
 | GET/POST, PATCH/DELETE | /employment-tax-items、/employment-tax-items/{id} | master_data | 无 | 全局 |
 | GET | /public/companies | master_data | JWT | `60/min` |
+| GET | /public/levels | master_data | JWT + public.levels 授权 | `60/min` |
+| POST | /benchmarks | benchmarks | JWT + benchmarks 授权 | 全局 |
+| GET | /benchmarks/reports/{year} | benchmarks | JWT + benchmarks 授权 | 全局 |
 | GET/POST | /position-functions | positions | 无 | 全局 |
 | GET/POST, GET/PATCH/DELETE | /positions、/positions/{id} | positions | 无 | 全局（PATCH 需 `version`，`app/helpers.py:1`） |
 | POST | /positions/{id}/transitions | positions | 无 | 全局 |

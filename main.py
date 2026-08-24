@@ -14,6 +14,7 @@ from app import models  # noqa: F401  确保模型注册到 Base.metadata
 from app.db import APP_ENV, Base, DATABASE_URL, SessionLocal, engine, startup_banner
 from app.seed import seed_master_data
 from app.routers import auth, data_clean, employees, import_routes, master_data, orgchart, positions, transfers, users
+from app.routers import benchmarks as benchmarks_router
 
 # 启动时打印三环境自检日志（PRD §7D.2）
 print(startup_banner(), file=sys.stderr, flush=True)
@@ -78,6 +79,87 @@ def _ensure_attach_type_triggers():
 
 _ensure_attach_type_triggers()
 
+
+# 轻量迁移（v2.6）：成本六栏改造 + 外部基准对接
+# - 新增列：position_numbers 四栏 / employees.actual_ 四栏 / employment_tax_items 两列
+#   （create_all 只建缺失表不补列，存量库需逐列幂等 ADD）
+# - 废弃列：company_share / actual_company_share（公司份额拆分为强制扣税+定额外，
+#   三库均无数据）。dev/test 直接 DROP；prod 按 §7D.3 走受控迁移，仅告警不动结构
+def _ensure_v26_cost_columns():
+    from sqlalchemy import inspect as sa_inspect
+
+    adds = {
+        "position_numbers": [
+            ("mandatory_tax", "NUMERIC(14,2)"),
+            ("mandatory_fixed_fee", "NUMERIC(14,2)"),
+            ("fixed_bonus", "NUMERIC(14,2)"),
+            ("floating_bonus", "NUMERIC(14,2)"),
+        ],
+        "employees": [
+            ("actual_mandatory_tax", "NUMERIC(14,2)"),
+            ("actual_mandatory_fixed_fee", "NUMERIC(14,2)"),
+            ("actual_fixed_bonus", "NUMERIC(14,2)"),
+            ("actual_floating_bonus", "NUMERIC(14,2)"),
+        ],
+        "employment_tax_items": [
+            ("item_kind", "VARCHAR(10) NOT NULL DEFAULT 'rate'"),
+            ("fixed_amount", "NUMERIC(14,2)"),
+        ],
+    }
+    drops = {
+        "position_numbers": ["company_share"],
+        "employees": ["actual_company_share"],
+    }
+    try:
+        # 先在事务外完成全部反射，构建 DDL 计划——BEGIN IMMEDIATE 配方下，
+        # 事务内再发起任何语句（含 inspector 反射的 SELECT）都会以 IMMEDIATE
+        # 开启写事务，与外层写锁自死锁（v2.6 教训：反射绝不能进写事务）
+        stmts: list[str] = []
+        for tbl, cols in adds.items():
+            existing = {c["name"] for c in sa_inspect(engine).get_columns(tbl)}
+            if not existing:
+                continue  # 新库由 create_all 建表
+            for name, ddl in cols:
+                if name not in existing:
+                    stmts.append(f"ALTER TABLE {tbl} ADD COLUMN {name} {ddl}")
+        drop_stmts: list[str] = []
+        if APP_ENV != "prod":
+            for tbl, cols in drops.items():
+                existing = {c["name"] for c in sa_inspect(engine).get_columns(tbl)}
+                for name in cols:
+                    if name in existing:
+                        drop_stmts.append(f"ALTER TABLE {tbl} DROP COLUMN {name}")
+        elif any(c in {x["name"] for x in sa_inspect(engine).get_columns(tbl)}
+                 for tbl, cols in drops.items() for c in cols):
+            pending = [c for tbl, cols in drops.items() for c in cols
+                       if c in {x["name"] for x in sa_inspect(engine).get_columns(tbl)}]
+            if pending:
+                print(f"[migrate] WARNING(prod): 废弃列 {pending} 未删除——"
+                      f"生产变更走受控迁移：ALTER TABLE ... DROP COLUMN（§7D.3）", file=sys.stderr)
+
+        if not stmts and not drop_stmts:
+            return
+        import time
+
+        for attempt in range(3):
+            try:
+                engine.dispose()  # 弃用全部池化连接：排除残留事务持锁
+                with engine.begin() as conn:
+                    for s in stmts + drop_stmts:
+                        conn.execute(text(s))
+                        print(f"[migrate] {s}", file=sys.stderr)
+                return
+            except Exception as e:  # noqa: BLE001
+                if attempt == 2:
+                    raise
+                print(f"[migrate] v26 迁移第 {attempt + 1} 次尝试失败（{e}），重试…", file=sys.stderr)
+                time.sleep(1)
+    except Exception as e:
+        print(f"[migrate] v26 cost columns ensure failed: {e}", file=sys.stderr)
+
+
+_ensure_v26_cost_columns()
+
 with SessionLocal() as db:
     seed_master_data(db)
 
@@ -100,6 +182,7 @@ app.include_router(employees.router)
 app.include_router(orgchart.router)
 app.include_router(import_routes.router)
 app.include_router(transfers.router)
+app.include_router(benchmarks_router.router)
 
 
 @app.get("/api/v1/health")

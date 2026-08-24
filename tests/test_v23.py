@@ -157,8 +157,8 @@ def main():
     # ---------- S5 成本双口径 ----------
     section("S5 成本双口径 + 税区")
     _, calc = req("GET", f"/positions/{src_pn['id']}/cost-calculation?scope=budget&salary_before_tax=100000")
-    check(calc.get("configured") is True and abs(calc["company_share"] - 21930.0) < 1,
-          f"预算口径自动计算（share={calc.get('company_share')}，21.93%）")
+    check(calc.get("configured") is True and abs(calc["mandatory_tax"] - 21930.0) < 1,
+          f"预算口径自动计算（强制扣税={calc.get('mandatory_tax')}，21.93%）")
     _, actual0 = req("GET", f"/positions/{tgt_pn['id']}/cost-calculation?scope=actual&salary_before_tax=50000")
     check(actual0.get("detail") and "在职员工" in actual0.get("detail"),
           "无在职员工时 actual 口径拒绝（400 提示）")
@@ -178,12 +178,12 @@ def main():
     }, token=admin, expect=201)
     check(src_pn and emp["employment_status"] == "在职", "正式员工入职挂编成功")
 
-    # PATCH 实际成本
+    # PATCH 实际成本（v2.6 六栏）
     _, emp_v2 = req("PATCH", f"/employees/{emp['id']}",
                     {"version": emp["version"], "actual_salary_before_tax": 80000,
-                     "actual_cost_mode": "manual", "actual_company_share": 17544,
+                     "actual_cost_mode": "manual", "actual_mandatory_tax": 17544,
                      "actual_labor_cost": 97544}, token=admin, expect=200)
-    check(emp_v2["actual_labor_cost"] == 97544.0, "员工实际成本落库（手动模式）")
+    check(emp_v2["actual_labor_cost"] == 97544.0, "员工实际成本落库（手动模式，六栏）")
 
     # ---------- S3 行级隔离 ----------
     section("S3 行级隔离（读可跨司、写按实体）")

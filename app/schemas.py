@@ -105,10 +105,13 @@ class PositionNumberCreate(BaseModel):
     prev_position_id: int | None = None
     prev_company_id: int | None = None
     remark: str | None = None
-    # 成本字段（新建时可留空；模式缺省为手动输入，与模型默认一致）
+    # 成本六栏（v2.6：公司份额拆分为强制扣税+定额外，新增奖金；新建时可留空）
     cost_mode: CostMode = CostMode.MANUAL
     salary_before_tax: float | None = None
-    company_share: float | None = None
+    mandatory_tax: float | None = None
+    mandatory_fixed_fee: float | None = None
+    fixed_bonus: float | None = None
+    floating_bonus: float | None = None
     labor_cost: float | None = None
     # 岗位编号仅自动生成，不接受手工输入
 
@@ -140,10 +143,13 @@ class PositionNumberUpdate(BaseModel):
     prev_position_id: int | None = None
     prev_company_id: int | None = None
     remark: str | None = None
-    # 成本字段
+    # 成本六栏（v2.6）
     cost_mode: CostMode | None = None
     salary_before_tax: float | None = None
-    company_share: float | None = None
+    mandatory_tax: float | None = None
+    mandatory_fixed_fee: float | None = None
+    fixed_bonus: float | None = None
+    floating_bonus: float | None = None
     labor_cost: float | None = None
     version: int | None = None  # 乐观锁版本号（PRD §7C），携带时校验
 
@@ -188,10 +194,13 @@ class EmployeeUpdate(BaseModel):
     employee_type: EmployeeType | None = None
     employment_status: EmploymentStatus | None = None
     target_company_id: int | None = None  # v2.3 转调中目标公司（常规流程走 /transfers/initiate）
-    # 实际成本（v2.3 双口径：跟人走）
+    # 实际成本六栏（v2.6 双口径：跟人走）
     actual_cost_mode: CostMode | None = None
     actual_salary_before_tax: float | None = None
-    actual_company_share: float | None = None
+    actual_mandatory_tax: float | None = None
+    actual_mandatory_fixed_fee: float | None = None
+    actual_fixed_bonus: float | None = None
+    actual_floating_bonus: float | None = None
     actual_labor_cost: float | None = None
     remark: str | None = None
     version: int | None = None  # 乐观锁版本号（PRD §7C）
@@ -361,7 +370,9 @@ class EmploymentTaxItemOut(BaseModel):
     tax_zone_id: int | None = None
     tax_zone_label: str | None = None
     item_name: str
-    tax_rate: float
+    item_kind: str = "rate"           # rate=强制税率% / fixed=强制定额扣费（v2.6）
+    tax_rate: float = 0.0
+    fixed_amount: float | None = None
     is_active: bool
 
 
@@ -369,7 +380,9 @@ class EmploymentTaxItemCreate(BaseModel):
     country_id: int | None = None   # 旧口径兼容；新配置请用 tax_zone_id
     tax_zone_id: int | None = None  # v2.3 税区（国家或城市级）
     item_name: str
+    item_kind: str = "rate"         # rate | fixed（v2.6）
     tax_rate: float = 0.0
+    fixed_amount: float | None = None
     is_active: bool = True
 
     @model_validator(mode="after")
@@ -383,7 +396,9 @@ class EmploymentTaxItemCreate(BaseModel):
 
 class EmploymentTaxItemUpdate(BaseModel):
     item_name: str | None = None
+    item_kind: str | None = None
     tax_rate: float | None = None
+    fixed_amount: float | None = None
     is_active: bool | None = None
 
 

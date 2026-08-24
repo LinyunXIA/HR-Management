@@ -457,31 +457,45 @@ const MasterData = {
     catch (e) { toast(e.message); }
   },
 
-  /* 税区下的税务科目维护 */
+  /* 税区下的税务科目维护（v2.6：两类科目——强制税率% / 强制定额扣费） */
   openZoneItems(zone) {
     const modal = openModal(`
       <header><h2>税务科目 — ${esc(zone.country_name)}${zone.level === 'city' && zone.city ? ' · ' + esc(zone.city) : ''}</h2>
         <button class="btn small" onclick="closeModal()">✕</button></header>
       <div class="body">
-        <table><thead><tr><th>科目</th><th>税率 %</th><th>启用</th><th></th></tr></thead>
+        <table><thead><tr><th>科目</th><th>类型</th><th>税率 % / 定额</th><th>启用</th><th></th></tr></thead>
           <tbody id="zi-rows">${(zone.items || []).map((it) => `
-            <tr data-item="${it.id}"><td>${esc(it.item_name)}</td><td class="num">${it.tax_rate}</td><td>${it.is_active ? '✔' : '—'}</td>
+            <tr data-item="${it.id}"><td>${esc(it.item_name)}</td>
+            <td>${it.item_kind === 'fixed' ? '定额扣费' : '强制税率'}</td>
+            <td class="num">${it.item_kind === 'fixed' ? (it.fixed_amount ?? '—') : it.tax_rate}</td>
+            <td>${it.is_active ? '✔' : '—'}</td>
             <td><button class="btn small danger" data-idel="${it.id}">删</button></td></tr>`).join('')
-            || '<tr><td colspan="4" class="empty">暂无科目</td></tr>'}</tbody></table>
+            || '<tr><td colspan="5" class="empty">暂无科目</td></tr>'}</tbody></table>
         <div class="form-grid" style="margin-top:10px">
           <div class="field"><label>新科目 *</label><input type="text" id="zi-name"></div>
-          <div class="field"><label>税率 % *</label><input type="number" step="0.01" id="zi-rate"></div>
+          <div class="field"><label>类型 *</label>
+            <select id="zi-kind"><option value="rate">强制税率（%）</option><option value="fixed">强制定额扣费（金额）</option></select></div>
+          <div class="field"><label id="zi-val-label">税率 % *</label><input type="number" step="0.0001" id="zi-rate"></div>
           <div class="field" style="align-self:end"><button class="btn" id="zi-add">＋ 添加科目</button></div>
         </div>
       </div>`);
+    const kindSel = modal.querySelector('#zi-kind');
+    kindSel.onchange = () => {
+      modal.querySelector('#zi-val-label').textContent =
+        kindSel.value === 'fixed' ? '年度定额 *' : '税率 % *';
+    };
     modal.querySelectorAll('[data-idel]').forEach((b) => b.onclick = () =>
       this.delTax(+b.dataset.idel));
     modal.querySelector('#zi-add').onclick = async () => {
       const name = modal.querySelector('#zi-name').value.trim();
-      const rate = parseFloat(modal.querySelector('#zi-rate').value);
-      if (!name || isNaN(rate)) { toast('请填写科目名与税率'); return; }
+      const kind = kindSel.value;
+      const num = parseFloat(modal.querySelector('#zi-rate').value);
+      if (!name || isNaN(num)) { toast('请填写科目名与数值'); return; }
+      const body = kind === 'fixed'
+        ? { tax_zone_id: zone.id, item_name: name, item_kind: 'fixed', fixed_amount: num, is_active: true }
+        : { tax_zone_id: zone.id, item_name: name, item_kind: 'rate', tax_rate: num, is_active: true };
       try {
-        await post('/employment-tax-items', { tax_zone_id: zone.id, item_name: name, tax_rate: rate, is_active: true });
+        await post('/employment-tax-items', body);
         closeModal(); toast('已添加', 'ok'); this.render();
       } catch (e) { toast(e.message); }
     };

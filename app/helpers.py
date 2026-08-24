@@ -224,16 +224,25 @@ def resolve_tax_zone(db: Session, work_location: str | None):
     )
 
 
-def calc_cost_by_zone(db: Session, zone, salary) -> dict:
-    """按税区计算公司份额与用工成本；zone=None → configured=False（未配置）。"""
+def calc_cost_by_zone(db: Session, zone, salary, fixed_bonus=0.0, floating_bonus=0.0) -> dict:
+    """按税区计算成本分项与用工成本（v2.6 六栏口径）。
+
+    - 强制扣税 = 税前 × Σ(rate 科目税率%)
+    - 强制定额扣费 = Σ(fixed 科目金额)
+    - 用工成本 = 税前 + 强制扣税 + 定额扣费 + 固定奖金 + 浮动奖金
+    zone=None → configured=False（未配置，不猜测）。
+    """
     from app.models import EmploymentTaxItem
+    salary = float(salary or 0)
     result = {
         "configured": False,
         "tax_zone_id": zone.id if zone else None,
-        "salary_before_tax": float(salary),
+        "salary_before_tax": salary,
         "tax_rate_total": 0.0,
+        "fixed_fee_total": 0.0,
         "tax_items": [],
-        "company_share": None,
+        "mandatory_tax": None,
+        "mandatory_fixed_fee": None,
         "labor_cost": None,
         "message": "该地区税率未配置，无法自动计算（请配置税区或改用手动输入）" if zone is None else None,
     }
@@ -245,14 +254,27 @@ def calc_cost_by_zone(db: Session, zone, salary) -> dict:
                 EmploymentTaxItem.is_active.is_(True))
         .all()
     )
-    rate = sum(float(it.tax_rate or 0) for it in items) / 100.0
-    share = round(float(salary) * rate, 2)
+    rate_items = [it for it in items if (it.item_kind or "rate") == "rate"]
+    fixed_items = [it for it in items if it.item_kind == "fixed"]
+    rate_pct = sum(float(it.tax_rate or 0) for it in rate_items)
+    mandatory_tax = round(salary * rate_pct / 100.0, 2)
+    fixed_fee = round(sum(float(it.fixed_amount or 0) for it in fixed_items), 2)
+    labor_cost = round(
+        salary + mandatory_tax + fixed_fee + float(fixed_bonus or 0) + float(floating_bonus or 0), 2
+    )
     result.update({
         "configured": True,
-        "tax_rate_total": round(rate * 100, 2),
-        "tax_items": [{"item_name": it.item_name, "tax_rate": float(it.tax_rate or 0)} for it in items],
-        "company_share": share,
-        "labor_cost": round(float(salary) + share, 2),
+        "tax_rate_total": round(rate_pct, 4),
+        "fixed_fee_total": fixed_fee,
+        "tax_items": [
+            {"item_name": it.item_name, "item_kind": it.item_kind or "rate",
+             "tax_rate": float(it.tax_rate or 0), "fixed_amount":
+                 (float(it.fixed_amount) if it.fixed_amount is not None else None)}
+            for it in items
+        ],
+        "mandatory_tax": mandatory_tax,
+        "mandatory_fixed_fee": fixed_fee,
+        "labor_cost": labor_cost,
         "message": None if items else "税区下暂无有效税务科目",
     })
     return result
@@ -308,15 +330,22 @@ def serialize_position(db: Session, pn: PositionNumber) -> dict:
         "remark": pn.remark,
         "status": pn.status.value if pn.status else None,
         "cost_mode": pn.cost_mode.value if pn.cost_mode else None,
+        # ---- 预算成本六栏（v2.6）----
         "salary_before_tax": float(pn.salary_before_tax) if pn.salary_before_tax is not None else None,
-        "company_share": float(pn.company_share) if pn.company_share is not None else None,
+        "mandatory_tax": float(pn.mandatory_tax) if pn.mandatory_tax is not None else None,
+        "mandatory_fixed_fee": float(pn.mandatory_fixed_fee) if pn.mandatory_fixed_fee is not None else None,
+        "fixed_bonus": float(pn.fixed_bonus) if pn.fixed_bonus is not None else None,
+        "floating_bonus": float(pn.floating_bonus) if pn.floating_bonus is not None else None,
         "labor_cost": float(pn.labor_cost) if pn.labor_cost is not None else None,
         "incumbent_id": incumbent.id if incumbent else None,
         "incumbent_name": incumbent.name if incumbent else None,
-        # ---- 实际成本层（v2.3 双口径：Filled 对照、跟人走；空岗为 None）----
+        # ---- 实际成本层（v2.3 双口径：Filled 对照、跟人走；空岗为 None；v2.6 六栏）----
         "actual_cost_mode": (incumbent.actual_cost_mode.value if incumbent and incumbent.actual_cost_mode else None),
         "actual_salary_before_tax": (float(incumbent.actual_salary_before_tax) if incumbent and incumbent.actual_salary_before_tax is not None else None),
-        "actual_company_share": (float(incumbent.actual_company_share) if incumbent and incumbent.actual_company_share is not None else None),
+        "actual_mandatory_tax": (float(incumbent.actual_mandatory_tax) if incumbent and incumbent.actual_mandatory_tax is not None else None),
+        "actual_mandatory_fixed_fee": (float(incumbent.actual_mandatory_fixed_fee) if incumbent and incumbent.actual_mandatory_fixed_fee is not None else None),
+        "actual_fixed_bonus": (float(incumbent.actual_fixed_bonus) if incumbent and incumbent.actual_fixed_bonus is not None else None),
+        "actual_floating_bonus": (float(incumbent.actual_floating_bonus) if incumbent and incumbent.actual_floating_bonus is not None else None),
         "actual_labor_cost": (float(incumbent.actual_labor_cost) if incumbent and incumbent.actual_labor_cost is not None else None),
         "version": pn.version,
         "created_at": pn.created_at,
