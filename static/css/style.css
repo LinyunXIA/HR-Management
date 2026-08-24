@@ -160,6 +160,17 @@ td.num { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weigh
 .report-card .t { font-size: 12px; color: var(--muted); }
 pre.error-list { background: #fdf0f0; border: 1px solid #f0c9c9; border-radius: 8px; padding: 12px; font-size: 12px; white-space: pre-wrap; max-height: 200px; overflow: auto; }
 
+/* 环境徽章（v2.4.3）：后端在首页 HTML 同步注入 window.APP_ENV，无额外请求/DB 连接 */
+.env-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 12px; border-radius: 999px; font-size: 12px; font-weight: 700;
+  letter-spacing: .5px; white-space: nowrap; margin-left: 6px;
+}
+.env-badge::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.env-badge.dev  { color: #1e7e34; background: #e6f4ea; border: 1px solid #b7dfc2; }
+.env-badge.test { color: #8a6d00; background: #fff6d9; border: 1px solid #eadfa0; }
+.env-badge.prod { color: #fff; background: #d64545; border: 1px solid #b23232; box-shadow: 0 0 0 3px rgba(214,69,69,.18); }
+
 .empty { text-align: center; color: var(--muted); padding: 40px 0; }
 .auth-badge { display: flex; align-items: center; gap: 8px; }
 .auth-badge .btn { white-space: nowrap; }

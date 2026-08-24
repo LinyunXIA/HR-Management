@@ -36,9 +36,17 @@ const Auth = {
   },
 
   showLogin() {
+    // 环境标识：与顶部徽章同源（后端注入 window.APP_ENV / window.APP_DB），防呆提示防误登环境
+    const envLabels = { dev: '开发 DEV', test: '测试 TEST', prod: '生产 PROD' };
+    const envColors = { dev: '#1e7e34', test: '#8a6d00', prod: '#d64545' };
+    const _env = (window.APP_ENV || '').toLowerCase();
+    const envLabel = envLabels[_env] || (_env ? _env.toUpperCase() : '未知环境');
+    const envColor = envColors[_env] || '#666';
+    const dbTxt = window.APP_DB ? ` · ${window.APP_DB}` : '';
     const modal = openModal(`
       <header><h2>登录</h2><button class="btn small" onclick="closeModal()">✕</button></header>
       <div class="body">
+        <div class="hint" style="margin-bottom:10px">当前环境：<b style="color:${esc(envColor)}">${esc(envLabel)}</b>${esc(dbTxt)}</div>
         <div class="hint" style="margin-bottom:10px">默认账号：<code>admin / admin123</code>（首次启动自动创建）</div>
         <div class="form-grid">
           <div class="field"><label>用户名 *</label><input type="text" id="lg-user" value="admin"></div>
