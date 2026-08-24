@@ -183,7 +183,14 @@ def require_api_scope(api_key: str):
 
 
 def require_admin(current: User = Depends(get_current_user)) -> User:
-    """仅 admin 可操作（建号 / 分配可管实体 / 主数据维护等）。"""
+    """仅内部 admin 可操作（建号 / 分配可管实体 / 主数据维护等）。
+
+    v2.4.3：外部 API 类型账号一律拒绝——外部只能登录与调用其已授权的外部 API，
+    用户管理/注册类接口不对任何 API 账号开放（即使角色为 admin，属配置错误场景）。
+    """
+    ut = current.user_type.value if hasattr(current.user_type, "value") else str(current.user_type)
+    if ut == "api":
+        raise HTTPException(403, "外部 API 账号不可访问内部管理接口（仅可登录与调用已授权的外部 API）")
     if current.role != "admin":
         raise HTTPException(403, "仅管理员可执行此操作")
     return current

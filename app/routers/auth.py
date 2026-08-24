@@ -64,7 +64,13 @@ def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)
 def register(request: Request, payload: RegisterRequest, response: Response,
              current: User = Depends(get_current_user),
              db: Session = Depends(get_db)):
-    """建号（v2.3：关闭自主注册，仅 admin 可调用；角色限 admin/hr）。"""
+    """建号（v2.3：关闭自主注册，仅 admin 可调用；角色限 admin/hr）。
+
+    v2.4.3：外部 API 类型账号一律拒绝——注册不对外部开放，外部仅可登录。
+    """
+    ut = current.user_type.value if hasattr(current.user_type, "value") else str(current.user_type)
+    if ut == "api":
+        raise HTTPException(403, "外部 API 账号不可调用注册接口")
     if current.role != "admin":
         raise HTTPException(403, "仅管理员可创建账号")
     if payload.role not in ("admin", "hr"):
@@ -93,6 +99,9 @@ def me(current: User = Depends(get_current_user)):
 
 @router.get("/users")
 def list_users(current: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    ut = current.user_type.value if hasattr(current.user_type, "value") else str(current.user_type)
+    if ut == "api":
+        raise HTTPException(403, "外部 API 账号不可访问内部管理接口")
     if current.role != "admin":
         raise HTTPException(403, "仅管理员可查看用户列表")
     users = db.query(User).order_by(User.id).all()
