@@ -323,9 +323,11 @@ REST 规范：名词复数资源、HTTP 方法映射 CRUD（GET 查 / POST 建 /
 | POST | /transfers | 调岗（201，旧岗→Vacant，新岗→Filled） |
 | GET | /transfers?employeeId= | 调岗记录列表（可按员工过滤） |
 | POST | /transfers/initiate | 转调发起（v2.3）：原 HR 把人转到目标公司 B（人仍挂原岗、原岗锁定，标「转调中」+ target_company_id=B）不释放；**此后仅 `B` 的 HR 可见/可认领**（池按 target_company 过滤，其他 HR 不可见） |
+| GET | /transfers/pending | 待认领池（v2.3）：仅目标公司可管 HR 可见，按 target_company 过滤 |
 | POST | /transfers/{id}/claim | 转调认领（v2.3）：**仅 target_company 可管 HR**认领+分配空闲目标岗；**单事务**：目标岗 Filled + 原岗 Vacant + 人挂新岗 + 记 `prev_*`，全部生效或整体回滚 |
 | POST | /transfers/{id}/reject | 转调退回（v2.3）：仅 target_company HR 拒绝 → 退回原公司、原岗继续（人不脱岗） |
 | POST | /employees/{id}/promote | 升职（v2.3）：时节=月末/即时；Filled 新岗、老岗默认 Vacant（可手动 Closed）、工龄照人 |
+| GET | /employees/{id}/cost-calculation?salary_before_tax= | 员工实际成本测算（v2.3 双口径）：按当前占用员工的**归属税区**计算实际成本（跟人走）；未配置税率返回「未配置」 |
 | DELETE | /employees/{id} | 删除员工（仅已离职且已解绑） |
 | GET | /org-charts | 组织树数据：{nodes, solid_edges, dotted_edges, roots} |
 | GET | /org-charts?report={org\|solid\|dotted} | 导出 Markdown（`Accept: text/markdown`） |
