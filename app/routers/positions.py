@@ -247,15 +247,21 @@ def update_position(pid: int, payload: PositionNumberUpdate,
         level_upd = payload.level.strip()
         _assert_level(db, level_upd)
         pn.level = level_upd or None
+    # 可空字段：按 model_fields_set 区分「未提供」与「显式 null=清空」——
+    # 前端编辑表单清空输入时发送 null，必须落库为 NULL（修复清空操作静默失效）
     for field in ("opening_date", "closing_date", "work_location",
-                  "job_responsibility", "legal_category", "org_chart_display",
-                  "prev_position_id", "prev_company_id", "remark", "position_type"):
-        val = getattr(payload, field)
-        if val is not None:
-            setattr(pn, field, val)
+                  "job_responsibility", "org_chart_display",
+                  "prev_position_id", "prev_company_id", "remark"):
+        if field in payload.model_fields_set:
+            setattr(pn, field, getattr(payload, field))
+    if "legal_category" in payload.model_fields_set:
+        pn.legal_category = payload.legal_category  # 空值即清空；非空已在上方校验字典
+    if "position_type" in payload.model_fields_set:
+        val = (payload.position_type or "").strip() or None
+        pn.position_type = val
 
     # 挂编联动（PRD F1.5）：岗位类型变更时校验当前占用员工合同属性，防「四不像」数据
-    if payload.position_type is not None and payload.position_type != (old_position_type or "").strip():
+    if "position_type" in payload.model_fields_set and payload.position_type != (old_position_type or "").strip():
         from app.routers.employees import ATTACH_TYPE_MAP, _assert_type_match
         incumbent = db.query(Employee).filter(Employee.position_number_id == pn.id).first()
         if incumbent and (pn.position_type or "").strip() in ATTACH_TYPE_MAP:
@@ -266,14 +272,16 @@ def update_position(pid: int, payload: PositionNumberUpdate,
         if val is not None:
             setattr(pn, field, val)
 
-    if payload.solid_line_manager_id is not None:
+    if "solid_line_manager_id" in payload.model_fields_set:
         if payload.solid_line_manager_id:
             mgr = get_or_404(db, PositionNumber, payload.solid_line_manager_id, "直线经理岗位不存在")
             _assert_management(db, mgr, "直线经理")
             check_cycle(db, pn.id, payload.solid_line_manager_id)
             # 汇报接线权限（v2.3）：由被汇报目标岗位的操作者维护
             assert_can_write_company(db, user, mgr.company_id, label="被汇报目标岗位所属公司")
-        pn.solid_line_manager_id = payload.solid_line_manager_id
+            pn.solid_line_manager_id = payload.solid_line_manager_id
+        else:
+            pn.solid_line_manager_id = None  # 显式清空（前端选「无」）
 
     if payload.dotted_manager_ids is not None:
         for mid in payload.dotted_manager_ids:
