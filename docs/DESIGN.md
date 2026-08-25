@@ -82,7 +82,6 @@ HR_Management/
 │       ├── transfers.py    # 调岗
 │       ├── orgchart.py     # GET /org-charts
 │       ├── data_clean.py   # 数据清洗路由
-│       ├── benchmarks.py   # 外部基准对接：POST /benchmarks + GET /benchmarks/reports/{year}（v2.6）
 │       └── import_routes.py
 ├── static/
 │   ├── index.html          # 单页，Tab：数据清洗/主数据/岗位/员工/组织架构/导入 + 登录徽章
@@ -204,11 +203,14 @@ class PositionNumber(Base):        # 岗位编号（管理主体）
     solid_line_manager_id  FK self, nullable   # 直线经理（仅管理岗可选）
     org_chart_display, prev_position_id, prev_company_id FK companies, remark
     status        Enum(planned|open|offered|filled|vacant|frozen|closed)
-    # ---- 预算成本字段（v2.3：预算口径，留在岗位、不随人走）----
+    # ---- 预算成本六栏（v2.6：公司份额拆分为强制扣税+定额外，新增奖金两栏）----
     cost_mode     Enum(auto|manual), default manual   # 两种模式互斥（预算口径）
-    salary_before_tax  Numeric(14,2), nullable   # 预算·税前薪资
-    company_share      Numeric(14,2), nullable   # 预算·公司份额
-    labor_cost         Numeric(14,2), nullable   # 预算·用工成本
+    salary_before_tax  Numeric(14,2), nullable   # 预算·税前（年薪）
+    mandatory_tax      Numeric(14,2), nullable   # 预算·强制扣税（=税前×Σrate%）
+    mandatory_fixed_fee Numeric(14,2), nullable  # 预算·强制定额扣费（=Σfixed）
+    fixed_bonus        Numeric(14,2), nullable   # 预算·固定奖金
+    floating_bonus     Numeric(14,2), nullable   # 预算·浮动奖金
+    labor_cost         Numeric(14,2), nullable   # 预算·用工成本 = 其余五栏之和
     # 空岗可录预算；Filled 后与占用员工实际成本并置对照（见 Employee 实际成本）
     version       Integer, default 1            # 乐观锁版本号（PRD §7C，app/models.py:1）
     created_at, updated_at
@@ -230,11 +232,14 @@ class Employee(Base):              # 人员档案
     employee_type, employment_status（含「转调中」v2.3）
     position_number_id  FK NOT NULL       # 人永不脱岗（在职/转调/升职均挂岗），仅离职解绑 NULL
     target_company_id  FK companies, nullable   # v2.3 转调中：目标公司（认领前原岗保持）
-    # ---- 实际成本字段（v2.3：跟人走，升职转调不丢、离职留档）----
+    # ---- 实际成本六栏（v2.3 双口径：跟人走，升职转调不丢、离职留档；v2.6 六栏同构）----
     actual_cost_mode   Enum(auto|manual), default manual
-    actual_salary_before_tax  Numeric(14,2), nullable   # 实际·税前薪资
-    actual_company_share      Numeric(14,2), nullable   # 实际·公司份额
-    actual_labor_cost         Numeric(14,2), nullable   # 实际·用工成本
+    actual_salary_before_tax  Numeric(14,2), nullable   # 实际·税前（年薪）
+    actual_mandatory_tax      Numeric(14,2), nullable   # 实际·强制扣税
+    actual_mandatory_fixed_fee Numeric(14,2), nullable  # 实际·强制定额扣费
+    actual_fixed_bonus        Numeric(14,2), nullable   # 实际·固定奖金
+    actual_floating_bonus     Numeric(14,2), nullable   # 实际·浮动奖金
+    actual_labor_cost         Numeric(14,2), nullable   # 实际·用工成本 = 其余五栏之和
     remark, version Integer default 1,    # 乐观锁（PRD §7C）
     created_at, updated_at
     # 挂编联动（v2.3）：employee_type 必须匹配所挂岗位的 position_type
@@ -310,12 +315,16 @@ REST 规范：名词复数资源、HTTP 方法映射 CRUD（GET 查 / POST 建 /
 
 | 方法 | 路径 | 说明 | 认证 | 限流 |
 | --- | --- | --- | --- | --- |
-| POST | /auth/login | 登录换取 JWT | 无 | `10/min` |
-| POST | /auth/register | **建号（仅 admin；关闭自主注册，v2.3）** | JWT | `10/min` |
-| GET | /auth/me | 当前用户信息 | JWT | 全局 |
+| POST | /auth/login | 登录换取 JWT（API 用户须持「认证」授权） | 无 | `10/min` |
+| POST | /auth/ui-login | Web 界面专用登录：仅 UI 类型账号，API 账号 403（v2.5 拆分） | 无 | `10/min` |
+| GET | /auth/me | 当前用户信息（含 `user_type`） | JWT | 全局 |
 | GET/POST | /admin/users | 用户列表 / 建号+分配可管公司（仅 admin） | JWT(admin) | 全局 |
 | POST | /admin/users/{id}/companies | 给 hr 分配/撤销可管实体（仅 admin） | JWT(admin) | 全局 |
-| GET | /public/companies | 对外：所有隶属公司（id+name） | **JWT** | `60/min` |
+| PUT/PATCH | /admin/users/{id}/apis、/admin/users/{id}/type、/admin/users/{id}/active | API 授权覆盖 / 账号类型切换 / 启停用 | JWT(admin) | 全局 |
+| GET | /admin/scopes | 对外 API 权限注册表（API_SCOPES 单一事实源） | JWT(admin) | 全局 |
+| GET | /public/companies | 对外：隶属公司全字段（v2.4.3 按可管实体过滤） | **JWT + public.companies** | `60/min` |
+
+> 建号统一走内部 `/admin/users*`；`/auth/register`、`/users` 等遗留端点已移除（v2.4.3）。
 
 ### 6.1 主数据（F0，`routers/master_data.py`）
 
@@ -730,7 +739,7 @@ SQLite 完全可支撑本项目的 LLM+Embedding 需求（91 岗位 + 万级员�
 
 ## 16. Phase v2.5 实施清单（PostgreSQL → SQLite 切换）
 
-> 依据 PRD §7D（v2.5）/ §10 决策（2026-08-24）。**2026-08-24 开发完成**，回归基线：`tests/test_integration.py` 45/45、`tests/test_v23.py` 43/43。
+> 依据 PRD §7D（v2.5）/ §10 决策（2026-08-24）。**2026-08-24 开发完成**，回归基线：`tests/test_integration.py` 45/45、`tests/test_v23.py` 52/52。
 
 ### S1 连接层（`app/db.py`）
 - [x] 默认 URL 改 `sqlite:///{PROJECT_ROOT}/data/hr_db_{env}.db`（绝对路径）；相对路径 `_absolutize_sqlite_url` 规范化。

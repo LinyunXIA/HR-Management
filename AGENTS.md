@@ -129,6 +129,6 @@ APP_ENV=prod .venv/bin/python -m scripts.import_csv testingdata/原始文件/Pos
 - 表计数（hr_db_dev）：`position_numbers=4`（Org-Chart3.md 导入：P1~P4）、`companies=4`、users 仅 admin
 - **三环境 DB 隔离（PRD §7D）**：单文件 `.env` 内 `DATABASE_URL_{dev,test,prod}` sqlite 三段 + `APP_ENV` 切换；文件名一致性校验 + prod 护栏（复制 .db 备份替代 pg_dump）
 - **JWT§7B + 乐观锁§7C + 速率限制§7B.2 已落地**：`PyJWT/bcrypt`、`version` 列、全局 `120/min` / 登录 `10/min` / 公共 `60/min`
-- **回归基线**：`tests/test_integration.py` 45/45、`tests/test_v23.py` 43/43 全过（SQLite 下并发抢岗 [200,400] 语义保持）；挂编联动触发器 SQLite 版直写拦截验证通过
+- **回归基线**：`tests/test_integration.py` 45/45、`tests/test_v23.py` 52/52 全过（SQLite 下并发抢岗 [200,400] 语义保持）；挂编联动触发器 SQLite 版直写拦截验证通过
 - Python 3.14.7 + FastAPI 0.141.1 + SQLAlchemy 2.0.51 已就绪
 - opencode 1.18.15 已安装，全局 provider: minimax / openrouter

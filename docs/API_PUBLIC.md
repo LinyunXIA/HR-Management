@@ -181,7 +181,7 @@ HTTP/1.1 429 Too Many Requests
 
 ## 2. 获取级别字典（v2.6 新增）
 
-获取系统级别字典（`B6~B10b / M7~M12b`），供外部系统按**我方 level code** 下发用工成本基准。**需 JWT + `public.levels` 权限**。
+获取系统级别字典（`B6~B10b / M7~M12b`），供外部系统对齐我方级别编码做展示与映射（原「基准包推送」链路已随 v2.6 R2 整体废弃）。**需 JWT + `public.levels` 权限**。
 
 | 项 | 内容 |
 | --- | --- |
@@ -211,7 +211,7 @@ Authorization: Bearer <access_token>
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| code | string | 级别代码（唯一，推送 `/benchmarks` 时 `level` 字段必须取自此列表） |
+| code | string | 级别代码（唯一，作为我方级别唯一标识） |
 | label | string\|null | 显示名（如 Manager / Coordinator） |
 | is_management | boolean | 是否管理岗（code 以 M 开头） |
 

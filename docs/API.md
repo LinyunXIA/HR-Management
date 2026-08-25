@@ -13,7 +13,7 @@
 
 - **REST 规范**：名词复数资源、HTTP 方法映射 CRUD、创建返回 `201 Created` + `Location` 头、部分更新用 `PATCH`。
 - **请求/响应**：JSON（`Content-Type: application/json`）；导出为 `text/markdown`。
-- **认证**：对外接口 `GET /public/companies` 需 JWT + 对应 API 权限，`GET /auth/me` 及内部管理接口需 JWT（`Authorization: Bearer <token>`，见 §2.4；`app/auth.py:76`）。
+- **认证**：全部内部管理接口需 JWT（`Authorization: Bearer <token>`，`app/auth.py::get_current_user`）；对外接口另需对应 API 权限 scope（注册表 `app/auth.py::API_SCOPES`）；主数据字典 / 用工税额 / 税区写操作与清洗作业导入**仅 admin**（#95，PRD §7B.3 admin 维护、hr 只读）。
 - **限流**：全局 `120/minute` / IP（`app/limiter.py:1` / `main.py:1`）；敏感接口单独更严：`POST /auth/login` `10/min`、`GET /public/companies` `60/min`，超限返回 `429`。
 - **状态码**：
   | 码 | 含义 |
@@ -58,6 +58,8 @@
 | PATCH | `/{resource}/{id}` | 部分更新 |
 | DELETE | `/{resource}/{id}` | 删除（被岗位引用时禁止，返回 400） |
 
+> **写操作仅 admin（#95）**：POST / PATCH / DELETE 一律挂 `require_admin`（PRD §7B.3：admin 维护、hr 只读）；GET 仅需登录。隶属公司（companies，v2.4 专用路由：开业/关闭日期 + 股权结构 + 绑定税区 `tax_zone_id`）与外部合作公司（`/external-companies`）同理。
+
 创建请求体示例（级别）：
 
 ```json
@@ -82,25 +84,27 @@
 | legal-categories | `name`, `sort_order` |
 | position-types | `name`, `sort_order` |
 
-### 2.2 员工用工税额（按国家）
+### 2.2 员工用工税额（按税区，v2.3 起；科目分 rate/fixed 两类，v2.6）
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/employment-tax-items?country_id=` | 列表（可按国家过滤） |
-| POST | `/employment-tax-items` | 新增科目（201） |
-| PATCH | `/employment-tax-items/{id}` | 更新 |
-| DELETE | `/employment-tax-items/{id}` | 删除 |
+| GET | `/employment-tax-items?tax_zone_id=` | 列表（可按 `tax_zone_id` 过滤；兼容旧 `?country_id=`） |
+| POST | `/employment-tax-items` | 新增科目（201；**仅 admin**） |
+| PATCH | `/employment-tax-items/{id}` | 更新（**仅 admin**） |
+| DELETE | `/employment-tax-items/{id}` | 删除（**仅 admin**） |
 
-创建请求体：
+创建请求体（`item_kind=rate` 强制税率%，计提基数=税前；`item_kind=fixed` 定额金额；`tax_zone_id` 与遗留 `country_id` 互斥、推荐前者）：
 
 ```json
-{ "country_id": 1, "item_name": "Social Security", "tax_rate": 13.07, "is_active": true }
+{ "tax_zone_id": 1, "item_name": "Social Security", "item_kind": "rate", "tax_rate": 13.07, "is_active": true }
 ```
 
 响应：
 
 ```json
-{ "id": 5, "country_id": 1, "country_name": "比利时", "item_name": "Social Security", "tax_rate": 13.07, "is_active": true }
+{ "id": 5, "country_id": null, "tax_zone_id": 1, "tax_zone_label": "卢森堡",
+  "item_name": "Social Security", "item_kind": "rate",
+  "tax_rate": 13.07, "fixed_amount": null, "is_active": true }
 ```
 
 ### 2.3 对外接口（Public API）
@@ -165,7 +169,7 @@
 | POST | `/positions/{id}/transitions` | 状态流转（201，创建一条事件并变更状态） |
 | GET | `/positions/{id}/transitions` | 该岗位的流转事件列表 |
 | GET | `/transitions?positionId=` | 全局流转事件列表（可按岗位过滤） |
-| GET | `/positions/{id}/cost-calculation?salary_before_tax=` | 按国家用工税额计算成本（只读派生资源，支持 `?salary_before_tax=` 传入未落库薪资避免双重 PATCH，#15） |
+| GET | `/positions/{id}/cost-calculation?salary_before_tax=` | 按**岗位隶属公司绑定税区**计算成本（v2.6 R1 口径；只读派生资源，支持 `?salary_before_tax=` 传入未落库薪资避免双重 PATCH，#15） |
 | DELETE | `/positions/{id}` | 删除（有在职员工或已有事件时禁止） |
 
 **GET /positions 查询参数**
@@ -254,15 +258,15 @@
 
 ```json
 {
-  "id": 13, "number": "P013-4-1", "position_id": 5, "position_name": "Statutory MLRO Manager",
+  "id": 13, "number": "P13", "position_id": 5, "position_name": "Statutory MLRO Manager",
   "company_id": 4, "company_name": "Peeters Global Shared Services SPRL",
   "level": "M8a", "scope": "country", "country_id": 1, "country_name": "比利时",
   "position_type": "Employee",
   "opening_date": "2001-01-01", "closing_date": null,
   "work_location": "比利时布鲁塞尔", "job_responsibility": "SSC 法定反洗钱负责人",
   "legal_category": null,
-  "solid_line_manager_id": 15, "solid_line_number": "P015-4-1", "solid_line_manager_name": "Senior Operation Manager",
-  "dotted_manager_ids": [5], "dotted_manager_numbers": ["P005-2"],
+  "solid_line_manager_id": 15, "solid_line_number": "P15", "solid_line_manager_name": "Senior Operation Manager",
+  "dotted_manager_ids": [5], "dotted_manager_numbers": ["P5"],
   "org_chart_display": "SSC Statutory MLRO", "prev_position_id": null, "prev_position_number": null,
   "prev_company_id": null, "prev_company_name": null, "remark": "双线汇报",
   "status": "open", "cost_mode": "manual",
@@ -316,6 +320,18 @@
 { "employee_id": 5, "to_position_id": 15 }
 ```
 
+**转调交接（v2.3 F1.5b，人永不脱岗）**
+
+| 方法 | 路径 | 说明 | 认证 |
+| --- | --- | --- | --- |
+| POST | `/transfers/initiate` | 原公司 HR 发起转出：员工标「转调中」+ `target_company_id`；原岗保持 Filled 锁定不释放 | JWT |
+| GET | `/transfers/pending` | 待认领池：仅目标公司的可管 HR 可见（按 target_company 过滤） | JWT |
+| POST | `/transfers/{id}/claim` | 目标 HR 认领+分配空闲目标岗；单事务：目标岗 Filled + 原岗 Vacant + 人挂新岗 + `prev_*` | JWT |
+| POST | `/transfers/{id}/reject` | 仅目标公司 HR（或发起人）拒绝 → 退回原公司、原岗继续 | JWT |
+
+- initiate 请求体：`{ "employee_id", "target_company_id", "note"? }`；claim 请求体：`{ "to_position_id" }`
+- 升职：`POST /employees/{id}/promote`，请求体 `{ "to_position_id", "timing": "immediate|month_end", "note"? }`——Filled 新岗、老岗默认 Vacant（可手动 Closed）、工龄照人
+
 **员工对象字段**：`id, employee_no, name, gender, birth_date, phone, email, hire_date, employee_type, employment_status, position_number_id, position_number, position_name, company_id, company_name, solid_line_manager_id, solid_line_number, solid_line_manager_name, dotted_manager_ids, dotted_manager_numbers, remark, version, created_at, updated_at`
 
 ---
@@ -332,14 +348,14 @@
 ```json
 {
   "nodes": [
-    { "id": 7, "number": "P063-4-5", "display": "Soparfi Managing Director - 卢森堡控股总经理",
+    { "id": 7, "number": "P2", "display": "Soparfi Managing Director - 卢森堡控股总经理",
       "position_name": "Soparfi Managing Director", "company": "Soparfi S.à r.l.", "level": "M11a",
       "scope": "country", "country": "卢森堡", "status": "open", "closed": false,
       "incumbent": null, "incumbent_id": null }
   ],
-  "solid_edges":  [ { "from": "P063-4-5", "to": "P004-1" } ],
-  "dotted_edges": [ { "from": "P028-4-6", "to": "P005-2", "label": "虚线汇报" } ],
-  "roots": [ "P063-4-5", "P066-1" ]
+  "solid_edges":  [ { "from": "P2", "to": "P1" } ],
+  "dotted_edges": [ { "from": "P6", "to": "P5", "label": "虚线汇报" } ],
+  "roots": [ "P2", "P7" ]
 }
 ```
 
@@ -364,8 +380,10 @@
 ```json
 { "total": 4, "imported": 4, "updated": 0, "updated_by_id": 0, "updated_by_key": 0,
   "errors": [], "warnings": [],
-  "assigned_numbers": [{"label": "Statutory Manager", "number": "P1"}] }
+  "assigned_numbers": [{"label": "Statutory Manager", "number": "P1", "action": "imported"}] }
 ```
+
+- `assigned_numbers[].action` 取值：`imported`（新建分配编号）/ `updated_by_id`（按岗位ID 认老更新）/ `updated_by_key`（幂等键认老更新）。
 
 - **编号由系统强制分配（v2.3）**：CSV「岗位编号」列一律忽视——正式岗 `P{seq}`、外包岗 `PA{seq}`，序号=库内同系列最大值+1；新建行返回 `assigned_numbers[]` 明细。
 - **迭代识别（#49 定稿）**：CSV 可携带**可选「岗位ID」列**（导出环节输出正式 ID）。带 ID 且库内存在 → 按正式 ID 认老更新（计入 `updated_by_id`）；无 ID / 未携带 → 回退幂等键认老（`updated_by_key`）；均未命中 → 新建。带 ID 但库内不存在 / 同文件多行引用同一 ID / ID 格式非法 → 报错该行不导入。
@@ -477,7 +495,7 @@ Authorization: Bearer <access_token>
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/health` | `{"status": "ok", "app": "HR Management", "env": "dev"}`（`env` 为 `APP_ENV`，`main.py:1`） |
+| GET | `/api/v1/health` | `{"status": "ok", "app": "HR Management", "env": "dev"}`（`env` 为 `APP_ENV`，无认证，`main.py:1`） |
 
 ---
 
@@ -485,28 +503,37 @@ Authorization: Bearer <access_token>
 
 | 方法 | 路径 | 模块 | 认证 | 限流 |
 | --- | --- | --- | --- | --- |
-| POST | /auth/login | auth | 无 | `10/min` |
-| POST | /auth/ui-login | auth | 无 | `10/min`（仅 UI 类型账号，API 账号 403） |
+| POST | /auth/login | auth | 无（API 用户须持 `auth.login` 授权） | `10/min` |
+| POST | /auth/ui-login | auth | 无（仅 UI 类型账号，API 账号 403） | `10/min` |
 | GET | /auth/me | auth | JWT | 全局 |
-| GET/POST, PATCH/DELETE | /companies、/countries、/levels、/work-locations、/scopes、/legal-categories、/position-types | master_data | 无 | 全局 |
-| GET/POST, PATCH/DELETE | /employment-tax-items、/employment-tax-items/{id} | master_data | 无 | 全局 |
-| GET | /public/companies | master_data | JWT | `60/min` |
+| GET | /admin/users；POST /admin/users；POST /admin/users/{id}/companies；PUT /admin/users/{id}/apis；PATCH /admin/users/{id}/type；PATCH /admin/users/{id}/active | users | JWT(admin) | 全局（建号 `5/min`） |
+| GET | /admin/scopes | users | JWT(admin) | 全局 |
+| GET | /companies、/countries、/levels、/work-locations、/scopes、/legal-categories、/position-types | master_data | JWT | 全局 |
+| POST/PATCH/DELETE | 同上各资源写操作（含 /companies/{id} 股权结构专用路由） | master_data | **JWT(admin)**（#95） | 全局 |
+| GET/POST, PATCH/DELETE | /external-companies、/external-companies/{id} | master_data | GET=JWT；写=**JWT(admin)**（#95） | 全局 |
+| GET/POST, PATCH/DELETE | /employment-tax-items、/employment-tax-items/{id} | master_data | GET=JWT；写=JWT(admin) | 全局 |
+| GET/POST, PATCH/DELETE | /tax-zones、/tax-zones/{id} | master_data | GET=JWT；写=JWT(admin) | 全局 |
+| GET | /public/companies | master_data | JWT + public.companies 授权 | `60/min` |
 | GET | /public/levels | master_data | JWT + public.levels 授权 | `60/min` |
 | GET | /public/positions | master_data | JWT + public.positions 授权 | `60/min` |
-| GET/POST | /position-functions | positions | 无 | 全局 |
-| GET/POST, GET/PATCH/DELETE | /positions、/positions/{id} | positions | 无 | 全局（PATCH 需 `version`，`app/helpers.py:1`） |
-| POST | /positions/{id}/transitions | positions | 无 | 全局 |
-| GET | /positions/{id}/transitions | positions | 无 | 全局 |
-| GET | /transitions | positions | 无 | 全局 |
-| GET | /positions/{id}/cost-calculation?salary_before_tax= | positions | 无 | 全局 |
-| GET/POST, GET/PATCH/DELETE | /employees、/employees/{id} | employees | 无 | 全局（PATCH 需 `version`） |
-| POST | /transfers | transfers | 无 | 全局 |
-| GET | /transfers | transfers | 无 | 全局 |
-| GET | /org-charts | orgchart | 无 | 全局 |
-| POST | /imports | import_routes | 无 | 全局 |
-| GET | /imports | import_routes | 无 | 全局 |
-| GET/POST | /data-clean-jobs、/data-clean-jobs/{jobId}、/data-clean-jobs/{jobId}/imports、/data-clean-jobs/files/list | data_clean | 无 | 全局 |
-| GET | /health | main | 无 | 全局 |
+| GET/POST | /position-functions | positions | JWT | 全局 |
+| GET/POST, GET/PATCH/DELETE | /positions、/positions/{id} | positions | JWT（PATCH 需 `version`，`app/helpers.py:1`；opening_date 必填/不可清空，#97） | 全局 |
+| POST/GET | /positions/{id}/transitions | positions | JWT | 全局 |
+| GET | /transitions?positionId= | positions | JWT | 全局 |
+| GET | /positions/{id}/cost-calculation?salary_before_tax=&scope=budget\|actual | positions | JWT | 全局 |
+| GET/POST, GET/PATCH/DELETE | /employees、/employees/{id} | employees | JWT（PATCH 需 `version`；外包可虚拟建档 v2.4.2） | 全局 |
+| POST | /employees/{id}/promote | employees | JWT | 全局 |
+| POST | /transfers | transfers | JWT | 全局 |
+| GET | /transfers?employeeId=&status= | transfers | JWT（hr 按可管实体过滤） | 全局 |
+| POST | /transfers/initiate | transfers | JWT | 全局 |
+| GET | /transfers/pending | transfers | JWT | 全局 |
+| POST | /transfers/{id}/claim、/transfers/{id}/reject | transfers | JWT（claim 仅目标公司可管 HR） | 全局 |
+| GET | /org-charts（?report={org\|solid\|dotted} + Accept: text/markdown 导出 MD） | orgchart | JWT | 全局 |
+| POST | /imports；GET /imports | import_routes | JWT | 全局 |
+| GET | /data-clean-jobs、/data-clean-jobs/{jobId}、/data-clean-jobs/files/list | data_clean | JWT | 全局 |
+| POST | /data-clean-jobs | data_clean | JWT | 全局 |
+| POST | /data-clean-jobs/{jobId}/imports | data_clean | **JWT(admin)**（#95） | 全局 |
+| GET | /api/v1/health | main | 无 | 全局 |
 
-> 注：以上为系统当前活跃端点全集。全局限流 `120/min`（`app/limiter.py:1`）；超限 `429`。
+> 注：以上为系统当前活跃端点全集。全局限流 `120/min`（`app/limiter.py:1`）；超限 `429`。遗留 `/data-clean/*` 旧端点一律 410 已迁移，不再列出。
 
