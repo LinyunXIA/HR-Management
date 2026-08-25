@@ -170,14 +170,16 @@ def main():
 
     # ---------- S3 清洗导入幂等 ----------
     section("S3 清洗作业导入（幂等 upsert）")
-    code, imp, _ = req("POST", f"/data-clean-jobs/{job['id']}/imports", expect=201)
+    code, imp, _ = req("POST", f"/data-clean-jobs/{job['id']}/imports",
+                       token=admin, expect=201)  # #95：导入端点已收口为 admin-only
     ir = imp.get("import_report", {})
     check(ir.get("errors") == [], "导入无 error")
     check(ir.get("imported", 0) + ir.get("updated", 0) == total,
           f"imported({ir.get('imported')})+updated({ir.get('updated')}) == total({total})")
     nums = [a["number"] for a in ir.get("assigned_numbers", [])]
     check(all(n.startswith(("P", "PA")) for n in nums), f"系统分配正式编号 {nums[:4]}{'…' if len(nums) > 4 else ''}")
-    code, imp2, _ = req("POST", f"/data-clean-jobs/{job['id']}/imports", expect=201)
+    code, imp2, _ = req("POST", f"/data-clean-jobs/{job['id']}/imports",
+                        token=admin, expect=201)  # #95：同上，带 admin token
     ir2 = imp2.get("import_report", {})
     check(ir2.get("imported", 0) == 0, "重复导入 imported=0（幂等认老，不产生重复数据）")
 
