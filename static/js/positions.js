@@ -19,7 +19,7 @@ const Positions = {
   TRANSITIONS: {
     planned: ['open', 'closed', 'frozen'],
     open: ['offered', 'closed'],
-    offered: ['open', 'closed'],
+    offered: ['open'],
     vacant: ['open', 'closed', 'frozen'],
     frozen: ['planned', 'open'],
     closed: [],
