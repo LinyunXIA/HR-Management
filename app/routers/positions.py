@@ -253,6 +253,8 @@ def update_position(pid: int, payload: PositionNumberUpdate,
         pn.level = level_upd or None
     # 可空字段：按 model_fields_set 区分「未提供」与「显式 null=清空」——
     # 前端编辑表单清空输入时发送 null，必须落库为 NULL（修复清空操作静默失效）
+    if "opening_date" in payload.model_fields_set and payload.opening_date is None:
+        raise HTTPException(400, "职位开启日不可清空（#97 口径 C：在岗判定与幂等键依据）")
     for field in ("opening_date", "closing_date", "work_location",
                   "job_responsibility", "org_chart_display",
                   "prev_position_id", "prev_company_id", "remark"):

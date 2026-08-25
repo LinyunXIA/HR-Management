@@ -95,7 +95,8 @@ class PositionNumberCreate(BaseModel):
     scope: Scope
     country_id: int | None = None
     position_type: str | None = None  # 职位类型：Consultant/Employee/External Employee
-    opening_date: date | None = None
+    # 开启日必填（#97 口径 C）：F6.2 在岗判定与导入幂等键均以其为依据；缺失岗位会静默漏出导出
+    opening_date: date
     closing_date: date | None = None
     work_location: str | None = None
     job_responsibility: str | None = None

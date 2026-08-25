@@ -121,7 +121,7 @@ def main():
         code, p = req("POST", "/positions", {
             "position_name": name, "company_id": company_id, "level": "B7a",
             "scope": "global", "position_type": emp_type,
-            "work_location": "比利时布鲁塞尔",
+            "work_location": "比利时布鲁塞尔", "opening_date": "2026-01-01",
         }, token=admin)
         return p if code == 201 else None
 
