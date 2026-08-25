@@ -6,10 +6,11 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
-from app.auth import get_current_user
+from app.auth import get_current_user, require_admin
 from app.data_clean import run_clean
-from app.db import SessionLocal
+from app.db import get_db
 from app.import_csv import import_csv
 
 router = APIRouter(prefix="/api/v1", tags=["data-clean"])
@@ -95,20 +96,22 @@ async def create_data_clean_job(
 
 
 @router.post("/data-clean-jobs/{job_id}/imports", status_code=201)
-def import_data_clean_job(job_id: str):
+def import_data_clean_job(job_id: str, _admin=Depends(require_admin),
+                          db: Session = Depends(get_db)):
     """将清洗作业的 CSV 导入系统（幂等 upsert，非破坏性；v2.4.1 起各环境均允许，
-    破坏性操作仍由 assert_writable 拦截）。"""
+    破坏性操作仍由 assert_writable 拦截）。仅 admin（#95，PRD §7B.3 导入由 admin 维护）。
+
+    必须复用 DI 会话（get_db），禁止另开 SessionLocal：BEGIN IMMEDIATE 配方下
+    鉴权依赖链的会话已持有写锁（首条 SELECT 即开启 IMMEDIATE 事务），
+    同请求内第二会话再写库会自等待 busy_timeout 30s 后 database is locked。
+    """
     job = _JOBS.get(job_id)
     if not job:
         raise HTTPException(404, "清洗作业不存在")
     csv_text = job["csv_text"]
     reader = csv_mod.DictReader(io.StringIO(csv_text))
-    db = SessionLocal()
-    try:
-        import_report = import_csv(db, reader, strict_legal=True)
-        return {"clean_report": job["report"], "import_report": import_report, "job_id": job_id}
-    finally:
-        db.close()
+    import_report = import_csv(db, reader, strict_legal=True)
+    return {"clean_report": job["report"], "import_report": import_report, "job_id": job_id}
 
 
 # 兼容旧端点（301 迁移提示，实际已替换为 /data-clean-jobs）

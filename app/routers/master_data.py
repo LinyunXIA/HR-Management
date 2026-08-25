@@ -75,7 +75,8 @@ def _crud(model, out_schema, create_schema, update_schema, path: str,
         return db.query(model).order_by(getattr(model, order_by), model.id).all()
 
     @router.post(path, response_model=out_schema, status_code=201)
-    def create_item(payload: create_schema, response: Response, db: Session = Depends(get_db)):
+    def create_item(payload: create_schema, response: Response,
+                    _admin=Depends(require_admin), db: Session = Depends(get_db)):
         obj = model(**payload.model_dump())
         db.add(obj)
         try:
@@ -91,7 +92,8 @@ def _crud(model, out_schema, create_schema, update_schema, path: str,
         return obj
 
     @router.patch(path + "/{obj_id}", response_model=out_schema)
-    def update_item(obj_id: int, payload: update_schema, db: Session = Depends(get_db)):
+    def update_item(obj_id: int, payload: update_schema,
+                    _admin=Depends(require_admin), db: Session = Depends(get_db)):
         obj = get_or_404(db, model, obj_id)
         for k, v in payload.model_dump(exclude_unset=True).items():
             setattr(obj, k, v)
@@ -100,7 +102,7 @@ def _crud(model, out_schema, create_schema, update_schema, path: str,
         return obj
 
     @router.delete(path + "/{obj_id}")
-    def delete_item(obj_id: int, db: Session = Depends(get_db)):
+    def delete_item(obj_id: int, _admin=Depends(require_admin), db: Session = Depends(get_db)):
         obj = get_or_404(db, model, obj_id)
         if ref_check:
             ref_check(db, obj)
@@ -244,7 +246,7 @@ def list_companies(_user=Depends(get_current_user), db: Session = Depends(get_db
 
 @router.post("/companies", status_code=201)
 def create_company(payload: CompanyCreate, response: Response,
-                   db: Session = Depends(get_db)):
+                   _admin=Depends(require_admin), db: Session = Depends(get_db)):
     _assert_tax_zone(db, payload.tax_zone_id)
     company = Company(
         name=payload.name,
@@ -277,7 +279,8 @@ def create_company(payload: CompanyCreate, response: Response,
 
 
 @router.patch("/companies/{company_id}", response_model=None)
-def update_company(company_id: int, payload: CompanyUpdate, db: Session = Depends(get_db)):
+def update_company(company_id: int, payload: CompanyUpdate,
+                   _admin=Depends(require_admin), db: Session = Depends(get_db)):
     company = get_or_404(db, Company, company_id)
     data = payload.model_dump(exclude_unset=True)
     closing_changed = "closing_date" in data
@@ -308,8 +311,8 @@ def update_company(company_id: int, payload: CompanyUpdate, db: Session = Depend
 
 @router.delete("/companies/{company_id}")
 def delete_company(company_id: int, db: Session = Depends(get_db),
-                   _user=Depends(get_current_user)):
-    """物理删除（v2.4.1）：被岗位/股权/转调目标/HR 绑定引用时禁止，需先解除。"""
+                   _admin=Depends(require_admin)):
+    """物理删除（v2.4.1）：被岗位/股权/转调目标/HR 绑定引用时禁止，需先解除。仅 admin（#95）。"""
     company = get_or_404(db, Company, company_id)
     n_pos = db.query(PositionNumber).filter(
         (PositionNumber.company_id == company_id)
@@ -346,7 +349,7 @@ def list_external_companies(_user=Depends(get_current_user), db: Session = Depen
 
 @router.post("/external-companies", response_model=ExternalCompanyOut, status_code=201)
 def create_external_company(payload: ExternalCompanyCreate, response: Response,
-                            db: Session = Depends(get_db)):
+                            _admin=Depends(require_admin), db: Session = Depends(get_db)):
     obj = ExternalCompany(
         name=payload.name,
         remark=payload.remark,
@@ -367,7 +370,7 @@ def create_external_company(payload: ExternalCompanyCreate, response: Response,
 
 @router.patch("/external-companies/{obj_id}", response_model=None)
 def update_external_company(obj_id: int, payload: ExternalCompanyUpdate,
-                            db: Session = Depends(get_db)):
+                            _admin=Depends(require_admin), db: Session = Depends(get_db)):
     obj = get_or_404(db, ExternalCompany, obj_id)
     data = payload.model_dump(exclude_unset=True)
     closing_changed = "closing_date" in data
@@ -387,7 +390,7 @@ def update_external_company(obj_id: int, payload: ExternalCompanyUpdate,
 
 @router.delete("/external-companies/{obj_id}")
 def delete_external_company(obj_id: int, db: Session = Depends(get_db),
-                            _user=Depends(get_current_user)):
+                            _admin=Depends(require_admin)):
     obj = get_or_404(db, ExternalCompany, obj_id)
     _external_company_ref(db, obj)
     db.delete(obj)
