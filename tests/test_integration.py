@@ -214,7 +214,7 @@ def main():
     c, pn, _ = req("POST", "/positions", {
         "position_name": f"集成测试岗{suffix}", "company_id": 1, "level": "B7a",
         "scope": "global", "position_type": "Employee",
-        "work_location": "比利时布鲁塞尔",
+        "work_location": "比利时布鲁塞尔", "opening_date": "2026-01-01",
     }, token=admin, expect=201)
     v0 = pn["version"]
     c409, _b, _h = req("PATCH", f"/positions/{pn['id']}",

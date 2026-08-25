@@ -198,6 +198,11 @@ def import_csv(db, rows, *, strict_legal: bool = True):
 
         opening = parse_date(raw.get("职位开启日"))
         closing = parse_date(raw.get("职位关闭日"))
+        if opening is None:
+            # #97 口径 C：开启日必填——F6.2 在岗判定与幂等键均以其为依据，缺失行不导入
+            report["errors"].append(
+                f"{label}: 职位开启日缺失或不可识别（{raw.get('职位开启日')}），该行不导入")
+            continue
         status = PositionStatus.CLOSED if closing else PositionStatus.OPEN
 
         legal = None

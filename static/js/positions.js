@@ -159,6 +159,7 @@ const Positions = {
     this.bindScopeToggle(modal, 'pc');
     modal.querySelector('#pc-save').onclick = async () => {
       if (!val('#pc-posname')) { toast('请填写职位'); return; }
+      if (!val('#pc-opening')) { toast('请填写开启日（必填，作为在岗判定与幂等键依据）'); return; }
       const dottedIds = [...modal.querySelector('#pc-dotted').selectedOptions].map((o) => +o.value);
       const dottedLabels = val('#pc-dotted-labels').split('\n').map(s => s.trim()).filter(s => s);
       const body = {
