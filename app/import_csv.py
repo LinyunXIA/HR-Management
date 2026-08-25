@@ -135,11 +135,16 @@ def import_csv(db, rows, *, strict_legal: bool = True):
     # ---- 幂等键索引：(职位名, 公司名, 国家或地区, 开启日) → 岗位 ----
     all_pns = db.query(PositionNumber).all()
     existing_by_key: dict[tuple, PositionNumber] = {}
+    db_dup_keys: set[tuple] = set()   # #98：库内同幂等键多编制（迭代导入须报错由用户区分）
+    db_dup_counts: dict[tuple, int] = {}
     db_refs_by_name: dict[str, list] = {}  # 职位名 → [岗位]（文件外引用兜底）
     for pn in all_pns:
         pos_name = pn.position.name if pn.position else ""
         comp_name = pn.company.name if pn.company else ""
         key4 = (pos_name, comp_name, scope_raw_value(pn), opening_key(pn.opening_date))
+        if key4 in existing_by_key:
+            db_dup_keys.add(key4)
+            db_dup_counts[key4] = db_dup_counts.get(key4, 1) + 1
         existing_by_key[key4] = pn
         db_refs_by_name.setdefault(pos_name, []).append(pn)
 
@@ -295,6 +300,13 @@ def import_csv(db, rows, *, strict_legal: bool = True):
                 continue
             matched_via = "id"
         else:
+            # #98：库内同幂等键命中多编制 → 无法唯一识别，报错该行不导入（PRD F4：由用户区分）
+            if key in db_dup_keys:
+                report["errors"].append(
+                    f"{label}: 库内存在 {db_dup_counts[key]} 个同幂等键岗位"
+                    f"（职位+公司+国家或地区+开启日），无法唯一识别，该行不导入——"
+                    f"请先在系统内处理重复编制")
+                continue
             pn = existing_by_key.get(key)
             matched_via = "key" if pn is not None else None
 
