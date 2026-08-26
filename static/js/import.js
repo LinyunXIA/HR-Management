@@ -1,20 +1,26 @@
 /* 数据导入页 */
 const Import = {
+  isAdmin() {
+    return !!(window.Auth && Auth.user && Auth.user.role === 'admin');
+  },
+
   render() {
     const el = document.getElementById('tab-import');
     el.innerHTML = `
       <div class="panel">
         <div class="toolbar"><b>导入 Position.csv</b><span class="hint">17 列（编号列由系统分配 P/PA）· 幂等键=职位+公司+国家+开启日 · 带「岗位ID」列按 ID 认老</span></div>
         <div style="padding:20px">
+          ${this.isAdmin() ? `
           <div class="import-drop" id="imp-drop">
             <div style="font-size:18px;margin-bottom:8px">📄 点击选择或拖入 Position.csv</div>
             <div class="hint">也可在命令行：<code>python -m scripts.import_csv data/Position.csv</code></div>
             <input type="file" id="imp-file" accept=".csv" style="display:none">
-          </div>
+          </div>` : '<div class="hint">导入仅限 admin（#120）；如需导入请联系管理员或在命令行执行。</div>'}
           <div id="imp-result"></div>
         </div>
       </div>`;
     const drop = el.querySelector('#imp-drop');
+    if (!drop) return;  // issue #162：hr 只读视图
     const input = el.querySelector('#imp-file');
     drop.onclick = () => input.click();
     input.onchange = () => this.upload(input.files[0]);
@@ -40,8 +46,8 @@ const Import = {
           <div class="report-card"><div class="n">${data.total}</div><div class="t">共解析</div></div>
           <div class="report-card"><div class="n" style="color:#2e9e5b">${data.imported}</div><div class="t">新增</div></div>
           <div class="report-card"><div class="n" style="color:#2f6fed">${data.updated}</div><div class="t">更新</div></div>
-          <div class="report-card"><div class="n" style="color:${data.errors.length ? '#d64545' : '#2e9e5b'}">${data.errors.length}</div><div class="t">错误</div></div>
-          <div class="report-card"><div class="n" style="color:${data.warnings.length ? '#d98a1f' : '#2e9e5b'}">${data.warnings.length}</div><div class="t">警告</div></div>
+          <div class="report-card"><div class="n" style="color:${(data.errors || []).length ? '#d64545' : '#2e9e5b'}">${(data.errors || []).length}</div><div class="t">错误</div></div>
+          <div class="report-card"><div class="n" style="color:${(data.warnings || []).length ? '#d98a1f' : '#2e9e5b'}">${(data.warnings || []).length}</div><div class="t">警告</div></div>
         </div>
         ${(data.updated_by_id || data.updated_by_key) ? `
         <div class="hint" style="margin-top:8px">迭代识别：${data.updated_by_id} 行按「岗位ID」认老 · ${data.updated_by_key} 行按幂等键认老（编号/事件/员工关联保留不变）</div>` : ''}
@@ -53,9 +59,9 @@ const Import = {
             <tr><td>${esc(a.label || '—')}</td><td><span class="num">${esc(a.number)}</span></td><td>${ACTION_LABEL[a.action] || esc(a.action || '—')}</td></tr>`).join('')}
           </tbody>
         </table>` : ''}
-        ${/* issue #150：errors 与 warnings 分区展示（此前合并混排丢失分区） */''}
-        ${data.errors.length ? `<div class="section-title" style="color:var(--danger)">❌ 错误（该行未导入）</div><pre class="error-list">${data.errors.map((i) => '✕ ' + esc(i)).join('\n')}</pre>` : ''}
-        ${data.warnings.length ? `<div class="section-title" style="color:#d98a1f">⚠️ 警告</div><pre class="error-list">${data.warnings.map((i) => '⚠ ' + esc(i)).join('\n')}</pre>` : ''}
+        ${/* issue #150：errors 与 warnings 分区展示；issue #162：恢复空数组防御 */''}
+        ${(data.errors || []).length ? `<div class="section-title" style="color:var(--danger)">❌ 错误（该行未导入）</div><pre class="error-list">${data.errors.map((i) => '✕ ' + esc(i)).join('\n')}</pre>` : ''}
+        ${(data.warnings || []).length ? `<div class="section-title" style="color:#d98a1f">⚠️ 警告</div><pre class="error-list">${data.warnings.map((i) => '⚠ ' + esc(i)).join('\n')}</pre>` : ''}
         ${data.imported + data.updated ? '<div style="margin-top:14px"><button class="btn primary" id="imp-refresh">刷新数据并查看</button></div>' : ''}`;
       const btn = resBox.querySelector('#imp-refresh');
       if (btn) btn.onclick = () => { App.loadDicts().then(() => { App.show('positions'); }); };

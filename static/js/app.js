@@ -40,6 +40,10 @@ const App = {
   },
 
   init() {
+    // issue #162：幂等守卫——登录成功会再次调用 init()，此前 nav/hashchange
+    // 监听器随登录次数叠加（一次点击触发 k 次 render）
+    if (this._initialized) return;
+    this._initialized = true;
     document.querySelectorAll('nav button').forEach((btn) => {
       btn.addEventListener('click', () => this.show(btn.dataset.tab));
     });

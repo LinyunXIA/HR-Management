@@ -71,7 +71,8 @@ def main():
     req("GET", "/admin/users", expect=401, token="")
     # 建 hr 账号
     import random
-    suffix = random.randint(1000, 9999)
+    # issue #164：碰撞域 1000~9999 在百余轮回归后撞唯一约束假红概率过半 → 扩至六位数
+    suffix = random.randint(100000, 999999)
     hr_name = f"hr_be_{suffix}"
     req("POST", "/admin/users", {"username": hr_name, "password": "hr123456", "role": "hr"},
         token=admin, expect=201)
@@ -282,6 +283,8 @@ def main():
     th1.start(); th2.start(); th1.join(); th2.join()
     wins = sum(1 for c in results if c == 200)
     check(wins == 1, f"同一目标岗仅一次认领成功（结果={results}）")
+    # issue #164：钉死结果码组合——胜者 200 + 败者状态守卫 400，防 [200,500] 等异常形态蒙混
+    check(sorted(results) == [200, 400], f"并发认领结果码组合稳定为 [200,400]（results={results}）")
     # issue #151：原「无一人双岗」断言由单条员工记录构造（恒真）→ 改为
     # 岗位 incumbent 与员工实际挂岗双向核验，真正锁定占用唯一性
     _, race_pn_after = req("GET", f"/positions/{race_pn['id']}")
@@ -359,6 +362,8 @@ def main():
     # hr（仅可管 A 公司）经岗位接口读 B 公司 Filled 岗位 → actual_* 置 null、姓名保留（#131）
     _, pos_b_view = req("GET", f"/positions/{tgt_pn2['id']}", token=hr)
     check(bool(pos_b_view.get("incumbent_name")), "hr 跨司可见在职员工姓名（只读例外保留）")
+    check(isinstance(pos_b_view.get("version"), int),
+          "hr 跨司视图含乐观锁 version（#155 回归：hide 分支不得吞掉 version/timestamps）")
     check(pos_b_view.get("actual_salary_before_tax") is None
           and pos_b_view.get("actual_labor_cost") is None,
           "hr 经岗位接口不可见他司实际成本六栏（#131 serialize_position 脱敏贯通）")
@@ -439,6 +444,57 @@ def main():
                    {"tax_zone_id": zone["id"], "item_name": "坏科目", "item_kind": "percent"},
                    token=admin)
     check(code == 422, f"item_kind 非法值被 schema Literal 422 拦截（#145，{code}）")
+
+    section("审计回归：#141 无条件重算覆写 / manual 显式清空 / 同岗 promote / #156 唯一索引探针")
+    # comp_a 已绑定布鲁塞尔城市级税区（13.07%+8.86%）→ 引擎期望强制扣税=薪资×21.93%
+    auto_pn = mk_pos(f"审计自动岗{suffix}", comp_a["id"])
+    code, ap = req("PATCH", f"/positions/{auto_pn['id']}",
+                   {"version": auto_pn["version"], "cost_mode": "auto",
+                    "salary_before_tax": 100000, "mandatory_tax": 99999}, token=admin)
+    check(code == 200 and abs((ap.get("mandatory_tax") or 0) - 21930.0) < 1,
+          f"manual→auto 翻转：垃圾手填值被引擎结果覆写（mandatory_tax={ap.get('mandatory_tax')}，#158）")
+    code, ap2 = req("PATCH", f"/positions/{auto_pn['id']}",
+                    {"version": ap["version"], "salary_before_tax": 200000}, token=admin)
+    check(code == 200 and abs((ap2.get("mandatory_tax") or 0) - 43860.0) < 1,
+          f"already-auto 仅改薪资 → 派生栏立即按新引擎覆写（#158 无条件不变式，{ap2.get('mandatory_tax')}）")
+    code, mp = req("PATCH", f"/positions/{auto_pn['id']}",
+                   {"version": ap2["version"], "cost_mode": "manual",
+                    "salary_before_tax": 50000, "labor_cost": None,
+                    "fixed_bonus": None, "floating_bonus": None}, token=admin)
+    check(code == 200 and mp.get("salary_before_tax") == 50000 and mp.get("labor_cost") is None,
+          "manual 模式显式 null 清空成本字段（#158/M2 统一 model_fields_set 口径）")
+
+    # promote 到当前岗 → 400（#161 检查上移后文案可达）
+    code, _b = req("POST", f"/employees/{emp['id']}/promote",
+                   {"to_position_id": emp_final["position_number_id"], "timing": "immediate"}, token=admin)
+    check(code == 400, f"promote 目标=当前岗被 400（#161，{code}）")
+
+    # ---- #156 部分唯一索引直插探针（仅对 test 库执行，绝不触碰 dev/prod）----
+    import os as _os
+    import sqlite3 as _sq
+    _, health = req("GET", "/health")
+    db_path = "data/hr_db_test.db"
+    if health.get("env") == "test" and _os.path.exists(db_path):
+        conn = _sq.connect(db_path)
+        try:
+            bid = conn.execute("SELECT id FROM countries WHERE name='比利时'").fetchone()[0]
+            conn.execute("DELETE FROM tax_zones WHERE level='country' AND country_id=?", (bid,))
+            conn.commit()
+            conn.execute("INSERT INTO tax_zones (level, country_id, city, sort_order) VALUES ('country', ?, NULL, 999)", (bid,))
+            try:
+                conn.execute("INSERT INTO tax_zones (level, country_id, city, sort_order) VALUES ('country', ?, NULL, 998)", (bid,))
+                conn.commit()
+                check(False, "#156 探针失败：同国第二条国家级税区直插成功——唯一索引未生效！")
+            except _sq.IntegrityError:
+                conn.rollback()
+                check(True, "#156 直插探针：同国第二条国家级税区被部分唯一索引拦截")
+            finally:
+                conn.execute("DELETE FROM tax_zones WHERE level='country' AND country_id=?", (bid,))
+                conn.commit()
+        finally:
+            conn.close()
+    else:
+        check(health.get("env") == "prod", f"#156 直插探针跳过（env={health.get('env')}，非 test 库不直写）")
 
     # ---------- 收尾输出 ----------
     print(f"\n════════ 结果: {PASS} 通过 / {FAIL} 失败 ════════")

@@ -136,15 +136,16 @@ const Positions = {
   },
 
   bindCostMode(modal, prefix) {
-    const sync = () => {
+    const sync = (initial = false) => {
       const isAuto = modal.querySelector(`input[name="${prefix}-costmode"]:checked`).value === 'auto';
       ['mandatory_tax', 'mandatory_fixed_fee', 'labor_cost'].forEach((f) => {
         const el = modal.querySelector(`#${prefix}-${f}`);
         if (!el) return;
         const wasDisabled = el.disabled;
         el.disabled = isAuto;
-        // issue #150：切到 auto 时清空派生三栏显示值，防「手填残留值随 auto 模式提交」
-        if (isAuto && !wasDisabled) el.value = '';
+        // issue #162：仅用户主动切到 auto 时清空派生三栏显示值；弹窗初始 sync
+        // 不清——否则打开 auto 岗位编辑弹窗即看到空盒子（引擎值被误读为从未算过）
+        if (isAuto && !wasDisabled && !initial) el.value = '';
       });
       const btn = modal.querySelector(`#${prefix}-calccost`);
       if (btn && btn.dataset.ready === '1') btn.style.display = isAuto ? '' : 'none';
@@ -152,13 +153,13 @@ const Positions = {
       if (hint) {
         hint.textContent = isAuto
           ? (btn && btn.dataset.ready === '1'
-            ? '自动模式：填税前与奖金两栏后点「重算」（按隶属公司绑定税区计算）；未绑税区提示「未配置」。'
+            ? '自动模式：填税前与奖金两栏后点「重算」（按隶属公司绑定税区计算）；保存时服务端按引擎覆写派生三栏。未绑税区提示「未配置」。'
             : '自动模式：创建后可在「编辑」中按公司税区一键重算。')
           : '手动模式：六栏均可手工填写。';
       }
     };
-    modal.querySelectorAll(`input[name="${prefix}-costmode"]`).forEach((r) => r.onchange = sync);
-    sync();
+    modal.querySelectorAll(`input[name="${prefix}-costmode"]`).forEach((r) => r.onchange = () => sync(false));
+    sync(true);
   },
 
   collectCost(modal, prefix) {
@@ -375,7 +376,7 @@ const Positions = {
           <div class="field" id="pe-country-wrap" style="display:${p.scope === 'country' ? '' : 'none'}"><label>国家/地区</label>
             <select id="pe-country">${App.countries.map((c) => `<option value="${c.id}" ${c.id === p.country_id ? 'selected' : ''}>${esc(c.name)} (${esc(c.code)})</option>`).join('')}</select>
           </div>
-          <div class="field"><label>开启日</label><input type="date" id="pe-opening" value="${fmtDate(p.opening_date)}"></div>
+          <div class="field"><label>开启日 *</label><input type="date" id="pe-opening" value="${fmtDate(p.opening_date)}"></div>
           <div class="field"><label>关闭日</label><input type="date" id="pe-closing" value="${fmtDate(p.closing_date)}"></div>
           <div class="field"><label>工作地点</label>
             <select id="pe-wloc"><option value="">—</option>${App.workLocations.map((w) => `<option value="${esc(w.name)}" ${w.name === p.work_location ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>
@@ -411,6 +412,7 @@ const Positions = {
     if (modal.querySelector('input[name="pe-costmode"]:checked').value === 'auto') recalcBtn.style.display = '';
     recalcBtn.onclick = () => this.recalcCost(modal, p.id, 'pe');
     modal.querySelector('#pe-save').onclick = async () => {
+      if (!val('#pe-opening')) { toast('请填写开启日（必填，作为在岗判定与幂等键依据）'); return; }
       const dottedIds = [...modal.querySelector('#pe-dotted').selectedOptions].map((o) => +o.value);
       const dottedLabels = val('#pe-dotted-labels').split('\n').map(s => s.trim()).filter(s => s);
       const body = {

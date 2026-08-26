@@ -25,6 +25,7 @@ from app.models import (
     PositionType,
     ScopeDef,
     TaxZone,
+    Transfer,
     User,
     UserCompany,
     WorkLocation,
@@ -330,6 +331,11 @@ def delete_company(company_id: int, db: Session = Depends(get_db),
     n_emp = db.query(Employee).filter(Employee.target_company_id == company_id).count()
     if n_emp:
         raise HTTPException(400, f"公司「{company.name}」是 {n_emp} 名「转调中」员工的目标公司，禁止删除")
+    # issue #159：transfer 行的 target_company_id 在认领/退回后永久保留，
+    # RESTRICT 外键下不拦截会 IntegrityError 500
+    n_tr = db.query(Transfer).filter(Transfer.target_company_id == company_id).count()
+    if n_tr:
+        raise HTTPException(400, f"公司「{company.name}」被 {n_tr} 条转调/升职记录（transfers）引用，禁止删除")
     n_uc = db.query(UserCompany).filter(UserCompany.company_id == company_id).count()
     if n_uc:
         raise HTTPException(400, f"公司「{company.name}」绑定了 {n_uc} 个 HR 账号的可管实体，请先在用户管理中解除")

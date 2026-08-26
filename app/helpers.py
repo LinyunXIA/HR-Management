@@ -317,6 +317,14 @@ def serialize_position(db: Session, pn: PositionNumber, hide_incumbent_costs: bo
         "incumbent_id": incumbent.id if incumbent else None,
         "incumbent_name": incumbent.name if incumbent else None,
     }
+    # 乐观锁版本与时间戳与在职员工无关，先于脱敏分支注入——
+    # issue #155：此前位于 hide 早退之后，hr 跨司视图缺 version，
+    # 前端 PATCH 提交 undefined → 422（跨司岗位在 UI 上不可编辑）
+    data.update({
+        "version": pn.version,
+        "created_at": pn.created_at,
+        "updated_at": pn.updated_at,
+    })
     # ---- 实际成本层（v2.3 双口径：Filled 对照、跟人走；空岗为 None；v2.6 六栏）----
     # issue #131：hide_incumbent_costs=True 时七字段置 null（跨司脱敏贯通到岗位接口）
     if hide_incumbent_costs:
@@ -333,11 +341,6 @@ def serialize_position(db: Session, pn: PositionNumber, hide_incumbent_costs: bo
         "actual_fixed_bonus": (float(incumbent.actual_fixed_bonus) if incumbent and incumbent.actual_fixed_bonus is not None else None),
         "actual_floating_bonus": (float(incumbent.actual_floating_bonus) if incumbent and incumbent.actual_floating_bonus is not None else None),
         "actual_labor_cost": (float(incumbent.actual_labor_cost) if incumbent and incumbent.actual_labor_cost is not None else None),
-    })
-    data.update({
-        "version": pn.version,
-        "created_at": pn.created_at,
-        "updated_at": pn.updated_at,
     })
     return data
 

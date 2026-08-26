@@ -130,15 +130,25 @@ def main():
         db.flush()
 
         # 3) 隶属公司 / 外部合作公司（v2.6 源库附带迁移公司绑税区）
-        company_cols = ("SELECT name, is_active, opening_date, closing_date"
-                        + (", tax_zone_id" if src_has_v26 else "")
-                        + " FROM companies ORDER BY id")
+        # issue #163：tax_zone_id 不按源库原始 id 直拷——先记录 (公司名, 源税区属性)，
+        # 第 4 步目标税区就位后按（level, 国家名, city）解析目标 zone id 回填，
+        # 避免空库外键违例 / id 漂移静默绑错
+        company_cols = ("SELECT c.name, c.is_active, c.opening_date, c.closing_date"
+                        + ", tz.id AS src_tz_id, tz.level AS tz_level, cz.name AS tz_country, tz.city AS tz_city"
+                        if src_has_v26 else
+                        "SELECT c.name, c.is_active, c.opening_date, c.closing_date"
+                        + " FROM companies c"
+                        + (" LEFT JOIN tax_zones tz ON tz.id = c.tax_zone_id"
+                           " LEFT JOIN countries cz ON cz.id = tz.country_id" if src_has_v26 else "")
+                        + " ORDER BY c.id")
+        pending_tz: list[dict] = []
         for r in fetch(company_cols):
             values = {"is_active": r["is_active"], "opening_date": r["opening_date"],
                       "closing_date": r["closing_date"]}
-            if src_has_v26:
-                values["tax_zone_id"] = r.get("tax_zone_id")
-            upsert(M.Company, {"name": r["name"]}, values)
+            row = upsert(M.Company, {"name": r["name"]}, values)
+            if src_has_v26 and r.get("src_tz_id"):
+                pending_tz.append({"company": row, "level": r["tz_level"],
+                                   "country_name": r["tz_country"], "city": r["tz_city"]})
         for r in fetch("SELECT name, remark, is_active, opening_date, closing_date "
                        "FROM external_companies ORDER BY id"):
             upsert(M.ExternalCompany, {"name": r["name"]},
@@ -188,6 +198,20 @@ def main():
                 values["fixed_amount"] = r.get("fixed_amount")
             upsert(M.EmploymentTaxItem, {"tax_zone_id": tz.id, "item_name": r["item_name"]},
                    values)
+
+        # 4b) 公司绑税区回填（issue #163）：目标税区已就位，按（level, 国家名, city）
+        # 解析目标 zone id 后回填——不再按源库原始 id 直拷
+        if src_has_v26:
+            for p_ in pending_tz:
+                tz = tax_zone_lookup(p_["level"], p_["country_name"], p_["city"])
+                if tz is None:
+                    print(f"[warn] 公司 {p_['company'].name!r} 的源税区未迁移成功"
+                          f"（{p_['level']}/{p_['country_name']}/{p_['city']}），tax_zone_id 留空",
+                          file=sys.stderr)
+                    continue
+                p_["company"].tax_zone_id = tz.id
+                bump("companies", updated=1)
+            db.flush()
 
         # 5) 股权结构（三来源互斥；内部/外部公司按名解析，目标缺公司则跳过告警）
         for r in fetch(

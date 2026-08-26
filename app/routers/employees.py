@@ -245,9 +245,10 @@ def employee_cost_calculation(eid: int,
         raise HTTPException(400, "员工未挂岗，无法按公司税区计算实际成本（外包虚拟建档请先挂编 External Employee 岗位）")
     # 行级隔离（issue #132，#121 脱敏第二旁路封堵）：实际成本按实体隔离——
     # hr 仅可测算其可管实体员工；无实体归属（虚拟建档/已解绑）仅 admin
-    emp_company = pn.company_id
-    if get_operable_company_ids(db, _user) != ALL_COMPANIES:
-        if emp_company is None or emp_company not in get_operable_company_ids(db, _user):
+    allowed = get_operable_company_ids(db, _user)  # issue #161：单次提取复用
+    if allowed != ALL_COMPANIES:
+        emp_company = pn.company_id
+        if emp_company is None or emp_company not in allowed:
             raise HTTPException(403, "无权查看该员工的实际成本（未分配其所属法人实体）")
     zone = pn.company.tax_zone if pn.company else None
     salary = salary_before_tax if salary_before_tax is not None else emp.actual_salary_before_tax
@@ -299,31 +300,38 @@ def update_employee(eid: int, payload: EmployeeUpdate,
                   "actual_fixed_bonus", "actual_floating_bonus", "actual_labor_cost"):
         if field in payload.model_fields_set:
             setattr(emp, field, getattr(payload, field))
-    # 成本模式互斥服务端兜底（issue #141，PRD F1.6）：最终模式为 AUTO 时派生三栏
-    # 须与引擎计算一致（重算保存路径原样通过、手填残留清空），与岗位侧同构
-    if emp.actual_cost_mode == CostMode.AUTO and cur_pn is not None:
-        from app.helpers import calc_cost_by_zone
-        three = ("actual_mandatory_tax", "actual_mandatory_fixed_fee", "actual_labor_cost")
-        zone = cur_pn.company.tax_zone if cur_pn.company else None
-        if emp.actual_salary_before_tax is None:
-            expected = {k: None for k in three}
-        else:
-            r = calc_cost_by_zone(db, zone, emp.actual_salary_before_tax,
-                                  fixed_bonus=emp.actual_fixed_bonus or 0,
-                                  floating_bonus=emp.actual_floating_bonus or 0)
-            expected = ({k: None for k in three} if not r.get("configured")
-                        else {"actual_mandatory_tax": r["mandatory_tax"],
-                              "actual_mandatory_fixed_fee": r["mandatory_fixed_fee"],
-                              "actual_labor_cost": r["labor_cost"]})
+    # 成本模式互斥服务端兜底（issue #141/#158 无条件重算覆写，与岗位侧同构）：
+    # 最终模式为 auto 且（任一实际成本输入被触及 或 manual→auto 翻转）→ 派生三栏
+    # 按员工所挂岗位公司绑定税区引擎**全量重算覆写**；虚拟建档（cur_pn=None）不豁免
+    # ——zone=None → 三栏置 None（第三轮复审 M3：原实现整段短路留下 auto+手填缝隙）
+    if emp.actual_cost_mode == CostMode.AUTO:
+        actual_inputs_touched = any(
+            f in payload.model_fields_set
+            for f in ("actual_salary_before_tax", "actual_mandatory_tax",
+                      "actual_mandatory_fixed_fee", "actual_fixed_bonus",
+                      "actual_floating_bonus", "actual_labor_cost"))
         flipped = old_actual_mode != CostMode.AUTO
-        for f in three:
-            touched = f in payload.model_fields_set
-            if not (touched or flipped):
-                continue
-            eff = getattr(emp, f)
-            exp = expected[f]
-            setattr(emp, f, (eff if (eff is not None and exp is not None
-                                     and abs(float(eff) - float(exp)) <= 0.05) else None))
+        if actual_inputs_touched or flipped:
+            from app.helpers import calc_cost_by_zone
+            zone = cur_pn.company.tax_zone if (cur_pn is not None and cur_pn.company) else None
+            if emp.actual_salary_before_tax is None:
+                derived = {"actual_mandatory_tax": None,
+                           "actual_mandatory_fixed_fee": None,
+                           "actual_labor_cost": None}
+            else:
+                r = calc_cost_by_zone(db, zone, emp.actual_salary_before_tax,
+                                      fixed_bonus=emp.actual_fixed_bonus or 0,
+                                      floating_bonus=emp.actual_floating_bonus or 0)
+                if r.get("configured"):
+                    derived = {"actual_mandatory_tax": r["mandatory_tax"],
+                               "actual_mandatory_fixed_fee": r["mandatory_fixed_fee"],
+                               "actual_labor_cost": r["labor_cost"]}
+                else:
+                    derived = {"actual_mandatory_tax": None,
+                               "actual_mandatory_fixed_fee": None,
+                               "actual_labor_cost": None}
+            for k, v in derived.items():
+                setattr(emp, k, v)
     # 转调目标公司（v2.3）：仅可经 /transfers/initiate|claim 流转（#119-1 旁路封堵）——
     # 直改会造成「挂目标公司但非转调中」的无 Transfer 记录不一致态
     if "target_company_id" in payload.model_fields_set and payload.target_company_id != emp.target_company_id:
@@ -397,6 +405,10 @@ def promote_employee(eid: int, payload: PromoteRequest,
     )
     if not new_pn:
         raise HTTPException(404, "目标岗位不存在")
+    # issue #161：same-position 检查上移到占用检查之前——此前被「已被其他员工
+    # 占用」先命中（员工本人占用），显式检查成死代码且文案误导
+    if old_pn.id == new_pn.id:
+        raise HTTPException(400, "升职目标岗位与当前岗位相同，无意义操作")
     # 行级隔离补口（issue #147）：升职会写入目标岗位公司的 status/prev_*，
     # 目标公司须在操作者可管实体集内（与 claim 目标侧校验同口径）
     assert_can_write_company(db, user, new_pn.company_id, label="目标岗位所属公司")
@@ -412,8 +424,6 @@ def promote_employee(eid: int, payload: PromoteRequest,
     _assert_type_match(new_pn, emp.employee_type)
 
     timing_cn = "月末升职" if payload.timing == "month_end" else "即时升职"
-    if old_pn.id == new_pn.id:
-        raise HTTPException(400, "升职目标岗位与当前岗位相同，无意义操作")
     if old_pn.status == PositionStatus.FILLED:
         lifecycle.transition(db, old_pn, PositionStatus.VACANT,
                              note=f"员工 {emp.name} {timing_cn}移出（如需关闭编制请手动 Closed）",

@@ -128,16 +128,18 @@ class Company(Base):               # 隶属公司（v2.4：开业/关闭日期 +
     id, name(unique), is_active
     opening_date, closing_date     # Date 可空（v2.4）；closing_date 有值 ⇔ 关闭，与 is_active 联动
                                    # （填关闭日自动置停用、清空恢复启用；年份精度按 YYYY-01-01 存）
+    tax_zone_id FK tax_zones nullable, index   # v2.6 R1：公司绑税区一对一，全部成本场景的成本键
 
 class ExternalCompany(Base):       # v2.4：外部合作公司（独立主数据，不在系统内设岗）
     __tablename__ = 'external_companies'
     id, name(unique), remark, is_active
+    opening_date, closing_date     # v2.4.1：启停由关闭日期管理（弃用启用开关），与 is_active 联动
     # 仅作股权等关系引用；不出现在岗位「隶属公司」下拉
 
 class CompanyShareholder(Base):    # v2.4：股权结构子表（0..N 股东，三来源互斥）
     __tablename__ = 'company_shareholders'
     id, company_id FK companies            # 被持股方
-    internal_company_id FK companies ∅     ┐ 三选一（CHECK num_nonnulls(...)=1）
+    internal_company_id FK companies ∅     ┐ 三选一（可移植布尔求和 CHECK，见 §4.2）
     external_company_id FK external_companies ∅  │ 内部公司 / 外部合作公司 / 自然人
     person_name String(255) ∅              ┘
     ownership_pct Numeric(5,2) nullable    # 持股比例 %，可选；合计≠100% 前端软告警
@@ -173,12 +175,18 @@ class PositionType(Base):          # 职位类型（PRD §3.7 三类）
 
 class TaxZone(Base):               # 税区挂载点配置（v2.3，F1.6）
     __tablename__ = 'tax_zones'
-    id, level Enum(country|city), country_id FK, city String nullable, sort_order
-    # 城市级分拆后无国家兜底；未配置税率的地区成本无法自动计算
+    id, level Enum(country|city), country_id FK, city String nullable, sort_order, created_at
+    # 约束（#145/#156）：Unique(level,country_id,city) 对 NULL city 失效 →
+    # 国家级唯一性由部分唯一索引硬兜底：
+    #   ux_tax_zones_country_level UNIQUE(country_id) WHERE level='country'（unique=True 必不可省）
+    # 应用层「同国禁两级并存」（国家级与城市级互斥，无兜底）
+    # 城市级分拆后未配置税率的地区成本无法自动计算
 
-class EmploymentTaxItem(Base):     # 员工用工税额（v2.3：按税区）
+class EmploymentTaxItem(Base):     # 员工用工税额（v2.3：按税区；v2.6 两类科目）
     __tablename__ = 'employment_tax_items'
-    id, tax_zone_id FK, item_name(科目), tax_rate Numeric(税率%), is_active
+    id, tax_zone_id FK(index), country_id FK(旧口径兼容), item_name(科目)
+    item_kind String('rate'|'fixed') default 'rate'   # rate=税率%（计提基数=税前）/ fixed=定额金额
+    tax_rate Numeric(税率%), fixed_amount Numeric(定额，fixed 类必填), is_active
 
 # ---- 业务表 ----
 class Position(Base):              # 职位（职能，不含工作范围）
@@ -225,6 +233,13 @@ class PositionEvent(Base):         # 生命周期事件（时间线）
     id, position_number_id FK, employee_id FK nullable
     from_status nullable, to_status, changed_at datetime, note nullable
 
+class Transfer(Base):              # 转调交接记录（v2.3 F1.5b；升职 kind=promotion #113）
+    __tablename__ = 'transfers'
+    id, employee_id FK CASCADE, from_position_id/to_position_id FK SET NULL nullable
+    target_company_id FK companies NOT NULL（默认 RESTRICT，#146 去除 SET NULL 矛盾）
+    status initiated|claimed|rejected, kind transfer|promotion, timing immediate|month_end
+    initiated_by, claimed_by（认领/**退回**操作人）, note, created_at, claimed_at
+
 class Employee(Base):              # 人员档案
     __tablename__ = 'employees'
     id, employee_no unique, name, gender
@@ -264,7 +279,7 @@ class Employee(Base):              # 人员档案
 - **乐观锁**：`position_numbers.version`、`employees.version`（`PATCH` 携带 `version`，`app/helpers.py:assert_version`）。
 - **挂编联动**：员工 `employee_type` 必须匹配所挂岗位的 `position_type`（Consultant→正式 / External Employee→外包 / Employee→正式·实习·劳务），应用层校验 + 数据层约束兜底（防四不像）。**#50 落地（v2.5 SQLite 语法）：`trg_employees_attach_type_insert/update` 触发器（BEFORE INSERT / BEFORE UPDATE OF employee_type, position_number_id ON employees，`RAISE(ABORT)`）为 DB 层硬兜底，绕过 API 直写库同样拦截；claim/promote/transfer 路径补应用层校验返回 400。**
 - **股权三来源互斥 CHECK（v2.5 可移植化）**：`((internal_company_id IS NOT NULL) + (external_company_id IS NOT NULL) + (person_name IS NOT NULL)) = 1`（原 PG 专属 `num_nonnulls()` 已替换）。
-- 索引：`position_numbers(status)`、`position_numbers(solid_line_manager_id)`、`position_events(position_number_id, changed_at)`、`employees(position_number_id)`、`employment_tax_items(tax_zone_id)`。
+- 索引：`position_numbers(status)`、`position_numbers(solid_line_manager_id)`、`position_events(position_number_id, changed_at)`、`employees(position_number_id)`（unique 隐式索引）、`employment_tax_items(tax_zone_id)`、`companies(tax_zone_id)`、**部分唯一索引 `ux_tax_zones_country_level ON tax_zones(country_id) WHERE level='country'`（#145/#156，models `unique=True` + main.py DROP 后 UNIQUE 重建双保险）**。
 
 ### 4.3 三环境 DB 隔离（`app/db.py:1`，PRD §7D，v2.5 SQLite 三文件）
 
@@ -356,7 +371,7 @@ REST 规范：名词复数资源、HTTP 方法映射 CRUD（GET 查 / POST 建 /
 | POST | /employees | 创建（201，必须挂岗 → 岗位自动 Filled） |
 | GET | /employees/{id} | 详情（含岗位、直线/虚线经理解析 + `version`） |
 | PATCH | /employees/{id} | 部分更新；`employment_status=离职` 触发解绑→岗位 Vacant；**需 `version` 乐观锁 409** |
-| POST | /transfers | 调岗（201，旧岗→Vacant，新岗→Filled） |
+| POST | /transfers | 调岗（201，旧岗→Vacant，新岗→Filled）；**首次挂编**：外包虚拟建档员工可经此挂编到首个岗位（目标岗限 Open/Vacant/Offered，#140）；任何成功调岗写 kind=transfer 留痕；目标岗公司写权限按可管实体校验（#147） |
 | GET | /transfers?employeeId= | 调岗记录列表（可按员工过滤） |
 | POST | /transfers/initiate | 转调发起（v2.3）：原 HR 把人转到目标公司 B（人仍挂原岗、原岗锁定，标「转调中」+ target_company_id=B）不释放；**此后仅 `B` 的 HR 可见/可认领**（池按 target_company 过滤，其他 HR 不可见） |
 | GET | /transfers/pending | 待认领池（v2.3）：仅目标公司可管 HR 可见，按 target_company 过滤 |
