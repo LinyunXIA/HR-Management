@@ -189,15 +189,26 @@ def _ensure_indexes():
         "CREATE INDEX IF NOT EXISTS ix_position_numbers_solid_line_manager ON position_numbers (solid_line_manager_id)",
         "CREATE INDEX IF NOT EXISTS ix_position_events_pn_changed ON position_events (position_number_id, changed_at)",
         "CREATE INDEX IF NOT EXISTS ix_employment_tax_items_tax_zone_id ON employment_tax_items (tax_zone_id)",
+        # issue #145：国家级税区唯一性的 DB 硬兜底——复合 Unique(level,country_id,city)
+        # 对 NULL city 失效（SQLite 唯一索引视 NULL 互异），同国可插多条国家级税区，
+        # 动摇 v2.6 R1「公司绑税区一对一」上游字典；部分唯一索引补口。
+        # 逐条独立 try：存量库若已有脏重复数据，仅该条失败不阻断其余索引。
+        'CREATE UNIQUE INDEX IF NOT EXISTS ux_tax_zones_country_level '
+        'ON tax_zones (country_id) WHERE level = \'country\'',
     ]
-    try:
-        with engine.begin() as conn:
-            for s in stmts:
+    ok, failed = [], []
+    for s in stmts:
+        try:
+            with engine.begin() as conn:
                 conn.execute(text(s))
-        print("[migrate] 查询索引已就绪（#109：status/solid_line/events 复合/tax_zone）",
-              file=sys.stderr)
-    except Exception as e:  # noqa: BLE001
-        print(f"[migrate] indexes ensure failed: {e}", file=sys.stderr)
+            ok.append(s.split(" ON ")[0].replace("CREATE ", "").replace("INDEX IF NOT EXISTS ", ""))
+        except Exception as e:  # noqa: BLE001
+            failed.append(f"{s[:60]}... -> {e}")
+    if ok:
+        print(f"[migrate] 查询索引已就绪（#109：status/solid_line/events 复合/tax_zone；"
+              f"#145：税区国家级部分唯一索引）", file=sys.stderr)
+    for f in failed:
+        print(f"[migrate] index skipped: {f}", file=sys.stderr)
 
 
 _ensure_indexes()
@@ -259,5 +270,6 @@ def index():
     return HTMLResponse(html)
 
 
-# 托管前端静态文件
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# 托管前端静态文件（issue #149：锚定项目根——此前相对 cwd，非项目根启动 /static/* 全 404）
+app.mount("/static", StaticFiles(
+    directory=os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")), name="static")

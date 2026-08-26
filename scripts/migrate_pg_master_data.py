@@ -69,6 +69,18 @@ def main():
             cur.execute(sql)
             return [dict(r) for r in cur.fetchall()]
 
+    # issue #146 版本防呆：v2.6 新增列（companies.tax_zone_id /
+    # employment_tax_items.item_kind+fixed_amount）在 v2.5 源库不存在——
+    # 此前 SELECT 直接缺列，对 v2.6 之后的 PG 库重跑会静默丢数据
+    try:
+        fetch("SELECT tax_zone_id FROM companies LIMIT 1")
+        src_has_v26 = True
+    except Exception:
+        src_has_v26 = False
+        print("[warn] 源库为 v2.5 结构（缺 companies.tax_zone_id / "
+              "employment_tax_items.item_kind/fixed_amount）：公司绑税区与科目类别不迁移",
+              file=sys.stderr)
+
     report: dict[str, list[int]] = {}
 
     def bump(table, inserted=0, updated=0):
@@ -117,11 +129,16 @@ def main():
             upsert(M.PositionType, {"name": r["name"]}, {"sort_order": r["sort_order"] or 0})
         db.flush()
 
-        # 3) 隶属公司 / 外部合作公司
-        for r in fetch("SELECT name, is_active, opening_date, closing_date FROM companies ORDER BY id"):
-            upsert(M.Company, {"name": r["name"]},
-                   {"is_active": r["is_active"], "opening_date": r["opening_date"],
-                    "closing_date": r["closing_date"]})
+        # 3) 隶属公司 / 外部合作公司（v2.6 源库附带迁移公司绑税区）
+        company_cols = ("SELECT name, is_active, opening_date, closing_date"
+                        + (", tax_zone_id" if src_has_v26 else "")
+                        + " FROM companies ORDER BY id")
+        for r in fetch(company_cols):
+            values = {"is_active": r["is_active"], "opening_date": r["opening_date"],
+                      "closing_date": r["closing_date"]}
+            if src_has_v26:
+                values["tax_zone_id"] = r.get("tax_zone_id")
+            upsert(M.Company, {"name": r["name"]}, values)
         for r in fetch("SELECT name, remark, is_active, opening_date, closing_date "
                        "FROM external_companies ORDER BY id"):
             upsert(M.ExternalCompany, {"name": r["name"]},
@@ -153,19 +170,24 @@ def main():
                 return None
             return db.query(M.TaxZone).filter_by(level=level, country_id=c.id, city=city).first()
 
-        for r in fetch(
-            "SELECT i.item_name, i.tax_rate, i.is_active, tz.level, c.name AS country_name, tz.city "
-            "FROM employment_tax_items i "
-            "JOIN tax_zones tz ON tz.id = i.tax_zone_id "
-            "JOIN countries c ON c.id = tz.country_id ORDER BY i.id"
-        ):
+        item_cols = ("SELECT i.item_name, i.tax_rate, i.is_active, tz.level, "
+                     "c.name AS country_name, tz.city"
+                     + (", i.item_kind, i.fixed_amount" if src_has_v26 else "")
+                     + " FROM employment_tax_items i "
+                     "JOIN tax_zones tz ON tz.id = i.tax_zone_id "
+                     "JOIN countries c ON c.id = tz.country_id ORDER BY i.id")
+        for r in fetch(item_cols):
             tz = tax_zone_lookup(r["level"], r["country_name"], r["city"])
             if tz is None:
                 print(f"[warn] 跳过税额项 {r['item_name']!r}：税区未解析"
                       f"（{r['level']}/{r['country_name']}/{r['city']}）", file=sys.stderr)
                 continue
+            values = {"tax_rate": r["tax_rate"], "is_active": r["is_active"]}
+            if src_has_v26:
+                values["item_kind"] = r.get("item_kind") or "rate"
+                values["fixed_amount"] = r.get("fixed_amount")
             upsert(M.EmploymentTaxItem, {"tax_zone_id": tz.id, "item_name": r["item_name"]},
-                   {"tax_rate": r["tax_rate"], "is_active": r["is_active"]})
+                   values)
 
         # 5) 股权结构（三来源互斥；内部/外部公司按名解析，目标缺公司则跳过告警）
         for r in fetch(

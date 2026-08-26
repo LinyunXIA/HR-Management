@@ -4,8 +4,21 @@ const Auth = {
 
   token() { return localStorage.getItem('hr_token') || ''; },
   setToken(t) { if (t) localStorage.setItem('hr_token', t); },
-  clear() { localStorage.removeItem('hr_token'); this.user = null; this.renderBadge(); },
+  clear() {
+    localStorage.removeItem('hr_token');
+    this.user = null;
+    // issue #150：登出同步隐藏用户管理入口（此前同页 admin→hr 切换导航泄漏）
+    const nu = document.getElementById('nav-users');
+    if (nu) nu.style.display = 'none';
+    this.renderBadge();
+  },
   isLoggedIn() { return !!this.token(); },
+
+  /* issue #144/#150：按角色切换「用户管理」导航显隐（admin 显示、其余隐藏） */
+  syncNavByRole() {
+    const nu = document.getElementById('nav-users');
+    if (nu) nu.style.display = (this.user && this.user.role === 'admin') ? '' : 'none';
+  },
 
   async fetchMe() {
     if (!this.token()) { this.user = null; return null; }
@@ -73,10 +86,7 @@ const Auth = {
         closeModal(); toast('登录成功', 'ok'); this.renderBadge();
         // 登录成功后初始化应用
         if (window.App) {
-          const navUsers = document.getElementById('nav-users');
-          if (navUsers && this.user && this.user.role === 'admin') {
-            navUsers.style.display = '';
-          }
+          this.syncNavByRole();
           await App.loadDicts();
           App.init();
           App.loadStats();

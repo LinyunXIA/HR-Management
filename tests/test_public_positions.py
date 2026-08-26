@@ -32,7 +32,8 @@ COST_KEYS = {"salary_before_tax", "mandatory_tax", "mandatory_fixed_fee",
 EXPECT_KEYS = {"number", "position_name", "position_type", "company_id", "company_name",
                "level", "country_or_region", "opening_date", "closing_date",
                "work_location", "job_responsibility", "solid_line_manager",
-               "dotted_managers", "legal_category", "org_chart_display", "remark"}
+               "dotted_managers", "legal_category", "org_chart_display", "remark",
+               "incumbent_name"}  # issue #151：PRD F6.2 声明的 incumbent_name 纳入契约锁定
 
 
 def req(method, path, body=None, token=None, expect=None):
@@ -205,7 +206,8 @@ def main():
     check(code == 400, f"被公司绑定的税区禁止删除（{code}）")
     req("PATCH", f"/companies/{comp_a['id']}", {"tax_zone_id": None}, token=admin, expect=200)
     code, _b = req("DELETE", f"/tax-zones/{zone['id']}", token=admin, expect=200)
-    check(True, "解绑后税区可删除")
+    # issue #151：原 check(True, ...) 为恒真断言，expect=200 已承担真实校验，此处补语义说明
+    check(code == 200, "解绑后税区可删除（真实 DELETE 断言）")
 
     code, scopes = req("GET", "/admin/scopes", token=admin)
     keys = [s["key"] for s in scopes]

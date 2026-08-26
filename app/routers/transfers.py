@@ -239,7 +239,13 @@ def reject_transfer(transfer_id: int, user=Depends(get_current_user), db: Sessio
 @router.post("/transfers", status_code=201)
 def create_transfer(payload: TransferCreate, response: Response,
                     user=Depends(get_current_user), db: Session = Depends(get_db)):
-    """兼容旧直调（同公司调岗）：旧岗→Vacant，新岗→Filled。"""
+    """调岗（同公司或跨公司直接调）：旧岗→Vacant，新岗→Filled。
+
+    issue #140：外包虚拟建档员工（无在挂岗位）允许经本接口**首次挂编**——
+    此前主体逻辑包在 `if old_pn and old_pn.id != new_pn.id` 内，
+    无岗员工静默 no-op 却返回成功（目标岗不转 Filled、不写 transfers 记录）。
+    现任何成功的调岗均写一条 kind='transfer' 结构化留痕。
+    """
     emp = _lock_employee(db, payload.employee_id)
     if emp.employment_status == EmploymentStatus.TERMINATED:
         raise HTTPException(400, "离职员工不可调岗")
@@ -256,19 +262,35 @@ def create_transfer(payload: TransferCreate, response: Response,
     )
     if not new_pn:
         raise HTTPException(404, "目标岗位不存在")
+    # 行级隔离补口（issue #147）：目标岗位公司的 status/事件写入须可管
+    assert_can_write_company(db, user, new_pn.company_id, label="目标岗位所属公司")
+    if old_pn and old_pn.id == new_pn.id:
+        raise HTTPException(400, "调岗目标与当前岗位相同")
     _assert_attachable(db, new_pn)
     # 挂编联动（#50）：目标岗类型须匹配员工合同属性
     _assert_type_match(new_pn, emp.employee_type)
-    if old_pn and old_pn.id != new_pn.id:
-        if old_pn.status == PositionStatus.FILLED:
-            lifecycle.transition(db, old_pn, PositionStatus.VACANT,
-                                 note=f"员工 {emp.name} 调岗",
-                                 employee_id=emp.id, system=True)
-        emp.position_number_id = new_pn.id
-        emp.version = (emp.version or 1) + 1
-        lifecycle.transition(db, new_pn, PositionStatus.FILLED,
-                             note=f"员工 {emp.name} 调岗挂编",
+
+    from datetime import datetime as _dt
+    if old_pn and old_pn.status == PositionStatus.FILLED:
+        lifecycle.transition(db, old_pn, PositionStatus.VACANT,
+                             note=f"员工 {emp.name} 调岗",
                              employee_id=emp.id, system=True)
+    emp.position_number_id = new_pn.id
+    emp.version = (emp.version or 1) + 1
+    lifecycle.transition(db, new_pn, PositionStatus.FILLED,
+                         note=f"员工 {emp.name} 调岗挂编" + ("（首次挂编）" if not old_pn else ""),
+                         employee_id=emp.id, system=True)
+    db.add(Transfer(
+        employee_id=emp.id,
+        from_position_id=old_pn.id if old_pn else None,
+        target_company_id=new_pn.company_id,
+        to_position_id=new_pn.id,
+        status="claimed",
+        kind="transfer",
+        initiated_by=user.username,
+        claimed_by=user.username,
+        claimed_at=_dt.now(timezone.utc),
+    ))
     db.commit()
     response.headers["Location"] = f"/api/v1/employees/{emp.id}"
     return serialize_employee(db, emp)

@@ -119,10 +119,22 @@ const OrgChart = {
                 status: '', closed: false, incumbent: '', children: roots, isVirtual: true, parent: null }];
     }
     const counter = { x: 0 };
+    // issue #135：laidOut 记录本次布局实际分配了坐标的节点——折叠节点的子树
+    // 不参与坐标分配，渲染/边界/连线据此跳过（此前折叠时子树沿用旧坐标继续
+    // 渲染；切 Tab 回来后坐标为 undefined → translate(NaN) + viewBox 回退）
+    this.laidOut = new Set();
     const assign = (node, depth) => {
       node._depth = depth;
+      this.laidOut.add(node.number);
+      if (node.collapsed) {
+        // 折叠：自身占一个叶子位，子树整体不布局不渲染
+        node._children = [];
+        node._x = counter.x * H_SPACE;
+        counter.x++;
+        return;
+      }
       node._children = (node.children || []).filter((c) => this.vis.has(c.number));
-      if (node.collapsed || node._children.length === 0) {
+      if (node._children.length === 0) {
         node._x = counter.x * H_SPACE;
         counter.x++;
       } else {
@@ -133,7 +145,7 @@ const OrgChart = {
     tops.forEach((t) => assign(t, 0));
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     const visit = (n) => {
-      if (n.number !== '__virtual') {
+      if (n.number !== '__virtual' && typeof n._x === 'number' && isFinite(n._x)) {
         minX = Math.min(minX, n._x); maxX = Math.max(maxX, n._x);
         minY = Math.min(minY, n._depth * V_SPACE); maxY = Math.max(maxY, n._depth * V_SPACE);
       }
@@ -185,6 +197,7 @@ const OrgChart = {
       const p = this.nodePos(num);
       const mgrNum = this.solidManager[num];
       if (!mgrNum || !p || !this.vis.has(num) || !this.vis.has(mgrNum)) return;
+      if (!this.laidOut || !this.laidOut.has(num) || !this.laidOut.has(mgrNum)) return; // issue #135：折叠子树的连线不绘制
       const mp = this.nodePos(mgrNum);
       const from = { x: mp.x, y: mp.y + (this.nodeMap[mgrNum].isVirtual ? 17 : 38) };
       const to = { x: p.x, y: p.y - 38 };
@@ -203,6 +216,7 @@ const OrgChart = {
     const seen = new Set();
     this.data.dotted_edges.forEach((e) => {
       if (!this.vis.has(e.from) || !this.vis.has(e.to)) return;
+      if (!this.laidOut || !this.laidOut.has(e.from) || !this.laidOut.has(e.to)) return; // issue #135
       const key = e.from + '>' + e.to;
       if (seen.has(key)) return;
       seen.add(key);
@@ -236,6 +250,7 @@ const OrgChart = {
       return true;
     };
     const drawNode = (n) => {
+      if (this.laidOut && !this.laidOut.has(n.number)) return; // issue #135：折叠子树不渲染
       const group = document.createElementNS(NS, 'g');
       const { w, h } = this.cardSize(n);
       const x = n._x, y = n._depth * V_SPACE;
@@ -327,6 +342,18 @@ const OrgChart = {
 
   async exportMd(fmt) {
     const res = await fetch(`/api/v1/org-charts?report=${fmt}`, { headers: { 'Accept': 'text/markdown', ..._authHeader() } });
+    // issue #150：原生 fetch 补齐全局错误处理（401 弹登录 / 429 toast），与 api() 口径一致
+    if (res.status === 401) {
+      toast('登录已过期，请重新登录', 'error');
+      if (window.Auth) Auth.showLogin();
+      throw new Error('未登录');
+    }
+    if (res.status === 429) {
+      const d = await res.json().catch(() => null);
+      const msg = (d && d.detail) || '请求过于频繁，请稍后重试';
+      toast(msg, 'error');
+      throw new Error(msg);
+    }
     if (!res.ok) { const d = await res.json().catch(() => null); throw new Error(d?.detail || '导出失败'); }
     const text = await res.text();
     const names = { org: 'orgchart-公司岗位', solid: 'orgchart-直线汇报线', dotted: 'orgchart-虚线汇报线' };

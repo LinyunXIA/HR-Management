@@ -1,5 +1,6 @@
 """Pydantic 请求/响应模型。"""
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -129,6 +130,8 @@ class PositionNumberCreate(BaseModel):
 
 class PositionNumberUpdate(BaseModel):
     position_id: int | None = None
+    # 职能改名（issue #143）：按名称匹配现有职能或自动新建（与创建路径同口径）
+    position_name: str | None = None
     company_id: int | None = None
     level: str | None = None
     scope: Scope | None = None
@@ -385,7 +388,8 @@ class EmploymentTaxItemCreate(BaseModel):
     country_id: int | None = None   # 旧口径兼容；新配置请用 tax_zone_id
     tax_zone_id: int | None = None  # v2.3 税区（国家或城市级）
     item_name: str
-    item_kind: str = "rate"         # rate | fixed（v2.6）
+    # issue #145：schema 层枚举校验（此前裸 str，脏值会被 calc_cost_by_zone 当 rate 类处理）
+    item_kind: Literal["rate", "fixed"] = "rate"
     tax_rate: float = 0.0
     fixed_amount: float | None = None
     is_active: bool = True
@@ -401,7 +405,7 @@ class EmploymentTaxItemCreate(BaseModel):
 
 class EmploymentTaxItemUpdate(BaseModel):
     item_name: str | None = None
-    item_kind: str | None = None
+    item_kind: Literal["rate", "fixed"] | None = None   # issue #145
     tax_rate: float | None = None
     fixed_amount: float | None = None
     is_active: bool | None = None
@@ -419,7 +423,8 @@ class TaxZoneOut(BaseModel):
 
 
 class TaxZoneCreate(BaseModel):
-    level: str            # country | city
+    # issue #145：schema 层枚举校验（此前裸 str，仅 DB CHECK 限值）
+    level: Literal["country", "city"]
     country_id: int
     city: str | None = None
     sort_order: int | None = 0

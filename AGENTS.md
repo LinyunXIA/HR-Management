@@ -122,7 +122,11 @@ APP_ENV=prod .venv/bin/python -m scripts.import_csv testingdata/原始文件/Pos
 
 ## 10. 当前运行状态（2026-08-26 更新）
 
-- **2026-08-26 全量审计修复已落地（issue #105~#128，索引见 #129）**：全局限流中间件（SlowAPIMiddleware）、员工详情六栏成本修复、岗位成本 UI、转调认领池 UI、4 查询索引、countries 种子、PATCH version 必填、promote 写 transfers、创建路径接线权限、POST /imports 仅 admin（裁决 A）、员工跨司脱敏（裁决 A）、成本测算对称 400 + 奖金试算参数、导入锚不一致防护与表头校验、清洗默认 Org-Chart3 + 旧格式拦截、组织图四项交互、前端报告明细等；回归 152/152 全绿。
+- **2026-08-26 第二轮全量审计修复已落地（issue #131~#152，索引见 #153）**：跨司脱敏贯通岗位接口（#131 serialize_position hide_incumbent_costs + #132 cost-calculation 403）、导入拒绝集贯通第 3 趟（#133）与带 ID 锚校验前移（#137）、关闭日早于开启日校验（#138）、环检测/管理岗统一 422（#139 裁决）、promote 虚拟建档 400 / 调岗首次挂编留痕（#140）、成本 auto/manual 服务端互斥（#141）、前端调岗入口（#134）/组织图折叠修复（#135）/清洗文件列表解析（#136）/hr 只读视图（#144）、TaxZone 国家级部分唯一索引 + Literal 校验（#145）、隔离缝隙补口（#147）、导入杂项（#148 scope 归一化/position_type strict/岗位ID 告警）与卫生项打包（#149）；裁决：422 统一、claim/promote 白名单保留 OFFERED、测试只补断言不动夹具。
+- **编号口径说明（#152）**：代码内注释以实际 issue 号为准——查询索引=**#109**、countries 种子=**#110**、组织图四项交互=**#124**；本文档首轮审计段落中的「#121 索引/#124 种子/#127 交互」为撰写笔误，功能无差、以代码注释为准。
+- **Position.csv 列数漂移备注（#152）**：`testingdata/原始文件/Position.csv` 实测 19 列（多出「员工姓名」「用工成本(开业）」），非 §3.7 宣称的 17 列模版；导入器对未知列 warning 容忍不致错，权威模版待人工修订。
+- **回归基线口径（#152）**：`test_integration.py` 的 45 断言依赖 playwright 安装（未装降级 42 且无 skip 记账）；`test_v23.py` 实际断言数随库状态在 50~55 漂移——文档引用的 45/45、52/52 为一次性快照，非可复现口径。
+- **2026-08-26 全量审计修复已落地（issue #105~#128，索引见 #129）**：全局限流中间件（SlowAPIMiddleware）、员工详情六栏成本修复、岗位成本 UI、转调认领池 UI、4 查询索引、countries 种子、PATCH version 必填、promote 写 transfers、创建路径接线权限、POST /imports 仅 admin（裁决 A）、员工跨司脱敏（裁决 A）、成本测算对称 400 + 奖金试算参数、导入锚不一致防护与表头校验、清洗默认 Org-Chart3 + 旧格式拦截、组织图四项交互、前端报告明细等。
 
 - **v2.6 已落地（第二轮修订定稿）**：对外 `GET /public/positions` 在岗岗位数据导出（第三方计算用工成本，原基准推送/报告链路整体废弃）；成本六栏 + 税额科目 rate/fixed 两类；**Company 绑税区一对一，全部成本场景统一公司税区口径**（resolve_tax_zone 退役）；scope=public.positions + GET /admin/scopes；`tests/test_public_positions.py` 24 项
 - **v2.5 存储切换已落地：PostgreSQL → SQLite 同机三文件**（`data/hr_db_{dev,test,prod}.db`，WAL + 每连接 `PRAGMA foreign_keys=ON`）；psycopg2 已移出运行时依赖；主数据字典已从 PG 迁入（`scripts/migrate_pg_master_data.py`，幂等可重跑）

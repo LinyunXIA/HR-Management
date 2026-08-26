@@ -260,10 +260,12 @@ def parse_rules(md_text: str) -> Dict:
     return rules
 
 
-def clean_data(positions: List[Dict], rules: Dict, company_map: Dict = None) -> Tuple[List[Dict], List[str]]:
+def clean_data(positions: List[Dict], rules: Dict, company_map: Dict = None,
+               title_level_map: Dict[str, str] | None = None) -> Tuple[List[Dict], List[str]]:
     """清洗数据：验证字段、补全默认值、生成显示名。
 
     工作地点与国家或地区均从公司名字的地点信息推断（不依赖岗位编号——编号已由系统分配）。
+    级别推断优先消费规则文件对照表（title_level_map，issue #149 激活 parse_rules 结果）。
     返回 (cleaned_positions, warnings)。
     """
     warnings = []
@@ -306,9 +308,9 @@ def clean_data(positions: List[Dict], rules: Dict, company_map: Dict = None) -> 
             elif "纯后勤" in remark:
                 row["legal_category"] = "纯后勤可选"
 
-        # 5. 推断级别
+        # 5. 推断级别（优先规则文件对照，回退内置映射）
         if not row.get("level"):
-            row["level"] = _infer_level(row.get("name_en", ""))
+            row["level"] = _infer_level(row.get("name_en", ""), title_level_map)
 
         # 6. 国家或地区：从公司地点推断（不依赖编号）
         if not row.get("country_scope"):
@@ -437,14 +439,29 @@ TITLE_LEVEL_MAP = {
 }
 
 
-def _infer_level(pos_name_en: str) -> str:
-    """从职位名推断级别（精确匹配优先，其次包含匹配）。"""
-    if pos_name_en in TITLE_LEVEL_MAP:
-        return TITLE_LEVEL_MAP[pos_name_en]
-    for key, level in TITLE_LEVEL_MAP.items():
-        if key in pos_name_en:
-            return level
+def _infer_level(pos_name_en: str, title_level_map: Dict[str, str] | None = None) -> str:
+    """从职位名推断级别：优先规则文件对照表（title→code，issue #149 激活消费），
+    其次内置关键词映射（精确匹配优先，其次包含匹配）。"""
+    for source in (title_level_map or {}, TITLE_LEVEL_MAP):
+        if pos_name_en in source:
+            return source[pos_name_en]
+        for key, level in source.items():
+            if key and key in pos_name_en:
+                return level
     return ""
+
+
+def rules_title_level_map(rules: Dict) -> Dict[str, str]:
+    """由 parse_rules 的级别对照（code→{ic, mgmt}）反转出 职位名→级别码 映射。"""
+    out: Dict[str, str] = {}
+    for code, info in (rules.get("levels") or {}).items():
+        ic = (info.get("ic") or "").strip()
+        mgmt = (info.get("mgmt") or "").strip()
+        if ic and ic.upper() != "N/A":
+            out.setdefault(ic, code)
+        if mgmt and mgmt.upper() != "N/A":
+            out.setdefault(mgmt, info.get("mgmt") or code)
+    return out
 
 
 def to_csv(cleaned: List[Dict], positions_map: Dict = None) -> str:
@@ -516,6 +533,7 @@ def run_clean(orgchart_md: str, rules_md: str) -> Dict:
     rules = parse_rules(rules_md)
     rule_warnings: List[str] = []
     n_levels = len(rules.get("levels") or {})
+    title_level_map = rules_title_level_map(rules)
     if n_levels == 0:
         rule_warnings.append(
             "规则文件未解析到「级别对照」（章节标题/表格格式变动？），级别推断退化为内置关键词映射")
@@ -525,14 +543,15 @@ def run_clean(orgchart_md: str, rules_md: str) -> Dict:
     if not (rules.get("scopes") or {}):
         rule_warnings.append("规则文件未解析到工作范围编号表")
 
-    # 3. 清洗数据（传入公司信息用于推断工作地点/国家范围）
-    cleaned, warnings = clean_data(positions, rules, company_map=company_map)
+    # 3. 清洗数据（传入公司信息用于推断工作地点/国家范围；级别推断消费规则对照表）
+    cleaned, warnings = clean_data(positions, rules, company_map=company_map,
+                                   title_level_map=title_level_map)
     warnings.extend(rule_warnings)
 
     # 4. 补充推断字段（级别、国家范围兜底）
     for pos in cleaned:
         if not pos.get("level"):
-            pos["level"] = _infer_level(pos.get("name_en", ""))
+            pos["level"] = _infer_level(pos.get("name_en", ""), title_level_map)
         if not pos.get("country_scope"):
             pos["country_scope"] = _infer_country_scope_from_location(
                 company_map.get(pos.get("company", ""), {}).get("location", "")

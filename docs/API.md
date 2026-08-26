@@ -24,7 +24,7 @@
   | 401 | 未认证/Token 过期或无效（对外接口） |
   | 404 | 资源不存在 |
   | 409 | 乐观锁冲突（`version` 不一致，见 §3.2/`app/helpers.py:1`） |
-  | 422 | 状态流转非法 |
+  | 422 | 状态流转非法 / 直线汇报成环（A→B→A）/ 非管理岗任经理（issue #139 统一口径，DESIGN §11.8） |
   | 429 | 限流（`RateLimitExceeded`，见 `main.py:1`） |
 - **错误格式**：`{"detail": "错误描述"}` 或校验错误的字段数组。
 - **分页**：列表接口返回 `{total, page, page_size, items}`，参数 `page` / `page_size`（默认 50）。
@@ -220,6 +220,8 @@
   { "version": 3, "remark": "更新备注" }
   ```
 - 成功：`version` 自增并返回新对象；冲突：`409 {"detail":"岗位已被他人修改，请刷新后重试（当前版本 3，提交版本 2）"}`，前端 `static/js/positions.js:1` 提示刷新。
+- **职能改名（issue #143）**：Update 支持 `position_name`——匹配现有职能或自动新建（与创建路径同口径），此前该字段被静默忽略。
+- **成本模式互斥服务端兜底（issue #141）**：manual→auto 切换时未随请求提供的派生三栏（强制扣税/定额扣费/用工成本）自动清空；重算保存路径显式携带计算值不受影响。员工 `actual_cost_mode` 同构。
 
 **POST /positions/{id}/transitions（状态流转）请求体**
 
@@ -320,6 +322,10 @@
 ```json
 { "employee_id": 5, "to_position_id": 15 }
 ```
+
+- 旧岗→Vacant、新岗→Filled；任何成功的调岗均写一条 `kind=transfer` 结构化留痕（issue #140）。
+- **首次挂编**：外包虚拟建档员工（无在挂岗位）可经本接口挂编到首个岗位（issue #140）；
+  目标岗位公司的写权限按可管实体校验（issue #147）。
 
 **转调交接（v2.3 F1.5b，人永不脱岗）**
 

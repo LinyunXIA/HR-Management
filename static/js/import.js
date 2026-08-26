@@ -30,10 +30,8 @@ const Import = {
     const fd = new FormData();
     fd.append('file', file);
     try {
-      const r = await fetch('/api/v1/imports', { method: 'POST', body: fd, headers: _authHeader() });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.detail || '导入失败');
-      const issues = [...(data.errors || []), ...(data.warnings || [])];
+      // issue #150：改走 api() 封装（FormData 支持），401 弹登录 / 429 toast 与全局一致
+      const data = await api('/imports', { method: 'POST', body: fd });
       // 编号分配明细（#125）：imported=新建分配 / updated_by_id=按岗位ID 认老 / updated_by_key=幂等键认老
       const ACTION_LABEL = { imported: '新建·系统分配', updated_by_id: '认老·按ID', updated_by_key: '认老·幂等键' };
       const assigned = data.assigned_numbers || [];
@@ -55,7 +53,9 @@ const Import = {
             <tr><td>${esc(a.label || '—')}</td><td><span class="num">${esc(a.number)}</span></td><td>${ACTION_LABEL[a.action] || esc(a.action || '—')}</td></tr>`).join('')}
           </tbody>
         </table>` : ''}
-        ${issues.length ? `<div class="section-title">明细（错误 / 警告）</div><pre class="error-list">${issues.map((i) => '⚠ ' + esc(i)).join('\n')}</pre>` : ''}
+        ${/* issue #150：errors 与 warnings 分区展示（此前合并混排丢失分区） */''}
+        ${data.errors.length ? `<div class="section-title" style="color:var(--danger)">❌ 错误（该行未导入）</div><pre class="error-list">${data.errors.map((i) => '✕ ' + esc(i)).join('\n')}</pre>` : ''}
+        ${data.warnings.length ? `<div class="section-title" style="color:#d98a1f">⚠️ 警告</div><pre class="error-list">${data.warnings.map((i) => '⚠ ' + esc(i)).join('\n')}</pre>` : ''}
         ${data.imported + data.updated ? '<div style="margin-top:14px"><button class="btn primary" id="imp-refresh">刷新数据并查看</button></div>' : ''}`;
       const btn = resBox.querySelector('#imp-refresh');
       if (btn) btn.onclick = () => { App.loadDicts().then(() => { App.show('positions'); }); };

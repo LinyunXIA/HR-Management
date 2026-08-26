@@ -289,8 +289,12 @@ def update_company(company_id: int, payload: CompanyUpdate,
         setattr(company, k, v)
     if "tax_zone_id" in data:
         _assert_tax_zone(db, data["tax_zone_id"])
-    # closing_date ↔ is_active 联动：填关闭日自动置停用；清空恢复启用（显式传 is_active 时以联动为准）
-    if closing_changed:
+    # closing_date ↔ is_active 联动（issue #146 补口）：最终态由 closing_date 派生——
+    # 有关闭日强制停用（显式传 is_active=true 亦不可绕过「有关闭日却启用」矛盾态）；
+    # 清空关闭日恢复启用
+    if company.closing_date is not None:
+        company.is_active = False
+    elif closing_changed or "is_active" in data:
         company.is_active = company.closing_date is None
     if company.closing_date and closing_changed:
         _assert_company_closable(db, company.id)
@@ -376,8 +380,11 @@ def update_external_company(obj_id: int, payload: ExternalCompanyUpdate,
     closing_changed = "closing_date" in data
     for k, v in data.items():
         setattr(obj, k, v)
-    # 关闭日期 ↔ 启用联动：填关闭日自动置停用；清空恢复启用
-    if closing_changed:
+    # 关闭日期 ↔ 启用联动（issue #146 补口，同 companies）：最终态由 closing_date 派生，
+    # 显式 is_active=true 不可绕过「有关闭日却启用」矛盾态
+    if obj.closing_date is not None:
+        obj.is_active = False
+    elif closing_changed or "is_active" in data:
         obj.is_active = obj.closing_date is None
     db.commit()
     db.refresh(obj)
@@ -741,7 +748,14 @@ def create_tax_zone(payload: TaxZoneCreate, response: Response,
     z = TaxZone(level=payload.level, country_id=payload.country_id,
                 city=(payload.city or None), sort_order=payload.sort_order or 0)
     db.add(z)
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        # issue #145：应用层查重与提交之间的并发窗口由部分唯一索引兜底
+        db.rollback()
+        if "unique" in str(e).lower() or "duplicate" in str(e).lower():
+            raise HTTPException(400, "该税区已存在（并发创建被唯一索引拦截）")
+        raise
     db.refresh(z)
     response.headers["Location"] = f"/api/v1/tax-zones/{z.id}"
     return _serialize_zone(db, z)

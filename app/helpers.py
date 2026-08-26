@@ -101,16 +101,19 @@ def generate_employee_no(db: Session, employee_type) -> str:
 
 
 def check_cycle(db: Session, position_id: int, manager_id: int):
-    """沿上级链上溯，若回到 position_id 或成环则拦截。"""
+    """沿上级链上溯，若回到 position_id 或成环则拦截。
+
+    状态码口径（issue #139 裁决）：遵循 DESIGN §11.8 统一返回 422。
+    """
     if manager_id == position_id:
-        raise HTTPException(400, "直线经理不能是自身")
+        raise HTTPException(422, "直线经理不能是自身")
     seen = set()
     cur = manager_id
     while cur is not None:
         if cur == position_id:
-            raise HTTPException(400, "汇报关系形成环路，已拦截（A→B→A）")
+            raise HTTPException(422, "汇报关系形成环路，已拦截（A→B→A）")
         if cur in seen:
-            raise HTTPException(400, "汇报关系存在环路")
+            raise HTTPException(422, "汇报关系存在环路")
         seen.add(cur)
         m = db.get(PositionNumber, cur)
         cur = m.solid_line_manager_id if m else None
@@ -247,7 +250,14 @@ def calc_cost_by_zone(db: Session, zone, salary, fixed_bonus=0.0, floating_bonus
     return result
 
 
-def serialize_position(db: Session, pn: PositionNumber) -> dict:
+def serialize_position(db: Session, pn: PositionNumber, hide_incumbent_costs: bool = False) -> dict:
+    """岗位对象序列化。
+
+    hide_incumbent_costs（issue #131，#121 裁决 A 贯通）：True 时在职员工的
+    actual_* 实际成本七字段置 null——hr 对非可管实体仅可见员工姓名（读可跨司
+    例外止于姓名，PRD §7B.3），堵住「经岗位接口读取他司实际成本」的旁路；
+    admin 全量明文。
+    """
     pos = pn.position
     company = pn.company
     country = pn.country
@@ -266,7 +276,7 @@ def serialize_position(db: Session, pn: PositionNumber) -> dict:
     sl = db.get(PositionNumber, pn.solid_line_manager_id) if pn.solid_line_manager_id else None
     prev_p = db.get(PositionNumber, pn.prev_position_id) if pn.prev_position_id else None
     prev_c = db.get(Company, pn.prev_company_id) if pn.prev_company_id else None
-    return {
+    data = {
         "id": pn.id,
         "number": pn.number,
         "position_id": pn.position_id,
@@ -306,7 +316,16 @@ def serialize_position(db: Session, pn: PositionNumber) -> dict:
         "labor_cost": float(pn.labor_cost) if pn.labor_cost is not None else None,
         "incumbent_id": incumbent.id if incumbent else None,
         "incumbent_name": incumbent.name if incumbent else None,
-        # ---- 实际成本层（v2.3 双口径：Filled 对照、跟人走；空岗为 None；v2.6 六栏）----
+    }
+    # ---- 实际成本层（v2.3 双口径：Filled 对照、跟人走；空岗为 None；v2.6 六栏）----
+    # issue #131：hide_incumbent_costs=True 时七字段置 null（跨司脱敏贯通到岗位接口）
+    if hide_incumbent_costs:
+        for f in ("actual_cost_mode", "actual_salary_before_tax", "actual_mandatory_tax",
+                  "actual_mandatory_fixed_fee", "actual_fixed_bonus",
+                  "actual_floating_bonus", "actual_labor_cost"):
+            data[f] = None
+        return data
+    data.update({
         "actual_cost_mode": (incumbent.actual_cost_mode.value if incumbent and incumbent.actual_cost_mode else None),
         "actual_salary_before_tax": (float(incumbent.actual_salary_before_tax) if incumbent and incumbent.actual_salary_before_tax is not None else None),
         "actual_mandatory_tax": (float(incumbent.actual_mandatory_tax) if incumbent and incumbent.actual_mandatory_tax is not None else None),
@@ -314,7 +333,21 @@ def serialize_position(db: Session, pn: PositionNumber) -> dict:
         "actual_fixed_bonus": (float(incumbent.actual_fixed_bonus) if incumbent and incumbent.actual_fixed_bonus is not None else None),
         "actual_floating_bonus": (float(incumbent.actual_floating_bonus) if incumbent and incumbent.actual_floating_bonus is not None else None),
         "actual_labor_cost": (float(incumbent.actual_labor_cost) if incumbent and incumbent.actual_labor_cost is not None else None),
+    })
+    data.update({
         "version": pn.version,
         "created_at": pn.created_at,
         "updated_at": pn.updated_at,
-    }
+    })
+    return data
+
+
+def can_view_incumbent_costs(db: Session, user, company_id: int | None) -> bool:
+    """岗位卡片上的在职员工实际成本是否对当前用户可见（issue #131）。
+
+    admin 全量；hr 仅当岗位隶属公司在可管实体集内（无实体归属一律不可见）。
+    """
+    allowed = get_operable_company_ids(db, user)
+    if allowed == ALL_COMPANIES:
+        return True
+    return company_id is not None and company_id in allowed

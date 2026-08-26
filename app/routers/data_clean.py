@@ -42,13 +42,13 @@ def get_data_clean_job(job_id: str, _user=Depends(get_current_user)):
 
 @router.get("/data-clean-jobs/files/list")
 def list_raw_files(_user=Depends(get_current_user)):
-    """列出原始文件（兼容保留）。"""
+    """列出原始文件（兼容保留）。仅暴露文件名与大小，不泄漏服务器绝对路径（issue #149）。"""
     files = []
     if RAW_DIR.exists():
         for f in sorted(RAW_DIR.iterdir()):
             if f.is_file():
-                files.append({"name": f.name, "size": f.stat().st_size, "path": str(f)})
-    return {"directory": str(RAW_DIR), "files": files}
+                files.append({"name": f.name, "size": f.stat().st_size})
+    return {"directory": "testingdata/原始文件", "files": files}
 
 
 @router.post("/data-clean-jobs", status_code=201)

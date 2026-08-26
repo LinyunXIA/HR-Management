@@ -31,7 +31,8 @@ def transition(db, position, to_status: PositionStatus, note=None, employee_id=N
                *, system: bool = False) -> PositionEvent:
     """校验并执行状态流转，写入一条生命周期事件。调用方负责 commit。
 
-    system=True 表示由员工入职/离职/调岗自动触发（允许 filled↔open/vacant 等）。
+    system=True 表示由员工动作自动触发（ALLOWED_EMPLOYEE：各态→filled、
+    filled→vacant；issue #149 修正 docstring 与白名单不符）。
     联动规则：
     - 关闭（→closed）：若未设关闭日则写入当前日期。
     - 重新激活（→open/offered/filled/vacant/planned）：清空关闭日。

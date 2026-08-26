@@ -16,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import relationship
 
@@ -217,6 +218,10 @@ class TaxZone(Base):
     __table_args__ = (
         CheckConstraint("level IN ('country', 'city')", name="ck_tax_zones_level"),
         UniqueConstraint("level", "country_id", "city", name="uq_tax_zone_scope"),
+        # issue #145：复合唯一对 NULL city 失效（SQLite 唯一索引视 NULL 互异）→
+        # 国家级唯一性由部分唯一索引硬兜底（存量库由 main.py::_ensure_indexes 幂等补建）
+        Index("ux_tax_zones_country_level", "country_id",
+              sqlite_where=text("level = 'country'")),
     )
 
     id = Column(Integer, primary_key=True)
@@ -462,8 +467,10 @@ class Transfer(Base):
     from_position_id = Column(
         Integer, ForeignKey("position_numbers.id", ondelete="SET NULL"), nullable=True
     )
-    target_company_id = Column(Integer, ForeignKey("companies.id", ondelete="SET NULL"),
-                               nullable=False)  # 目标公司（认领池过滤键）
+    target_company_id = Column(Integer, ForeignKey("companies.id"),
+                               nullable=False)  # 目标公司（认领池过滤键；NOT NULL 与 RESTRICT
+    # 一致——issue #146：原 ondelete="SET NULL" 与 NOT NULL 自相矛盾，删被引用公司时
+    # IntegrityError(500)；路由层 delete_company 已前置 400 拦截，DB 侧收紧为默认 RESTRICT
     to_position_id = Column(
         Integer, ForeignKey("position_numbers.id", ondelete="SET NULL"), nullable=True
     )  # 认领时分配的目标岗

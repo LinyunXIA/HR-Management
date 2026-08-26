@@ -85,9 +85,19 @@ def export_dotted(db: Session) -> str:
 
 def export_md(db: Session, fmt: str) -> str:
     if fmt == "org":
-        return export_org(db)
-    if fmt == "solid":
-        return export_solid(db)
-    if fmt == "dotted":
+        md = export_org(db)
+    elif fmt == "solid":
+        md = export_solid(db)
+    elif fmt == "dotted":
         return export_dotted(db)
-    raise ValueError(f"未知导出格式: {fmt}（支持 org / solid / dotted）")
+    else:
+        raise ValueError(f"未知导出格式: {fmt}（支持 org / solid / dotted）")
+    # issue #149：成环/悬空节点此前从 solid 导出中静默消失——复用 build_orgchart
+    # 的可达性检测结果，在导出末尾附异常清单（PRD F3.3 异常提示贯通导出链路）
+    from app.orgchart import build_orgchart
+    anomalies = build_orgchart(db).get("anomalies") or []
+    if anomalies:
+        md += ("\n\n> ⚠️ 未挂入组织树的异常岗位（成环或直线经理引用失效，共 "
+               f"{len(anomalies)} 个）："
+               + "、".join(f"{a['number']} {a['display']}" for a in anomalies))
+    return md

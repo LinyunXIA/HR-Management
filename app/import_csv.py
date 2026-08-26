@@ -107,6 +107,27 @@ def scope_raw_value(pn: PositionNumber) -> str:
     return SCOPE_RAW_BY_VALUE.get(pn.scope.value, "")
 
 
+def scope_key_raw(scope: Scope, cname: str | None) -> str:
+    """文件侧幂等键的「国家或地区」分量：由**归一化后**的 scope 还原（issue #148-2）。
+
+    此前键分量用原始字符串（`scope_raw or "Global"`），小写/笔误入库为 Global
+    但键仍存原串 → 迭代再导同一文件无法认老、重复建档。现两侧统一走规范值。
+    """
+    if scope == Scope.COUNTRY:
+        return f"Country·{cname}" if cname else ""
+    return SCOPE_RAW_BY_VALUE.get(scope.value, "")
+
+
+def position_anchor_key(pn: PositionNumber) -> tuple:
+    """库侧岗位的幂等键四元组（职位名, 公司名, 国家或地区, 开启日）。
+
+    与文件侧 item["key"] 同构（issue #137 锚一致性比对 / existing_by_key 构建共用）。
+    """
+    pos_name = pn.position.name if pn.position else ""
+    comp_name = pn.company.name if pn.company else ""
+    return (pos_name, comp_name, scope_raw_value(pn), opening_key(pn.opening_date))
+
+
 def extract_refs(value):
     """从直线/虚线经理或之前职位单元格提取**职位名**引用列表。
 
@@ -141,7 +162,11 @@ def import_csv(db, rows, *, strict_legal: bool = True):
         report["errors"].append(
             f"CSV 缺少必填列：{'、'.join(missing_required)}（表头漂移会静默清空数据，整批拒绝）")
         return report
-    missing_optional = [h for h in EXPECTED_HEADERS if h not in actual_headers]
+    # 「岗位ID」为可选增强列：缺失属正常形态，不计入缺列告警（issue #148-1，
+    # 修复注释与实现矛盾——此前标准 17 列每次导入必得一条缺列 warning）
+    optional_ignore_missing = {"岗位ID"}
+    missing_optional = [h for h in EXPECTED_HEADERS
+                        if h not in actual_headers and h not in optional_ignore_missing]
     extra_cols = [h for h in sorted(actual_headers) if h not in EXPECTED_HEADERS]
     if missing_optional:
         report["warnings"].append(f"CSV 缺少可空列（该列将按空值处理，注意迭代导入会覆盖库内原值）：{'、'.join(missing_optional)}")
@@ -160,14 +185,12 @@ def import_csv(db, rows, *, strict_legal: bool = True):
     db_dup_counts: dict[tuple, int] = {}
     db_refs_by_name: dict[str, list] = {}  # 职位名 → [岗位]（文件外引用兜底）
     for pn in all_pns:
-        pos_name = pn.position.name if pn.position else ""
-        comp_name = pn.company.name if pn.company else ""
-        key4 = (pos_name, comp_name, scope_raw_value(pn), opening_key(pn.opening_date))
+        key4 = position_anchor_key(pn)
         if key4 in existing_by_key:
             db_dup_keys.add(key4)
             db_dup_counts[key4] = db_dup_counts.get(key4, 1) + 1
         existing_by_key[key4] = pn
-        db_refs_by_name.setdefault(pos_name, []).append(pn)
+        db_refs_by_name.setdefault(key4[0], []).append(pn)
 
     # ---- 编号系列计数器（正式 P / 外包 PA），取库内当前最大序号 +1 起 ----
     seq_counters = {"P": next_sequence(db, "P"), "PA": next_sequence(db, "PA")}
@@ -185,6 +208,12 @@ def import_csv(db, rows, *, strict_legal: bool = True):
         label = source_number or (raw.get("职位") or "").strip() or f"第{report['total']}行"
 
         scope, cname, ccode = parse_scope_country(raw.get("国家或地区"))
+        raw_scope = (raw.get("国家或地区") or "").strip()
+        # issue #148-2：不可识别范围静默降级 Global 无告警 → 补告警（仍按 Global 入库）
+        if (raw_scope and raw_scope not in SCOPE_PARSE
+                and not raw_scope.startswith("Country·") and scope == Scope.GLOBAL):
+            report["warnings"].append(
+                f"{label}: 国家或地区「{raw_scope}」不可识别，按 Global 处理")
         country = None
         if scope == Scope.COUNTRY:
             if not cname or not ccode:
@@ -195,7 +224,6 @@ def import_csv(db, rows, *, strict_legal: bool = True):
                 db.add(countries[cname])
                 db.flush()
             country = countries[cname]
-        scope_raw = (raw.get("国家或地区") or "").strip()
 
         company_name = (raw.get("隶属公司") or "").strip()
         if not company_name:
@@ -229,6 +257,11 @@ def import_csv(db, rows, *, strict_legal: bool = True):
             report["errors"].append(
                 f"{label}: 职位开启日缺失或不可识别（{raw.get('职位开启日')}），该行不导入")
             continue
+        # 关闭日早于开启日 → 报错该行不导入（issue #138，PRD F4 两段共用校验规则）
+        if closing is not None and closing < opening:
+            report["errors"].append(
+                f"{label}: 职位关闭日（{closing}）早于开启日（{opening}），该行不导入")
+            continue
         status = PositionStatus.CLOSED if closing else PositionStatus.OPEN
 
         legal = None
@@ -248,11 +281,22 @@ def import_csv(db, rows, *, strict_legal: bool = True):
                     report["warnings"].append(f"{label}: 未知法律分类「{lc}」")
                     legal = lc  # 仍入库为字符串，允许运行时通过字典扩展
 
-        # 职位类型（Consultant / Employee / External Employee）
+        # 职位类型（Consultant / Employee / External Employee）——issue #148-3：
+        # 此前无字典校验，脏值（如 "In-house Full-time - Employee"）原样入库并
+        # 破坏 number_series 的 PA 分流判定（仅精确匹配 "External Employee"）
         position_type = (raw.get("职位类型") or "").strip() or None
+        if position_type and position_type not in ("Consultant", "Employee", "External Employee"):
+            if strict_legal:
+                report["errors"].append(
+                    f"{label}: 职位类型「{position_type}」不在三类规范值"
+                    f"（Consultant / Employee / External Employee），该行不导入")
+                continue
+            report["warnings"].append(
+                f"{label}: 职位类型「{position_type}」非规范值，原样入库（历史迁移模式）")
 
         # 幂等键（PRD §3.1 v2.3，4 列）：职位名+公司+国家或地区+开启日
-        key = (function_name, company_name, scope_raw or "Global",
+        # 「国家或地区」分量用归一化规范值（issue #148-2，与库侧 scope_raw_value 同构）
+        key = (function_name, company_name, scope_key_raw(scope, cname),
                opening_key(raw.get("职位开启日")))
         if key in seen_keys:
             report["errors"].append(
@@ -306,6 +350,9 @@ def import_csv(db, rows, *, strict_legal: bool = True):
     db.flush()
 
     # ---- 第 2 趟：按 ID 优先、幂等键回退 upsert（新行由系统分配编号，#49）----
+    # issue #133：第 2 趟拒绝的行（_skipped 标记）第 3 趟必须整体跳过——
+    # 此前被拒行仍留在 parsed 中参与汇报关系解析并随 commit 落库，
+    # 「该行不导入」契约被静默突破（双键行的经理会写到其中一个重复编制上）
     file_refs_by_name: dict[str, list] = {}  # 本文件职位名 → [岗位]（同文件经理引用优先）
     for item in parsed:
         key = item["key"]
@@ -318,8 +365,18 @@ def import_csv(db, rows, *, strict_legal: bool = True):
             if pn is None:
                 report["errors"].append(
                     f"{label}: 岗位ID {item['ref_id']} 库内不存在，该行不导入")
+                item["_skipped"] = True
                 continue
             matched_via = "id"
+            # 锚一致性校验前移（issue #137 完整化）：带 ID 认老时先比对四锚字段，
+            # 不一致 → 该行报错不落库。此前 setattr 已把锚字段覆盖、直到第 3 趟才
+            # 补报错——「识别锚请在系统内维护」防护形同虚设（改动已随 commit 生效）。
+            if position_anchor_key(pn) != key:
+                report["errors"].append(
+                    f"{label}: 携带岗位ID={item['ref_id']} 但识别锚（职位/公司/国家或地区/开启日）"
+                    f"与库内不一致，该行不导入——识别锚字段请在系统内维护而非重导 CSV")
+                item["_skipped"] = True
+                continue
         else:
             # #98：库内同幂等键命中多编制 → 无法唯一识别，报错该行不导入（PRD F4：由用户区分）
             if key in db_dup_keys:
@@ -327,6 +384,7 @@ def import_csv(db, rows, *, strict_legal: bool = True):
                     f"{label}: 库内存在 {db_dup_counts[key]} 个同幂等键岗位"
                     f"（职位+公司+国家或地区+开启日），无法唯一识别，该行不导入——"
                     f"请先在系统内处理重复编制")
+                item["_skipped"] = True
                 continue
             pn = existing_by_key.get(key)
             matched_via = "key" if pn is not None else None
@@ -360,7 +418,7 @@ def import_csv(db, rows, *, strict_legal: bool = True):
 
     db.flush()
 
-    def _resolve_ref(name: str, exclude_id=None):
+    def _resolve_ref(name: str):
         """按职位名解析引用岗位：本文件优先（首个命中），否则库内兜底。同名多个告警。"""
         candidates = file_refs_by_name.get(name) or db_refs_by_name.get(name) or []
         if len(candidates) > 1:
@@ -369,11 +427,12 @@ def import_csv(db, rows, *, strict_legal: bool = True):
 
     # ---- 第 3 趟：解析直线/虚线经理、之前的职位/公司（按职位名）----
     for item in parsed:
+        if item.get("_skipped"):
+            continue  # issue #133：第 2 趟已拒绝的行不参与任何关系落库
         pn = existing_by_key.get(item["key"])
         if pn is None:
-            # 带 ID 认老但识别锚（职位/公司/国家/开启日）与库内派生键不一致——
-            # 违反 PRD F4「识别锚落库后在系统内维护，不在导入阶段改动」；
-            # 此前直接 existing_by_key[key] 会 KeyError → 500（#116）
+            # 带 ID 认老但识别锚与库内不一致——锚一致性已在第 2 趟前移校验（#137），
+            # 此分支仅为兜底（不应触达）
             report["errors"].append(
                 f"{item['label']}: 携带岗位ID={item['ref_id']} 但识别锚与库内不一致，"
                 f"该行汇报关系未解析——识别锚字段请在系统内维护而非重导 CSV")
@@ -381,7 +440,10 @@ def import_csv(db, rows, *, strict_legal: bool = True):
         solid, dotted, prev_refs = item["solid_refs"], item["dotted_refs"], item["prev_refs"]
 
         if solid:
-            m = _resolve_ref(solid[0], exclude_id=pn.id)
+            if len(solid) > 1:
+                report["warnings"].append(
+                    f"{item['label']}: 直线经理列含 {len(solid)} 个值（直线经理唯一），仅采用首个「{solid[0]}」")
+            m = _resolve_ref(solid[0])
             if m is None:
                 report["warnings"].append(f"{item['label']}: 直线经理「{solid[0]}」不存在")
             elif m.id == pn.id:
@@ -394,7 +456,7 @@ def import_csv(db, rows, *, strict_legal: bool = True):
         ).delete()
         seen_dotted = set()
         for ref in dotted:
-            m = _resolve_ref(ref, exclude_id=pn.id)
+            m = _resolve_ref(ref)
             if m is None:
                 report["warnings"].append(f"{item['label']}: 虚线经理「{ref}」不存在")
             elif m.id == pn.id:
@@ -407,7 +469,9 @@ def import_csv(db, rows, *, strict_legal: bool = True):
 
         if prev_refs:
             m = _resolve_ref(prev_refs[0])
-            if m:
+            if m and m.id == pn.id:
+                report["warnings"].append(f"{item['label']}: 之前的职位为自身，跳过")
+            elif m:
                 pn.prev_position_id = m.id
 
         if item["prev_company_name"]:
