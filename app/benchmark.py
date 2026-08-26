@@ -8,7 +8,8 @@
 
 注：原「基准包推送 + 报告计算」链路已整体退役——计算权移交第三方，
 我方仅提供岗位数据（见 routers/master_data.py::public_positions）；
-months_factor 保留供将来内部报表复用。
+months_factor 月折算助手随 R2 一并移除（折算依据 = 开启/关闭日原始值，
+由第三方自行折算，issue #149 清理死代码）。
 """
 from datetime import date
 
@@ -33,14 +34,3 @@ def active_positions_in_year(db: Session, year: int) -> list[PositionNumber]:
         )
         .all()
     )
-
-
-def months_factor(pn: PositionNumber, year: int) -> float:
-    """年内自然月数(含首尾)/12；opening/closing 截断到年界。（预留：内部报表用）"""
-    ys, ye = year_bounds(year)
-    start: date = max(pn.opening_date or ys, ys)
-    end: date = min(pn.closing_date or ye, ye)
-    if end < start:
-        return 0.0
-    months = (end.year - start.year) * 12 + (end.month - start.month) + 1
-    return min(months, 12) / 12.0

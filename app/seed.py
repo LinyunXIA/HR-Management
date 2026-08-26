@@ -205,11 +205,16 @@ def seed_master_data(db: Session):
         for i, name in enumerate(POSITION_TYPES):
             if name not in existing:
                 db.add(PositionType(name=name, sort_order=len(existing) + i))
-    # 国家/地区九项（issue #110，PRD F0「按 §3.2 九国初始化」；幂等补齐缺失项）
-    existing_countries = {r[0] for r in db.query(Country.name).all()}
+    # 国家/地区九项（issue #110，PRD F0「按 §3.2 九国初始化」；幂等补齐缺失项；
+    # issue #149：同名存量项 code 漂移时校正，不再静默跳过）
     for name, code in COUNTRIES:
-        if name not in existing_countries:
+        ex = db.query(Country).filter(Country.name == name).first()
+        if ex is None:
             db.add(Country(name=name, code=code))
+        elif (ex.code or "") != code:
+            print(f"[seed] 国家「{name}」code 漂移：{ex.code!r} → 校正为 {code!r}",
+                  file=sys.stderr)
+            ex.code = code
     # 管理员种子（JWT，PRD §7B）
     _seed_admin(db)
     db.commit()

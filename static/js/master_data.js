@@ -63,6 +63,11 @@ const MasterData = {
 
   kind() { return this.KINDS.find((k) => k.key === this.current); },
 
+  /* issue #144：主数据为 admin 维护（#95，PRD §7B.3），hr 只读视图不渲染写入口 */
+  isAdmin() {
+    return !!(window.Auth && Auth.user && Auth.user.role === 'admin');
+  },
+
   /* ---------------- 隶属公司（v2.4：开业/关闭日期 + 股权结构三来源） ---------------- */
   _shSource(sh) {
     if (sh.internal_company_id) return { type: 'internal', label: sh.internal_company_name };
@@ -88,7 +93,7 @@ const MasterData = {
         <b>隶属公司</b>
         <span class="hint">v2.4：开业/关闭日期 + 股权结构（内部公司 / 外部合作公司 / 自然人，比例合计≠100% 仅告警不拦截）</span>
         <span class="grow"></span>
-        <button class="btn primary" id="co-new">＋ 新增</button>
+        ${this.isAdmin() ? '<button class="btn primary" id="co-new">＋ 新增</button>' : '<span class="hint">只读（主数据仅 admin 可维护，#95）</span>'}
       </div>
       <div style="margin-top:10px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
         <table><thead><tr><th>名称</th><th>开业日期</th><th>关闭日期</th><th>股权结构</th><th>状态</th><th></th></tr></thead>
@@ -100,12 +105,13 @@ const MasterData = {
             <td>${this._shSummary(c.shareholders)}</td>
             <td>${c.is_active ? '<span class="badge open">启用</span>' : '<span class="badge closed">停用/关闭</span>'}</td>
             <td>
-              <button class="btn small" data-edit="${c.id}">编辑</button>
-              <button class="btn small danger" data-del="${c.id}">删除</button>
+              ${this.isAdmin() ? `<button class="btn small" data-edit="${c.id}">编辑</button>
+              <button class="btn small danger" data-del="${c.id}">删除</button>` : ''}
             </td>
           </tr>`).join('') : '<tr><td colspan="6" class="empty">暂无数据</td></tr>'}</tbody></table>
       </div>`;
-    panel.querySelector('#co-new').onclick = () => this.openCompanyForm(null);
+    const coNew = panel.querySelector('#co-new');
+    if (coNew) coNew.onclick = () => this.openCompanyForm(null);
     panel.querySelectorAll('[data-edit]').forEach((b) => b.onclick = () =>
       this.openCompanyForm(items.find((i) => i.id === +b.dataset.edit)));
     panel.querySelectorAll('[data-del]').forEach((b) => b.onclick = () => this.delCompany(+b.dataset.del, items));
@@ -285,7 +291,7 @@ const MasterData = {
         <b>外部合作公司</b>
         <span class="hint">不在系统内设岗、仅作股权等关系引用的外部法人实体；启停由「关闭日期」管理</span>
         <span class="grow"></span>
-        <button class="btn primary" id="ext-new">＋ 新增</button>
+        ${this.isAdmin() ? '<button class="btn primary" id="ext-new">＋ 新增</button>' : '<span class="hint">只读（仅 admin 可维护）</span>'}
       </div>
       <div style="margin-top:10px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
         <table><thead><tr><th>名称</th><th>备注</th><th>开业日期</th><th>关闭日期</th><th>状态</th><th></th></tr></thead>
@@ -297,12 +303,13 @@ const MasterData = {
             <td>${fmtDate(c.closing_date)}</td>
             <td>${c.is_active ? '<span class="badge open">启用</span>' : '<span class="badge closed">停用/关闭</span>'}</td>
             <td>
-              <button class="btn small" data-edit="${c.id}">编辑</button>
-              <button class="btn small danger" data-del="${c.id}">删除</button>
+              ${this.isAdmin() ? `<button class="btn small" data-edit="${c.id}">编辑</button>
+              <button class="btn small danger" data-del="${c.id}">删除</button>` : ''}
             </td>
           </tr>`).join('') : '<tr><td colspan="6" class="empty">暂无数据</td></tr>'}</tbody></table>
       </div>`;
-    panel.querySelector('#ext-new').onclick = () => this.openExternalForm(null);
+    const extNew = panel.querySelector('#ext-new');
+    if (extNew) extNew.onclick = () => this.openExternalForm(null);
     panel.querySelectorAll('[data-edit]').forEach((b) => b.onclick = () =>
       this.openExternalForm(items.find((i) => i.id === +b.dataset.edit)));
     panel.querySelectorAll('[data-del]').forEach((b) => b.onclick = () => this.delExternal(+b.dataset.del, items));
@@ -350,13 +357,14 @@ const MasterData = {
     panel.innerHTML = `
       <div class="toolbar" style="border:1px solid var(--border);border-radius:8px">
         <b>${kind.label}</b><span class="grow"></span>
-        <button class="btn primary" id="md-new">＋ 新增</button>
+        ${this.isAdmin() ? '<button class="btn primary" id="md-new">＋ 新增</button>' : '<span class="hint">只读（仅 admin 可维护）</span>'}
       </div>
       <div style="margin-top:10px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
         <table><thead><tr>${kind.columns.map((c) => `<th>${c.label}</th>`).join('')}<th></th></tr></thead>
         <tbody>${items.length ? items.map((it) => this.row(it, kind)).join('') : '<tr><td colspan="99" class="empty">暂无数据</td></tr>'}</tbody></table>
       </div>`;
-    panel.querySelector('#md-new').onclick = () => this.openForm(kind, null);
+    const mdNew = panel.querySelector('#md-new');
+    if (mdNew) mdNew.onclick = () => this.openForm(kind, null);
     panel.querySelectorAll('[data-edit]').forEach((b) => b.onclick = () => this.openForm(kind, items.find((i) => i.id === +b.dataset.edit)));
     panel.querySelectorAll('[data-del]').forEach((b) => b.onclick = () => this.del(kind, +b.dataset.del));
   },
@@ -364,8 +372,8 @@ const MasterData = {
   row(it, kind) {
     return `<tr>
       ${kind.columns.map((c) => `<td>${c.type === 'bool' ? (it[c.k] ? '✔' : '—') : esc(it[c.k] ?? '—')}</td>`).join('')}
-      <td><button class="btn small" data-edit="${it.id}">编辑</button>
-          <button class="btn small danger" data-del="${it.id}">删除</button></td></tr>`;
+      <td>${this.isAdmin() ? `<button class="btn small" data-edit="${it.id}">编辑</button>
+          <button class="btn small danger" data-del="${it.id}">删除</button>` : ''}</td></tr>`;
   },
 
   openForm(kind, item) {
@@ -413,7 +421,7 @@ const MasterData = {
         <b>税区与用工税额</b>
         <span class="hint">税率挂载点：国家级 或 城市级；某国一旦按城市分拆，未配置的城市无兜底 → 成本显示「未配置」</span>
         <span class="grow"></span>
-        <button class="btn primary" id="zone-new">＋ 新增税区</button>
+        ${this.isAdmin() ? '<button class="btn primary" id="zone-new">＋ 新增税区</button>' : '<span class="hint">只读（仅 admin 可维护）</span>'}
       </div>
       <div style="margin-top:10px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
         <table><thead><tr><th>挂载级别</th><th>国家/地区</th><th>城市</th><th>科目数</th><th>合计税率 %</th><th></th></tr></thead>
@@ -425,12 +433,13 @@ const MasterData = {
             <td class="num">${(z.items || []).length}</td>
             <td class="num">${(z.items || []).filter((i) => i.is_active).reduce((s, i) => s + i.tax_rate, 0).toFixed(2)}</td>
             <td>
-              <button class="btn small" data-zitems="${z.id}">管理科目</button>
-              <button class="btn small danger" data-zdel="${z.id}">删除</button>
+              ${this.isAdmin() ? `<button class="btn small" data-zitems="${z.id}">管理科目</button>
+              <button class="btn small danger" data-zdel="${z.id}">删除</button>` : ''}
             </td>
           </tr>`).join('') : '<tr><td colspan="6" class="empty">暂无税区。自动计算成本前请先配置税区与税务科目。</td></tr>'}</tbody></table>
       </div>`;
-    panel.querySelector('#zone-new').onclick = () => this.openZoneForm(null);
+    const zoneNew = panel.querySelector('#zone-new');
+    if (zoneNew) zoneNew.onclick = () => this.openZoneForm(null);
     panel.querySelectorAll('[data-zitems]').forEach((b) => b.onclick = () =>
       this.openZoneItems(zones.find((z) => z.id === +b.dataset.zitems)));
     panel.querySelectorAll('[data-zdel]').forEach((b) => b.onclick = () => this.delZone(+b.dataset.zdel));

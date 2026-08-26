@@ -43,6 +43,12 @@ const App = {
     document.querySelectorAll('nav button').forEach((btn) => {
       btn.addEventListener('click', () => this.show(btn.dataset.tab));
     });
+    // issue #150：监听 hashchange——浏览器前进/后退、手改 URL hash 时同步切 Tab
+    window.addEventListener('hashchange', () => {
+      const tab = (location.hash || '').replace('#', '') || 'positions';
+      const cur = document.querySelector('nav button.active');
+      if (!cur || cur.dataset.tab !== tab) this.show(tab);
+    });
     const tab = (location.hash || '').replace('#', '') || 'positions';
     this.show(tab);
   },
@@ -98,10 +104,7 @@ const App = {
       }
     }
     // 已登录，继续初始化
-    const navUsers = document.getElementById('nav-users');
-    if (navUsers && window.Auth && Auth.user && Auth.user.role === 'admin') {
-      navUsers.style.display = '';
-    }
+    if (window.Auth) Auth.syncNavByRole();
     try { await this.loadDicts(); } catch (e) { toast('初始化字典失败：' + e.message); }
     this.init();
     this.loadStats();

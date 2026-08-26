@@ -7,11 +7,14 @@ from app import lifecycle
 from app.auth import get_current_user
 from app.db import get_db
 from app.helpers import (
+    ALL_COMPANIES,
     assert_can_write_company,
     assert_version,
+    can_view_incumbent_costs,
     check_cycle,
     dotted_ids,
     generate_number,
+    get_operable_company_ids,
     get_or_404,
     resolve_position,
     serialize_position,
@@ -46,11 +49,54 @@ router = APIRouter(prefix="/api/v1", tags=["positions"])
 
 
 def _assert_management(db: Session, mgr: PositionNumber, role: str):
-    """直线/虚线经理必须是管理岗（级别 M 开头）。"""
+    """直线/虚线经理必须是管理岗（级别 M 开头）。
+
+    状态码口径（issue #139 裁决）：遵循 DESIGN §11.8 统一返回 422。
+    """
     if not mgr.level or not mgr.level.upper().startswith("M"):
         raise HTTPException(
-            400, f"{role}必须是管理岗（级别以 M 开头），岗位 {mgr.number}（级别 {mgr.level or '未设置'}）不可作为经理"
+            422, f"{role}必须是管理岗（级别以 M 开头），岗位 {mgr.number}（级别 {mgr.level or '未设置'}）不可作为经理"
         )
+
+
+def _serialize_for(db: Session, user, pn: PositionNumber) -> dict:
+    """按操作者可管实体序列化岗位（issue #131：跨司在职员工实际成本脱敏贯通）。
+
+    admin 全量明文；hr 对非可管实体的 Filled 岗位仅见在职员工姓名。
+    """
+    return serialize_position(db, pn,
+                              hide_incumbent_costs=not can_view_incumbent_costs(db, user, pn.company_id))
+
+
+def _enforce_auto_derived(db: Session, pn: PositionNumber, payload, flipped: bool):
+    """auto 模式派生三栏落库规则（issue #141，PRD F1.6「互斥只能启用一种」）。
+
+    最终模式为 AUTO 时，被请求触及（或模式翻转时的存量）派生三栏必须与引擎
+    计算值一致（Δ≤0.05，浮点容差）才允许保留，否则置 None——手填残留值以
+    auto 标签落库的四不像数据在服务端被强制清除；「重算」保存路径提交的
+    引擎产物原样通过。公司未绑税区 / 税区未配置 / 薪资缺失 → 一律 None。
+    """
+    from app.helpers import calc_cost_by_zone
+    three = ("mandatory_tax", "mandatory_fixed_fee", "labor_cost")
+    zone = pn.company.tax_zone if pn.company else None
+    if pn.salary_before_tax is None:
+        expected = {k: None for k in three}
+    else:
+        r = calc_cost_by_zone(db, zone, pn.salary_before_tax,
+                              fixed_bonus=pn.fixed_bonus or 0,
+                              floating_bonus=pn.floating_bonus or 0)
+        expected = ({k: None for k in three} if not r.get("configured")
+                    else {"mandatory_tax": r["mandatory_tax"],
+                          "mandatory_fixed_fee": r["mandatory_fixed_fee"],
+                          "labor_cost": r["labor_cost"]})
+    for f in three:
+        touched = getattr(payload, f) is not None
+        if not (touched or flipped):
+            continue
+        eff = getattr(payload, f) if touched else getattr(pn, f)
+        exp = expected[f]
+        setattr(pn, f, (eff if (eff is not None and exp is not None
+                                and abs(float(eff) - float(exp)) <= 0.05) else None))
 
 
 def _assert_level(db: Session, level: str | None):
@@ -118,7 +164,7 @@ def list_positions(
         .all()
     )
     return {"total": total, "page": page, "page_size": page_size,
-            "items": [serialize_position(db, pn) for pn in items]}
+            "items": [_serialize_for(db, _user, pn) for pn in items]}
 
 
 @router.post("/positions", status_code=201)
@@ -181,6 +227,10 @@ def create_position(payload: PositionNumberCreate, response: Response,
         floating_bonus=payload.floating_bonus,
         labor_cost=payload.labor_cost,
     )
+    # 成本模式互斥服务端兜底（issue #141）：新建即 auto 时派生三栏须与引擎一致
+    # （手填值不匹配即清空），须经「重算」路径落库引擎产物
+    if pn.cost_mode == CostMode.AUTO:
+        _enforce_auto_derived(db, pn, payload, flipped=True)
     db.add(pn)
     db.flush()
     if payload.solid_line_manager_id:
@@ -194,7 +244,7 @@ def create_position(payload: PositionNumberCreate, response: Response,
                          to_status=PositionStatus.PLANNED.value, note="岗位建档"))
     db.commit()
     response.headers["Location"] = f"/api/v1/positions/{pn.id}"
-    return serialize_position(db, pn)
+    return _serialize_for(db, user, pn)
 
 
 @router.get("/positions/{pid}")
@@ -206,7 +256,7 @@ def get_position(pid: int, _user=Depends(get_current_user), db: Session = Depend
         .order_by(PositionEvent.changed_at.desc(), PositionEvent.id.desc())
         .all()
     )
-    data = serialize_position(db, pn)
+    data = _serialize_for(db, _user, pn)
     data["events"] = [
         {
             "id": e.id, "from_status": e.from_status, "to_status": e.to_status,
@@ -230,6 +280,14 @@ def update_position(pid: int, payload: PositionNumberUpdate,
     )
     if cost_fields_touched:
         assert_can_write_company(db, user, pn.company_id, label="该岗位的成本字段")
+    # 职能改名（issue #143）：Update 支持 position_name —— 匹配现有职能或自动新建
+    # （与 CSV 导入/创建路径同口径）；此前前端发送的 position_name 被 schema 静默忽略，
+    # 全新职能名解析为 null 直接跳过，改名静默失效。
+    if "position_name" in payload.model_fields_set:
+        new_name = (payload.position_name or "").strip()
+        if new_name:
+            pos = resolve_position(db, None, new_name)
+            pn.position_id = pos.id
     if payload.position_id is not None:
         pn.position_id = payload.position_id
     if payload.company_id is not None:
@@ -279,11 +337,17 @@ def update_position(pid: int, payload: PositionNumberUpdate,
         if incumbent and (pn.position_type or "").strip() in ATTACH_TYPE_MAP:
             _assert_type_match(pn, incumbent.employee_type)
 
+    old_cost_mode = pn.cost_mode
     for field in ("cost_mode", "salary_before_tax", "mandatory_tax",
                   "mandatory_fixed_fee", "fixed_bonus", "floating_bonus", "labor_cost"):
         val = getattr(payload, field)
         if val is not None:
             setattr(pn, field, val)
+
+    # 成本模式互斥服务端兜底（issue #141，PRD F1.6「只能启用一种」）：
+    # 最终模式为 AUTO 时派生三栏须与引擎计算一致（重算路径原样通过、手填残留清空）
+    if pn.cost_mode == CostMode.AUTO:
+        _enforce_auto_derived(db, pn, payload, flipped=old_cost_mode != CostMode.AUTO)
 
     if "solid_line_manager_id" in payload.model_fields_set:
         if payload.solid_line_manager_id:
@@ -310,7 +374,7 @@ def update_position(pid: int, payload: PositionNumberUpdate,
 
     pn.version = (pn.version or 1) + 1
     db.commit()
-    return serialize_position(db, pn)
+    return _serialize_for(db, user, pn)
 
 
 @router.post("/positions/{pid}/transitions", status_code=201)

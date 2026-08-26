@@ -27,9 +27,11 @@ const Employees = {
     const isAuto = modal.querySelector('input[name="emp-costmode"]:checked').value === 'auto';
     const hint = modal.querySelector('#emp-costhint');
     const recalcBtn = modal.querySelector('#emp-calccost');
+    // issue #142：auto 仅禁派生三栏（强制扣税/定额扣费/用工成本），
+    // 税前与奖金两栏是自动模式的输入项，与岗位页（positions.js）口径一致
     this.EMP_COST_FIELDS.forEach((sel, i) => {
       const el = modal.querySelector(sel);
-      if (el) el.disabled = isAuto && i > 0; // auto：仅税前可编辑
+      if (el) el.disabled = isAuto && [1, 2, 5].includes(i);
     });
     hint.textContent = isAuto
       ? '自动模式：强制扣税 = 税前 × Σ(公司所绑税区 rate 科目税率%)；定额扣费 = Σ(fixed 科目)；奖金两栏仍可手填并计入用工成本；点「重算」按公司税区计算。未绑定税区将提示「未配置」。'
@@ -119,8 +121,8 @@ const Employees = {
   async openClaim(t) {
     if (!t) return;
     // 空闲目标岗：Open/Vacant/Offered/Planned 且无占用（PRD F1.5b）
-    const r = await get(`/positions?company_id=${t.target_company_id}&page_size=500`);
-    const available = r.items.filter((p) =>
+    const all = await this.allPositions((p) => p.company_id === t.target_company_id);
+    const available = all.filter((p) =>
       ['open', 'vacant', 'offered', 'planned'].includes(p.status) && !p.incumbent_id);
     const modal = openModal(`
       <header><h2>认领转调 · ${esc(t.employee_name || '')}</h2><button class="btn small" onclick="closeModal()">✕</button></header>
@@ -174,8 +176,21 @@ const Employees = {
   },
 
   async attachablePositions() {
-    const r = await get('/positions?page_size=500');
-    return r.items.filter((p) => ['open', 'vacant', 'offered'].includes(p.status));
+    return this.allPositions((p) => ['open', 'vacant', 'offered'].includes(p.status));
+  },
+
+  /* issue #150：分页拉全量岗位（此前 page_size=500 硬编码，超 500 岗静默截断） */
+  async allPositions(filterFn) {
+    const out = [];
+    let page = 1, total = Infinity;
+    while ((page - 1) * 500 < total && page <= 20) {
+      const r = await get(`/positions?page=${page}&page_size=500`);
+      total = r.total;
+      out.push(...r.items);
+      if (r.items.length < 500) break;
+      page++;
+    }
+    return filterFn ? out.filter(filterFn) : out;
   },
 
   posOptions() {
@@ -362,8 +377,10 @@ const Employees = {
           <div class="field"><label>性别</label><select id="ee-gender">${['男', '女', '其他'].map((g) => `<option ${g === e.gender ? 'selected' : ''}>${g}</option>`).join('')}</select></div>
           <div class="field"><label>员工类型</label><select id="ee-type">${['正式', '实习', '外包', '劳务'].map((t) => `<option ${t === e.employee_type ? 'selected' : ''}>${t}</option>`).join('')}</select>
             <div class="hint">挂岗员工的类型须与岗位编制匹配（正式/实习/劳务→Employee，外包→External Employee）</div></div>
-          <div class="field"><label>在职状态 *</label><select id="ee-status">${['试用期', '在职', '休假', '转调中', '离职'].map((s) => `<option ${s === e.employment_status ? 'selected' : ''}>${s}</option>`).join('')}</select>
-            <div class="hint">选「离职」将解绑岗位并转空缺</div></div>
+          <div class="field"><label>在职状态 *</label><select id="ee-status">${['试用期', '在职', '休假', '离职']
+            .concat(e.employment_status === '转调中' ? ['转调中'] : [])
+            .map((s) => `<option ${s === e.employment_status ? 'selected' : ''}>${s}</option>`).join('')}</select>
+            <div class="hint">选「离职」将解绑岗位并转空缺${e.employment_status === '转调中' ? '；「转调中」仅可认领/退回或办理离职' : ''}</div></div>
           <div class="field"><label>入职日期</label><input type="date" id="ee-hire" value="${fmtDate(e.hire_date)}"></div>
           <div class="field"><label>出生日期</label><input type="date" id="ee-birth" value="${fmtDate(e.birth_date)}"></div>
           <div class="field"><label>手机</label><input type="text" id="ee-phone" value="${esc(e.phone || '')}"></div>
@@ -426,10 +443,40 @@ const Employees = {
     };
   },
 
+  /* 普通调岗（issue #134：此前按钮绑定未定义的 openTransfer 抛 TypeError，
+     POST /transfers 在前端完全无入口）。虚拟建档员工经此首次挂编。 */
+  async openTransfer(e) {
+    const all = await this.allPositions();
+    const available = all.filter(p =>
+      ['open', 'vacant', 'offered'].includes(p.status) &&
+      p.id !== e.position_number_id &&
+      !p.incumbent_id
+    );
+    if (!available.length) { toast('无可用的空闲岗位用于调岗'); return; }
+    const modal = openModal(`
+      <header><h2>调岗 · ${esc(e.name)}</h2><button class="btn small" onclick="closeModal()">✕</button></header>
+      <div class="body">
+        <div class="hint" style="margin-bottom:12px">${e.position_number ? '原岗位将转 Vacant，新岗位转 Filled。' : '该员工为虚拟建档（未挂岗），本次调岗即首次挂编。'}</div>
+        <div class="field"><label>目标岗位 *（仅 Open/Vacant/Offered 空闲编制）</label>
+          <select id="tr-pos">${available.map(p => `<option value="${p.id}">${esc(p.number)} ${esc(p.position_name)} · ${esc(p.company_name || '')} · ${STATUS_LABEL[p.status]}</option>`).join('')}</select>
+        </div>
+      </div>
+      <footer><button class="btn" onclick="closeModal()">取消</button><button class="btn primary" id="tr-save">确认调岗</button></footer>`);
+    modal.querySelector('#tr-save').onclick = async () => {
+      if (!val('#tr-pos')) { toast('请选择目标岗位'); return; }
+      try {
+        await post('/transfers', { employee_id: e.id, to_position_id: +val('#tr-pos') });
+        const targetNo = available.find(p => p.id === +val('#tr-pos'));
+        closeModal(); toast(`调岗完成：${e.name} 入编${targetNo ? ' ' + targetNo.number : ' 新岗'}`, 'ok');
+        this.render(); App.loadStats();
+      } catch (err) { toast(err.message); }
+    };
+  },
+
   async openPromote(e) {
-    const positions = await get('/positions?page_size=500');
+    const positions = await this.allPositions();
     // 只显示 Open/Vacant/Offered/Planned 且非当前岗位的空闲编制
-    const available = positions.items.filter(p =>
+    const available = positions.filter(p =>
       ['open', 'vacant', 'offered', 'planned'].includes(p.status) &&
       p.id !== e.position_number_id &&
       !p.incumbent_id

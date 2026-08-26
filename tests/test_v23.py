@@ -281,21 +281,168 @@ def main():
     th2 = threading.Thread(target=racer, args=(admin,))
     th1.start(); th2.start(); th1.join(); th2.join()
     wins = sum(1 for c in results if c == 200)
-    check(wins <= 1, f"同一目标岗仅一次认领成功（结果={results}）")
-    _, race_emp = req("GET", f"/employees/{e2['id']}")
-    occupied = db_single(race_pn["id"]) if False else None
-    # 校验岗位占用唯一性
+    check(wins == 1, f"同一目标岗仅一次认领成功（结果={results}）")
+    # issue #151：原「无一人双岗」断言由单条员工记录构造（恒真）→ 改为
+    # 岗位 incumbent 与员工实际挂岗双向核验，真正锁定占用唯一性
     _, race_pn_after = req("GET", f"/positions/{race_pn['id']}")
-    occupants = [race_emp["position_number_id"]] if race_emp["position_number_id"] == race_pn["id"] else []
-    check(len(occupants) <= 1, "岗位至多一人占用（无一人双岗脏窗口）")
+    check(race_pn_after.get("incumbent_id") == e2["id"],
+          f"目标岗 incumbent = 胜者（{race_pn_after.get('incumbent_id')}）")
+    _, race_emp = req("GET", f"/employees/{e2['id']}")
+    check(race_emp["position_number_id"] == race_pn["id"],
+          "认领员工挂在新岗上（岗位↔员工双向一致，无一人双岗脏窗口）")
+
+    # ---------- 第二轮审计回归（issue #131~#152） ----------
+    section("审计回归：状态机 422 / 环检测 / 管理岗 / 员工乐观锁")
+    planned_pn = mk_pos(f"审计规划岗{suffix}", comp_a["id"])  # POST 创建即为 planned
+    code, _b = req("POST", f"/positions/{planned_pn['id']}/transitions",
+                   {"to_status": "filled"}, token=admin)
+    check(code == 422, f"planned→filled 非法流转被 422（{code}）")
+    _, levels_all = req("GET", "/levels")
+    m_level = next((l["code"] for l in levels_all if l["is_management"]), None)
+
+    def mk_mgr(name, cid):
+        code_, p_ = req("POST", "/positions", {
+            "position_name": name, "company_id": cid, "level": m_level,
+            "scope": "global", "opening_date": "2026-01-01"}, token=admin)
+        return p_ if code_ == 201 else None
+
+    cyc_a, cyc_b = mk_mgr(f"环测A{suffix}", comp_a["id"]), mk_mgr(f"环测B{suffix}", comp_a["id"])
+    req("PATCH", f"/positions/{cyc_b['id']}",
+        {"version": cyc_b["version"], "solid_line_manager_id": cyc_a["id"]},
+        token=admin, expect=200)
+    code, _b = req("PATCH", f"/positions/{cyc_a['id']}",
+                   {"version": cyc_a["version"], "solid_line_manager_id": cyc_b["id"]}, token=admin)
+    check(code == 422, f"直线成环 A→B→A 被 422（#139 裁决，{code}）")
+    _, cyc_a_now = req("GET", f"/positions/{cyc_a['id']}")
+    code, _b = req("PATCH", f"/positions/{cyc_a['id']}",
+                   {"version": cyc_a_now["version"], "solid_line_manager_id": src_pn["id"]}, token=admin)
+    check(code == 422, f"B 级岗位任直线经理被 422（#139 裁决，{code}）")
+
+    section("审计回归：员工乐观锁缺失/冲突 + 成本 auto/manual 服务端互斥")
+    code, _b = req("PATCH", f"/employees/{emp['id']}", {"name": "缺版本"})
+    check(code == 422, f"员工 PATCH 缺 version 被 422（#112，{code}）")
+    code, _b = req("PATCH", f"/employees/{emp['id']}", {"name": "旧版本", "version": 999999})
+    check(code == 409, f"员工 PATCH 过期 version 被 409（{code}）")
+    _, tgt2_now = req("GET", f"/positions/{tgt_pn2['id']}")
+    code, pa = req("PATCH", f"/positions/{tgt_pn2['id']}",
+                   {"version": tgt2_now["version"], "cost_mode": "auto",
+                    "salary_before_tax": 100000, "mandatory_tax": 99999,
+                    "fixed_bonus": 1000, "floating_bonus": 2000}, token=admin)
+    check(code == 200 and pa["cost_mode"] == "auto" and pa["mandatory_tax"] is None
+          and pa["mandatory_fixed_fee"] is None and pa["labor_cost"] is None
+          and pa["fixed_bonus"] == 1000,
+          "manual→auto 切换清空手填派生三栏、奖金输入项保留（#141）")
+
+    section("审计回归：虚拟建档首次挂编留痕 / promote 拦截 / 跨司脱敏贯通")
+    code, vemp = req("POST", "/employees", {
+        "employee_no": f"T{suffix}V", "name": "虚拟建档工", "gender": "男",
+        "employee_type": "外包", "employment_status": "在职"}, token=admin)
+    check(code == 201 and vemp.get("position_number_id") is None, "外包虚拟建档成功（无岗）")
+    code, _b = req("POST", f"/employees/{vemp['id']}/promote",
+                   {"to_position_id": race_pn["id"], "timing": "immediate"}, token=admin)
+    check(code == 400, f"虚拟建档 promote 被 400 引导先挂编（#140，{code}）")
+    code, pa_pos = req("POST", "/positions", {
+        "position_name": f"外包岗{suffix}", "company_id": comp_a["id"], "level": "B7a",
+        "scope": "global", "position_type": "External Employee",
+        "opening_date": "2026-01-01"}, token=admin)
+    check(code == 201 and pa_pos["number"].startswith("PA"), f"外包岗分配 PA 编号（{pa_pos.get('number')}）")
+    req("POST", f"/positions/{pa_pos['id']}/transitions", {"to_status": "open"},
+        token=admin, expect=201)
+    code, tr3 = req("POST", "/transfers",
+                    {"employee_id": vemp["id"], "to_position_id": pa_pos["id"]}, token=admin)
+    check(code == 201 and tr3.get("position_number_id") == pa_pos["id"],
+          "虚拟建档经 POST /transfers 首次挂编成功（#140）")
+    _, trs3 = req("GET", f"/transfers?employeeId={vemp['id']}")
+    rec3 = next((t for t in trs3["items"] if t.get("kind") == "transfer"), None)
+    check(rec3 is not None and rec3.get("to_position_id") == pa_pos["id"],
+          "首次挂编写入 kind=transfer 结构化留痕（#140/#113 同口径）")
+    # hr（仅可管 A 公司）经岗位接口读 B 公司 Filled 岗位 → actual_* 置 null、姓名保留（#131）
+    _, pos_b_view = req("GET", f"/positions/{tgt_pn2['id']}", token=hr)
+    check(bool(pos_b_view.get("incumbent_name")), "hr 跨司可见在职员工姓名（只读例外保留）")
+    check(pos_b_view.get("actual_salary_before_tax") is None
+          and pos_b_view.get("actual_labor_cost") is None,
+          "hr 经岗位接口不可见他司实际成本六栏（#131 serialize_position 脱敏贯通）")
+    code, _b = req("GET", f"/employees/{emp['id']}/cost-calculation?salary_before_tax=50000", token=hr)
+    check(code == 403, f"hr 测算他司员工实际成本被 403（#132 第二旁路封堵，{code}）")
+    _, pos_admin_view = req("GET", f"/positions/{tgt_pn2['id']}", token=admin)
+    check(pos_admin_view.get("actual_salary_before_tax") is not None,
+          "admin 岗位接口实际成本明文不受影响（对照）")
+
+    section("审计回归：CSV 导入契约（关开日/锚前移/拒绝集/scope 归一化/职能改名/item_kind）")
+
+    def upload_csv(csv_text):
+        boundary = "----auditb" + suffix.__str__()
+        payload = (
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audit.csv\"\r\n"
+            f"Content-Type: text/csv\r\n\r\n{csv_text}\r\n--{boundary}--\r\n").encode()
+        rq = urllib.request.Request(BASE + "/imports", data=payload, method="POST")
+        rq.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+        rq.add_header("Authorization", f"Bearer {admin}")
+        try:
+            with urllib.request.urlopen(rq) as resp:
+                return resp.status, json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read() or b"null")
+
+    HDRS = ("职位,职位类型,岗位编号,隶属公司,级别,国家或地区,职位开启日,职位关闭日,"
+            "工作地点,工作职责描述,直线经理,虚线经理,法律强制/可选,Org-Chart中的显示,"
+            "之前的职位,之前的公司,备注,岗位ID\n")
+
+    def csv_row(name, opening, *, company=f"审计公司{{s}}", closing="", wl="",
+                solid="", pid=""):
+        """按列序安全构造 CSV 行（避免手工逗号错位：法律分类留空以过 strict）。"""
+        cols = [name, "Employee", "", company.format(s=suffix), "B7a", "Global",
+                opening, closing, wl, "", solid, "", "", "N/A", "N/A", "", "", pid]
+        return ",".join(cols) + "\n"
+
+    code, rep1 = upload_csv(HDRS + csv_row(f"审计锚基岗{suffix}", "2031-01-01", wl="比利时布鲁塞尔"))
+    ok1 = code == 201 and rep1["imported"] == 1 and not rep1["errors"]
+    check(ok1 and not rep1["warnings"],
+          f"CSV 基线行导入成功且零 warning（#148 岗位ID 缺列不再误告警，warnings={rep1['warnings']}）")
+    import urllib.parse as _up
+    _, found = req("GET", f"/positions?search={_up.quote(f'审计锚基岗{suffix}')}")
+    base_pn = next(p for p in found["items"] if p["position_name"] == f"审计锚基岗{suffix}")
+
+    _, rep2 = upload_csv(HDRS + csv_row(f"审计关开日岗{suffix}", "2026-01-01", closing="2025-01-01"))
+    check(any("早于" in e for e in rep2["errors"]),
+          f"关闭日早于开启日报错该行不导入（#138，errors={rep2['errors']}）")
+
+    mismatch = csv_row(f"审计锚基岗{suffix}", "2032-01-01", pid=str(base_pn["id"]))
+    _, rep3 = upload_csv(HDRS + mismatch)
+    check(any("识别锚" in e for e in rep3["errors"]),
+          f"带 ID 锚不一致在第 2 趟即报错不落库（#137，errors={rep3['errors']}）")
+    _, base_after = req("GET", f"/positions/{base_pn['id']}")
+    check(base_after["opening_date"].startswith("2031"),
+          "锚不一致行的库内开启日未被覆盖（#137 防护生效）")
+
+    ghost = csv_row(f"审计幽灵岗{suffix}", "2031-05-01",
+                    solid=f"审计锚基岗{suffix}", pid="99999999")
+    _, rep4 = upload_csv(HDRS + ghost)
+    _, base_mgr = req("GET", f"/positions/{base_pn['id']}")
+    check(any("库内不存在" in e for e in rep4["errors"])
+          and base_mgr["solid_line_manager_id"] is None,
+          f"带 ID 不存在行的直线经理未写到任何岗位（#133 拒绝集贯通第 3 趟）")
+
+    scope_row1 = csv_row(f"审计范围岗{suffix}", "2030-01-01").replace(",Global,", ",family,")
+    upload_csv(HDRS + scope_row1)  # 首导：warning + 按 Global 入库
+    _, rep5 = upload_csv(HDRS + scope_row1)  # 再导同文件：应按归一化键认老
+    check(any("不可识别" in w for w in rep5["warnings"])
+          and rep5.get("updated_by_key", 0) == 1 and rep5["imported"] == 0,
+          f"小写 scope 归一化后幂等键认老不重复建档（#148-2，imported={rep5['imported']}）")
+
+    code, renamed = req("PATCH", f"/positions/{base_pn['id']}",
+                        {"version": base_after["version"],
+                         "position_name": f"审计新职能{suffix}"}, token=admin)
+    check(code == 200 and renamed["position_name"] == f"审计新职能{suffix}",
+          "PATCH position_name 支持职能改名/新建（#143）")
+    code, _b = req("POST", "/employment-tax-items",
+                   {"tax_zone_id": zone["id"], "item_name": "坏科目", "item_kind": "percent"},
+                   token=admin)
+    check(code == 422, f"item_kind 非法值被 schema Literal 422 拦截（#145，{code}）")
 
     # ---------- 收尾输出 ----------
     print(f"\n════════ 结果: {PASS} 通过 / {FAIL} 失败 ════════")
     return 1 if FAIL else 0
-
-
-def db_single(*_):
-    return None
 
 
 if __name__ == "__main__":

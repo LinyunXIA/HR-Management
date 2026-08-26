@@ -140,7 +140,11 @@ const Positions = {
       const isAuto = modal.querySelector(`input[name="${prefix}-costmode"]:checked`).value === 'auto';
       ['mandatory_tax', 'mandatory_fixed_fee', 'labor_cost'].forEach((f) => {
         const el = modal.querySelector(`#${prefix}-${f}`);
-        if (el) el.disabled = isAuto;
+        if (!el) return;
+        const wasDisabled = el.disabled;
+        el.disabled = isAuto;
+        // issue #150：切到 auto 时清空派生三栏显示值，防「手填残留值随 auto 模式提交」
+        if (isAuto && !wasDisabled) el.value = '';
       });
       const btn = modal.querySelector(`#${prefix}-calccost`);
       if (btn && btn.dataset.ready === '1') btn.style.display = isAuto ? '' : 'none';
@@ -160,6 +164,10 @@ const Positions = {
   collectCost(modal, prefix) {
     const body = { cost_mode: modal.querySelector(`input[name="${prefix}-costmode"]:checked`).value };
     for (const [f] of this.COST_FIELDS) {
+      const el = modal.querySelector(`#${prefix}-${f}`);
+      // issue #150/#141：auto 模式下被置灰的派生三栏提交 null（disabled input 的
+      // .value 仍可读，此前残留旧值会以 cost_mode=auto 落库）
+      if (el && el.disabled) { body[f] = null; continue; }
       body[f] = val(`#${prefix}-${f}`) !== '' ? +val(`#${prefix}-${f}`) : null;
     }
     return body;
@@ -208,7 +216,7 @@ const Positions = {
           <div class="field" id="pc-country-wrap" style="display:none"><label>国家/地区</label>
             <select id="pc-country">${App.countries.map((c) => `<option value="${c.id}">${esc(c.name)} (${esc(c.code)})</option>`).join('')}</select>
           </div>
-          <div class="field"><label>职位开启日</label><input type="date" id="pc-opening"></div>
+          <div class="field"><label>职位开启日 *</label><input type="date" id="pc-opening"></div>
           <div class="field"><label>职位关闭日（关闭时填）</label><input type="date" id="pc-closing"></div>
           <div class="field"><label>工作地点</label>
             <select id="pc-wloc"><option value="">—</option>${App.workLocations.map((w) => `<option value="${esc(w.name)}">${esc(w.name)}</option>`).join('')}</select>
@@ -407,7 +415,8 @@ const Positions = {
       const dottedLabels = val('#pe-dotted-labels').split('\n').map(s => s.trim()).filter(s => s);
       const body = {
         version: p.version,
-        position_id: App.functions.find((f) => f.name === val('#pe-posname'))?.id || null,
+        // 职能改名（issue #143）：后端 Update 已支持 position_name（匹配现有或自动新建），
+        // 不再发送 position_id——此前全新职能名解析为 null 被 PATCH 静默跳过
         position_name: val('#pe-posname'),
         company_id: +val('#pe-company'),
         level: val('#pe-level') || null,

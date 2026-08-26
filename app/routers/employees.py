@@ -25,6 +25,7 @@ from app.helpers import (
 )
 from app.models import (
     Company,
+    CostMode,
     Employee,
     EmployeeType,
     EmploymentStatus,
@@ -242,6 +243,12 @@ def employee_cost_calculation(eid: int,
     pn = db.get(PositionNumber, emp.position_number_id) if emp.position_number_id else None
     if not pn:
         raise HTTPException(400, "员工未挂岗，无法按公司税区计算实际成本（外包虚拟建档请先挂编 External Employee 岗位）")
+    # 行级隔离（issue #132，#121 脱敏第二旁路封堵）：实际成本按实体隔离——
+    # hr 仅可测算其可管实体员工；无实体归属（虚拟建档/已解绑）仅 admin
+    emp_company = pn.company_id
+    if get_operable_company_ids(db, _user) != ALL_COMPANIES:
+        if emp_company is None or emp_company not in get_operable_company_ids(db, _user):
+            raise HTTPException(403, "无权查看该员工的实际成本（未分配其所属法人实体）")
     zone = pn.company.tax_zone if pn.company else None
     salary = salary_before_tax if salary_before_tax is not None else emp.actual_salary_before_tax
     if salary is None:
@@ -258,9 +265,14 @@ def update_employee(eid: int, payload: EmployeeUpdate,
                     user=Depends(get_current_user), db: Session = Depends(get_db)):
     emp = get_or_404(db, Employee, eid, "员工不存在")
     assert_version(emp, payload.version, "员工")
-    # 行级隔离：员工修改按其实体隔离（转调中仍归属原岗公司）
+    # 行级隔离：员工修改按其实体隔离（转调中仍归属原岗公司）；
+    # 无实体归属（虚拟建档/已解绑）仅 admin 可改（issue #147，读写对称）
     cur_pn = db.get(PositionNumber, emp.position_number_id) if emp.position_number_id else None
-    assert_can_write_company(db, user, cur_pn.company_id if cur_pn else None, label="该员工")
+    if cur_pn is None:
+        if get_operable_company_ids(db, user) != ALL_COMPANIES:
+            raise HTTPException(403, "无实体归属的员工档案（虚拟建档/已解绑）仅 admin 可修改")
+    else:
+        assert_can_write_company(db, user, cur_pn.company_id, label="该员工")
     # 必填字段保持非空守卫；可空字段按 model_fields_set 区分「未提供」与「显式 null=清空」
     old_type = emp.employee_type
     for field in ("name", "gender", "employee_type"):
@@ -277,8 +289,8 @@ def update_employee(eid: int, payload: EmployeeUpdate,
         if field in payload.model_fields_set:
             setattr(emp, field, getattr(payload, field))
     # 实际成本字段（v2.3：跟人走）；手动模式清空输入框 → 显式 null 清空
+    old_actual_mode = emp.actual_cost_mode
     if "actual_cost_mode" in payload.model_fields_set:
-        from app.models import CostMode
         try:
             emp.actual_cost_mode = CostMode(payload.actual_cost_mode or CostMode.MANUAL.value)
         except ValueError:
@@ -287,6 +299,31 @@ def update_employee(eid: int, payload: EmployeeUpdate,
                   "actual_fixed_bonus", "actual_floating_bonus", "actual_labor_cost"):
         if field in payload.model_fields_set:
             setattr(emp, field, getattr(payload, field))
+    # 成本模式互斥服务端兜底（issue #141，PRD F1.6）：最终模式为 AUTO 时派生三栏
+    # 须与引擎计算一致（重算保存路径原样通过、手填残留清空），与岗位侧同构
+    if emp.actual_cost_mode == CostMode.AUTO and cur_pn is not None:
+        from app.helpers import calc_cost_by_zone
+        three = ("actual_mandatory_tax", "actual_mandatory_fixed_fee", "actual_labor_cost")
+        zone = cur_pn.company.tax_zone if cur_pn.company else None
+        if emp.actual_salary_before_tax is None:
+            expected = {k: None for k in three}
+        else:
+            r = calc_cost_by_zone(db, zone, emp.actual_salary_before_tax,
+                                  fixed_bonus=emp.actual_fixed_bonus or 0,
+                                  floating_bonus=emp.actual_floating_bonus or 0)
+            expected = ({k: None for k in three} if not r.get("configured")
+                        else {"actual_mandatory_tax": r["mandatory_tax"],
+                              "actual_mandatory_fixed_fee": r["mandatory_fixed_fee"],
+                              "actual_labor_cost": r["labor_cost"]})
+        flipped = old_actual_mode != CostMode.AUTO
+        for f in three:
+            touched = f in payload.model_fields_set
+            if not (touched or flipped):
+                continue
+            eff = getattr(emp, f)
+            exp = expected[f]
+            setattr(emp, f, (eff if (eff is not None and exp is not None
+                                     and abs(float(eff) - float(exp)) <= 0.05) else None))
     # 转调目标公司（v2.3）：仅可经 /transfers/initiate|claim 流转（#119-1 旁路封堵）——
     # 直改会造成「挂目标公司但非转调中」的无 Transfer 记录不一致态
     if "target_company_id" in payload.model_fields_set and payload.target_company_id != emp.target_company_id:
@@ -316,7 +353,9 @@ def delete_employee(eid: int, user=Depends(get_current_user), db: Session = Depe
     emp = get_or_404(db, Employee, eid, "员工不存在")
     if emp.position_number_id is not None or emp.employment_status != EmploymentStatus.TERMINATED:
         raise HTTPException(400, "仅可删除已离职且已解绑岗位的员工档案")
-    assert_can_write_company(db, user, None, label="该员工")  # 已解绑无实体归属；仅要求登录
+    # 无实体归属（issue #147）：已解绑档案任何公司都不可写，仅 admin 可删
+    if get_operable_company_ids(db, user) != ALL_COMPANIES:
+        raise HTTPException(403, "无实体归属的员工档案（虚拟建档/已解绑）仅 admin 可删除")
     db.delete(emp)
     db.commit()
     return {"ok": True, "id": eid}
@@ -346,6 +385,10 @@ def promote_employee(eid: int, payload: PromoteRequest,
     old_pn = db.get(PositionNumber, emp.position_number_id) if emp.position_number_id else None
     if old_pn:
         assert_can_write_company(db, user, old_pn.company_id, label="该员工的所属公司")
+    else:
+        # issue #140：外包虚拟建档员工无在挂岗位，promote 语义不成立——
+        # 静默 no-op 会「返回成功却不留痕」，显式 400 引导先经调岗挂编
+        raise HTTPException(400, "员工未挂岗（虚拟建档），请先经 POST /transfers 挂编后再升职")
     new_pn = (
         db.query(PositionNumber)
         .filter(PositionNumber.id == payload.to_position_id)
@@ -354,6 +397,9 @@ def promote_employee(eid: int, payload: PromoteRequest,
     )
     if not new_pn:
         raise HTTPException(404, "目标岗位不存在")
+    # 行级隔离补口（issue #147）：升职会写入目标岗位公司的 status/prev_*，
+    # 目标公司须在操作者可管实体集内（与 claim 目标侧校验同口径）
+    assert_can_write_company(db, user, new_pn.company_id, label="目标岗位所属公司")
     # 空闲目标岗白名单与 claim 对称（#124 复测发现）：Open/Vacant/Offered/Planned 均可升入
     # （月末升职常先立 planned 编制、生效日转 Filled；ALLOWED_EMPLOYEE 含 planned→filled），
     # occupied/closed/frozen 仍拒绝
@@ -366,34 +412,35 @@ def promote_employee(eid: int, payload: PromoteRequest,
     _assert_type_match(new_pn, emp.employee_type)
 
     timing_cn = "月末升职" if payload.timing == "month_end" else "即时升职"
-    if old_pn and old_pn.id != new_pn.id:
-        if old_pn.status == PositionStatus.FILLED:
-            lifecycle.transition(db, old_pn, PositionStatus.VACANT,
-                                 note=f"员工 {emp.name} {timing_cn}移出（如需关闭编制请手动 Closed）",
-                                 employee_id=emp.id, system=True)
-        lifecycle.transition(db, new_pn, PositionStatus.FILLED,
-                             note=f"员工 {emp.name} {timing_cn}入岗" + (f"（{payload.note}）" if payload.note else ""),
+    if old_pn.id == new_pn.id:
+        raise HTTPException(400, "升职目标岗位与当前岗位相同，无意义操作")
+    if old_pn.status == PositionStatus.FILLED:
+        lifecycle.transition(db, old_pn, PositionStatus.VACANT,
+                             note=f"员工 {emp.name} {timing_cn}移出（如需关闭编制请手动 Closed）",
                              employee_id=emp.id, system=True)
-        new_pn.prev_position_id = old_pn.id
-        new_pn.prev_company_id = old_pn.company_id
-        emp.position_number_id = new_pn.id
-        emp.version = (emp.version or 1) + 1
-        # 升职结构化留痕（#113）：transfers 表 kind='promotion'，支撑 F1.5b 财务月边界归属审计
-        from datetime import datetime as _dt
-        from datetime import timezone as _tz
-        db.add(Transfer(
-            employee_id=emp.id,
-            from_position_id=old_pn.id,
-            target_company_id=new_pn.company_id,
-            to_position_id=new_pn.id,
-            status="claimed",
-            kind="promotion",
-            timing=payload.timing,
-            initiated_by=user.username,
-            claimed_by=user.username,
-            claimed_at=_dt.now(_tz.utc),
-            note=payload.note,
-        ))
+    lifecycle.transition(db, new_pn, PositionStatus.FILLED,
+                         note=f"员工 {emp.name} {timing_cn}入岗" + (f"（{payload.note}）" if payload.note else ""),
+                         employee_id=emp.id, system=True)
+    new_pn.prev_position_id = old_pn.id
+    new_pn.prev_company_id = old_pn.company_id
+    emp.position_number_id = new_pn.id
+    emp.version = (emp.version or 1) + 1
+    # 升职结构化留痕（#113）：transfers 表 kind='promotion'，支撑 F1.5b 财务月边界归属审计
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
+    db.add(Transfer(
+        employee_id=emp.id,
+        from_position_id=old_pn.id,
+        target_company_id=new_pn.company_id,
+        to_position_id=new_pn.id,
+        status="claimed",
+        kind="promotion",
+        timing=payload.timing,
+        initiated_by=user.username,
+        claimed_by=user.username,
+        claimed_at=_dt.now(_tz.utc),
+        note=payload.note,
+    ))
     db.commit()
     return {"ok": True, "employee": serialize_employee(db, emp)}
 

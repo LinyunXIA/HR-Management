@@ -9,8 +9,10 @@ async function api(path, options = {}) {
   const opts = { headers: { ..._authHeader(), ...(options.headers || {}) }, ...options };
   // 合并 headers 时保留 Authorization
   opts.headers = { ..._authHeader(), ...(options.headers || {}) };
-  if (opts.body && typeof opts.body !== 'string') opts.body = JSON.stringify(opts.body);
-  if (opts.body && !opts.noJson) opts.headers['Content-Type'] = 'application/json';
+  // FormData（multipart 上传）原样传递，不做 JSON 序列化、不设 JSON Content-Type
+  const isForm = typeof FormData !== 'undefined' && opts.body instanceof FormData;
+  if (opts.body && !isForm && typeof opts.body !== 'string') opts.body = JSON.stringify(opts.body);
+  if (opts.body && !isForm && !opts.noJson) opts.headers['Content-Type'] = 'application/json';
   const res = await fetch('/api/v1' + path, opts);
   const data = await res.json().catch(() => null);
   if (!res.ok) {

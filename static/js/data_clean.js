@@ -36,7 +36,7 @@ const DataClean = {
               <span class="grow"></span>
               <button class="btn" id="dc-copy">复制 CSV</button>
               <button class="btn" id="dc-download">下载 .csv</button>
-              <button class="btn primary" id="dc-import">✓ 确认导入系统</button>
+              ${this.isAdmin() ? '<button class="btn primary" id="dc-import">✓ 确认导入系统</button>' : '<span class="hint">导入仅限 admin（#95）</span>'}
             </div>
             <textarea id="dc-csv-text" readonly
               style="width:100%;height:220px;font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var(--border);border-radius:8px;padding:8px;margin-top:8px"></textarea>
@@ -58,12 +58,14 @@ const DataClean = {
     fileInput.onchange = () => { if (fileInput.files[0]) this.uploadFile(fileInput.files[0]); };
 
     // 服务器原始文件入口（#126：files/list + ?source_file= 前端消费）
+    // issue #136：后端返回 {directory, files:[...]}，此前误取外层包装对象调 .filter
+    // 抛 TypeError 被 catch → 下拉恒显示「文件列表不可用」
     const serverSel = document.getElementById('dc-server-file');
     try {
-      const files = await get('/data-clean-jobs/files/list');
-      const mds = (files.items || files || []).filter((f) => (f.name || f).endsWith('.md'));
+      const payload = await get('/data-clean-jobs/files/list');
+      const mds = (payload.files || []).filter((f) => (f.name || '').endsWith('.md'));
       serverSel.innerHTML = mds.length
-        ? mds.map((f) => `<option value="${esc(f.name || f)}">${esc(f.name || f)}</option>`).join('')
+        ? mds.map((f) => `<option value="${esc(f.name)}">${esc(f.name)}</option>`).join('')
         : '<option value="">（服务器无 .md 文件）</option>';
     } catch (_e) {
       serverSel.innerHTML = '<option value="">（文件列表不可用）</option>';
@@ -79,7 +81,13 @@ const DataClean = {
       toast('已复制到剪贴板', 'ok');
     };
     document.getElementById('dc-download').onclick = () => this.downloadCsv();
-    document.getElementById('dc-import').onclick = () => this.importData();
+    const importBtn = document.getElementById('dc-import');
+    if (importBtn) importBtn.onclick = () => this.importData();
+  },
+
+  /* issue #144：主数据/清洗导入为 admin 维护（#95/#120），hr 只读视图不渲染写入口 */
+  isAdmin() {
+    return !!(window.Auth && Auth.user && Auth.user.role === 'admin');
   },
 
   async uploadFile(file) {
@@ -91,12 +99,8 @@ const DataClean = {
     const fd = new FormData();
     fd.append('orgchart', file);
     try {
-      const r = await fetch('/api/v1/data-clean-jobs', { method: 'POST', body: fd, headers: _authHeader() });
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({ detail: '解析失败' }));
-        throw new Error(err.detail || '解析失败');
-      }
-      const data = await r.json();
+      // issue #150：改走 api() 封装（FormData 支持），401 弹登录 / 429 toast 与全局一致
+      const data = await api('/data-clean-jobs', { method: 'POST', body: fd });
       this.parsed = data;
       this.csvText = data.csv_text;
       this.jobId = data.id;
