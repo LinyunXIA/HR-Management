@@ -82,6 +82,11 @@ const OrgChart = {
       const p = nodeMap[e.from], c = nodeMap[e.to];
       if (p && c) { p.children.push(c); c.parent = p; }
     });
+    // issue #157：折叠态跨 Tab 持久化——nodeMap 每次 render 重建，
+    // 把 this.collapsed 字典（toggle 写入）回填到节点属性，供布局/图标消费
+    Object.keys(this.collapsed).forEach((num) => {
+      if (nodeMap[num]) nodeMap[num].collapsed = !!this.collapsed[num];
+    });
     this.solidManager = {};
     this.data.solid_edges.forEach((e) => { this.solidManager[e.to] = e.from; });
     this.dottedManagers = {};
@@ -317,7 +322,16 @@ const OrgChart = {
     svg.appendChild(g);
   },
 
-  toggle(num) { this.collapsed[num] = !this.collapsed[num]; this.draw(); },
+  toggle(num) {
+    // issue #157：折叠态必须写在**节点属性**上（assign 分支与 ▸/▾ 图标读取的
+    // 是 node.collapsed）——此前写 this.collapsed 字典无人消费，折叠自 v1 起失效；
+    // 字典同步保留用于跨 Tab 持久化（buildIndex 回填）
+    const n = this.nodeMap[num];
+    if (!n) return;
+    n.collapsed = !n.collapsed;
+    this.collapsed[num] = n.collapsed;
+    this.draw();
+  },
 
   showTip(e, n) {
     this._tip = document.createElement('div');

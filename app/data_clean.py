@@ -452,15 +452,19 @@ def _infer_level(pos_name_en: str, title_level_map: Dict[str, str] | None = None
 
 
 def rules_title_level_map(rules: Dict) -> Dict[str, str]:
-    """由 parse_rules 的级别对照（code→{ic, mgmt}）反转出 职位名→级别码 映射。"""
+    """由 parse_rules 的级别对照反转出 职位名→级别码 映射（issue #160 修正）。
+
+    parse_rules 的 levels 结构为 {code: {ic, mgmt, label}}——其中 ic/mgmt 存的是
+    **级别代码**，职位名存于 label（ic_code 条目的 label=IC 职位名、
+    mgmt_code 条目的 label=管理岗职位名）。此前误用 ic/mgmt 作 key 产出
+    code→code 恒等映射，「激活规则对照」实际无效；现按条目自身的
+    label→自身 key（code）反转。
+    """
     out: Dict[str, str] = {}
     for code, info in (rules.get("levels") or {}).items():
-        ic = (info.get("ic") or "").strip()
-        mgmt = (info.get("mgmt") or "").strip()
-        if ic and ic.upper() != "N/A":
-            out.setdefault(ic, code)
-        if mgmt and mgmt.upper() != "N/A":
-            out.setdefault(mgmt, info.get("mgmt") or code)
+        title = (info.get("label") or "").strip()
+        if title and title.upper() != "N/A":
+            out.setdefault(title, code)
     return out
 
 

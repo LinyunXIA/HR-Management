@@ -68,35 +68,32 @@ def _serialize_for(db: Session, user, pn: PositionNumber) -> dict:
                               hide_incumbent_costs=not can_view_incumbent_costs(db, user, pn.company_id))
 
 
-def _enforce_auto_derived(db: Session, pn: PositionNumber, payload, flipped: bool):
-    """auto 模式派生三栏落库规则（issue #141，PRD F1.6「互斥只能启用一种」）。
+def _recompute_auto_derived(db: Session, pn: PositionNumber):
+    """auto 模式无条件重算覆写派生三栏（issue #158 裁决落地，PRD F1.6「互斥只能启用一种」）。
 
-    最终模式为 AUTO 时，被请求触及（或模式翻转时的存量）派生三栏必须与引擎
-    计算值一致（Δ≤0.05，浮点容差）才允许保留，否则置 None——手填残留值以
-    auto 标签落库的四不像数据在服务端被强制清除；「重算」保存路径提交的
-    引擎产物原样通过。公司未绑税区 / 税区未配置 / 薪资缺失 → 一律 None。
+    使「auto ⇒ 派生三栏 == 引擎计算值」成为**无条件不变式**：
+    - 凡调用即按 pn.company 绑定税区 + 当前薪资/奖金全量重算并覆写，
+      手填残留值不可能以 auto 标签存续（第二轮「比对不一致才清空」存在
+      输入变更不触派生栏时的滞留缝隙，第三轮复审 M2/M3）；
+    - 公司未绑税区 / 税区无有效科目 / 薪资缺失 → 三栏一律 None（不猜测）；
+    - 奖金两栏与薪资是引擎输入项，不受影响。
     """
     from app.helpers import calc_cost_by_zone
-    three = ("mandatory_tax", "mandatory_fixed_fee", "labor_cost")
     zone = pn.company.tax_zone if pn.company else None
     if pn.salary_before_tax is None:
-        expected = {k: None for k in three}
+        derived = {"mandatory_tax": None, "mandatory_fixed_fee": None, "labor_cost": None}
     else:
         r = calc_cost_by_zone(db, zone, pn.salary_before_tax,
                               fixed_bonus=pn.fixed_bonus or 0,
                               floating_bonus=pn.floating_bonus or 0)
-        expected = ({k: None for k in three} if not r.get("configured")
-                    else {"mandatory_tax": r["mandatory_tax"],
-                          "mandatory_fixed_fee": r["mandatory_fixed_fee"],
-                          "labor_cost": r["labor_cost"]})
-    for f in three:
-        touched = getattr(payload, f) is not None
-        if not (touched or flipped):
-            continue
-        eff = getattr(payload, f) if touched else getattr(pn, f)
-        exp = expected[f]
-        setattr(pn, f, (eff if (eff is not None and exp is not None
-                                and abs(float(eff) - float(exp)) <= 0.05) else None))
+        if r.get("configured"):
+            derived = {"mandatory_tax": r["mandatory_tax"],
+                       "mandatory_fixed_fee": r["mandatory_fixed_fee"],
+                       "labor_cost": r["labor_cost"]}
+        else:
+            derived = {"mandatory_tax": None, "mandatory_fixed_fee": None, "labor_cost": None}
+    for k, v in derived.items():
+        setattr(pn, k, v)
 
 
 def _assert_level(db: Session, level: str | None):
@@ -170,7 +167,10 @@ def list_positions(
 @router.post("/positions", status_code=201)
 def create_position(payload: PositionNumberCreate, response: Response,
                     user=Depends(get_current_user), db: Session = Depends(get_db)):
-    position = resolve_position(db, payload.position_id, payload.position_name)
+    # issue #161：strip 后再解析——此前原始值直传，" Foo " 查不到即新建带空白职能名
+    # （与 PATCH 路径 :287 的 strip 口径对齐）
+    position_name_in = (payload.position_name or "").strip() or None
+    position = resolve_position(db, payload.position_id, position_name_in)
     company = get_or_404(db, Company, payload.company_id, "隶属公司不存在")
     level_val = (payload.level or "").strip() or None
     _assert_level(db, level_val)
@@ -227,10 +227,10 @@ def create_position(payload: PositionNumberCreate, response: Response,
         floating_bonus=payload.floating_bonus,
         labor_cost=payload.labor_cost,
     )
-    # 成本模式互斥服务端兜底（issue #141）：新建即 auto 时派生三栏须与引擎一致
-    # （手填值不匹配即清空），须经「重算」路径落库引擎产物
+    # 成本模式互斥服务端兜底（issue #141/#158 裁决）：新建即 auto 时无条件按引擎
+    # 重算覆写派生三栏（手填值不存续），须经引擎口径落库
     if pn.cost_mode == CostMode.AUTO:
-        _enforce_auto_derived(db, pn, payload, flipped=True)
+        _recompute_auto_derived(db, pn)
     db.add(pn)
     db.flush()
     if payload.solid_line_manager_id:
@@ -289,6 +289,8 @@ def update_position(pid: int, payload: PositionNumberUpdate,
             pos = resolve_position(db, None, new_name)
             pn.position_id = pos.id
     if payload.position_id is not None:
+        # issue #161：补存在性校验——此前无效 id 直赋，commit 时 FK IntegrityError 500
+        get_or_404(db, Position, payload.position_id, "职位职能不存在")
         pn.position_id = payload.position_id
     if payload.company_id is not None:
         get_or_404(db, Company, payload.company_id, "隶属公司不存在")
@@ -338,16 +340,21 @@ def update_position(pid: int, payload: PositionNumberUpdate,
             _assert_type_match(pn, incumbent.employee_type)
 
     old_cost_mode = pn.cost_mode
+    # 成本六栏按 model_fields_set 口径写入：显式 null = 清空（issue #158/M2 统一两侧
+    # 语义 + L7——此前 `val is not None` 吞掉 null，manual 模式误录值无法撤销）
+    cost_inputs_touched = False
     for field in ("cost_mode", "salary_before_tax", "mandatory_tax",
                   "mandatory_fixed_fee", "fixed_bonus", "floating_bonus", "labor_cost"):
-        val = getattr(payload, field)
-        if val is not None:
-            setattr(pn, field, val)
+        if field in payload.model_fields_set:
+            setattr(pn, field, getattr(payload, field))
+            if field != "cost_mode":
+                cost_inputs_touched = True
 
-    # 成本模式互斥服务端兜底（issue #141，PRD F1.6「只能启用一种」）：
-    # 最终模式为 AUTO 时派生三栏须与引擎计算一致（重算路径原样通过、手填残留清空）
-    if pn.cost_mode == CostMode.AUTO:
-        _enforce_auto_derived(db, pn, payload, flipped=old_cost_mode != CostMode.AUTO)
+    # 成本模式互斥服务端兜底（issue #141/#158 无条件重算覆写）：最终模式为 auto 且
+    # （任一成本输入被触及 或 manual→auto 翻转）→ 三栏按引擎全量重算覆写，
+    # 使「auto ⇒ 派生 == 引擎」成为无条件不变式（重算保存路径结果与引擎一致，幂等）
+    if pn.cost_mode == CostMode.AUTO and (cost_inputs_touched or old_cost_mode != CostMode.AUTO):
+        _recompute_auto_derived(db, pn)
 
     if "solid_line_manager_id" in payload.model_fields_set:
         if payload.solid_line_manager_id:

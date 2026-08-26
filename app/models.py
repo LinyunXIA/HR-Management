@@ -218,9 +218,12 @@ class TaxZone(Base):
     __table_args__ = (
         CheckConstraint("level IN ('country', 'city')", name="ck_tax_zones_level"),
         UniqueConstraint("level", "country_id", "city", name="uq_tax_zone_scope"),
-        # issue #145：复合唯一对 NULL city 失效（SQLite 唯一索引视 NULL 互异）→
-        # 国家级唯一性由部分唯一索引硬兜底（存量库由 main.py::_ensure_indexes 幂等补建）
-        Index("ux_tax_zones_country_level", "country_id",
+        # issue #145/#156：复合唯一对 NULL city 失效（SQLite 唯一索引视 NULL 互异）→
+        # 国家级唯一性由**部分唯一索引**硬兜底（unique=True 必不可省——第三轮复审实测
+        # 缺失时 create_all 生成普通索引，且名字占用导致 main.py 的
+        # CREATE UNIQUE INDEX IF NOT EXISTS 永远跳过，全新部署护栏完全失效；
+        # 存量库由 main.py::_ensure_indexes DROP 后重建治愈）
+        Index("ux_tax_zones_country_level", "country_id", unique=True,
               sqlite_where=text("level = 'country'")),
     )
 

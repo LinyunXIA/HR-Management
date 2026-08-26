@@ -179,7 +179,8 @@ const Employees = {
     return this.allPositions((p) => ['open', 'vacant', 'offered'].includes(p.status));
   },
 
-  /* issue #150：分页拉全量岗位（此前 page_size=500 硬编码，超 500 岗静默截断） */
+  /* issue #150：分页拉全量岗位（此前 page_size=500 硬编码，超 500 岗静默截断）；
+     issue #162：触顶 10000 条时 toast 告警不再静默 */
   async allPositions(filterFn) {
     const out = [];
     let page = 1, total = Infinity;
@@ -190,6 +191,7 @@ const Employees = {
       if (r.items.length < 500) break;
       page++;
     }
+    if (total > out.length) toast(`岗位共 ${total} 条，下拉仅加载前 ${out.length} 条（请先用筛选缩小范围）`, 'warn');
     return filterFn ? out.filter(filterFn) : out;
   },
 
@@ -377,8 +379,9 @@ const Employees = {
           <div class="field"><label>性别</label><select id="ee-gender">${['男', '女', '其他'].map((g) => `<option ${g === e.gender ? 'selected' : ''}>${g}</option>`).join('')}</select></div>
           <div class="field"><label>员工类型</label><select id="ee-type">${['正式', '实习', '外包', '劳务'].map((t) => `<option ${t === e.employee_type ? 'selected' : ''}>${t}</option>`).join('')}</select>
             <div class="hint">挂岗员工的类型须与岗位编制匹配（正式/实习/劳务→Employee，外包→External Employee）</div></div>
-          <div class="field"><label>在职状态 *</label><select id="ee-status">${['试用期', '在职', '休假', '离职']
-            .concat(e.employment_status === '转调中' ? ['转调中'] : [])
+          <div class="field"><label>在职状态 *</label><select id="ee-status">${(e.employment_status === '转调中'
+            ? ['转调中', '离职']  /* issue #162：转调中仅可认领/退回或离职，其余选项提交必 400 */
+            : ['试用期', '在职', '休假', '离职'])
             .map((s) => `<option ${s === e.employment_status ? 'selected' : ''}>${s}</option>`).join('')}</select>
             <div class="hint">选「离职」将解绑岗位并转空缺${e.employment_status === '转调中' ? '；「转调中」仅可认领/退回或办理离职' : ''}</div></div>
           <div class="field"><label>入职日期</label><input type="date" id="ee-hire" value="${fmtDate(e.hire_date)}"></div>
@@ -489,7 +492,7 @@ const Employees = {
       <div class="body">
         <div class="hint" style="margin-bottom:12px">升职后原岗位默认转 Vacant（可后续手动 Closed），工龄跟人不变，实际成本跟人走。</div>
         <div class="field"><label>目标岗位 *（仅空闲编制）</label>
-          <select id="pr-pos">${available.map(p => `<option value="${p.id}">${esc(p.number)} ${esc(p.position_name)} · ${p.company_name} · ${STATUS_LABEL[p.status]}</option>`).join('')}</select>
+          <select id="pr-pos">${available.map(p => `<option value="${p.id}">${esc(p.number)} ${esc(p.position_name)} · ${esc(p.company_name || '')} · ${STATUS_LABEL[p.status]}</option>`).join('')}</select>
         </div>
         <div class="field"><label>生效时节</label>
           <select id="pr-timing"><option value="immediate">即时升职</option><option value="month_end">月末升职（财务月边界归属）</option></select>
