@@ -14,8 +14,10 @@ from app import lifecycle
 from app.auth import get_current_user
 from app.db import get_db
 from app.helpers import (
+    ALL_COMPANIES,
     assert_can_write_company,
     assert_version,
+    calc_cost_by_zone,
     dotted_ids,
     generate_employee_no,
     get_operable_company_ids,
@@ -29,6 +31,7 @@ from app.models import (
     PositionNumber,
     PositionNumberDottedLine,
     PositionStatus,
+    Transfer,
 )
 from app.schemas import EmployeeCreate, EmployeeUpdate, PromoteRequest
 
@@ -56,7 +59,18 @@ def _assert_type_match(pn: PositionNumber, employee_type) -> None:
                  f"仅允许 {'/'.join(sorted(allowed))} 员工，不接受「{et}」")
 
 
-def serialize_employee(db: Session, emp: Employee) -> dict:
+# 跨司只读例外（PRD §7B.3 + issue #121 裁决 A）：组织图/岗位展示可见他司员工「姓名」；
+# 列表/详情对他司行脱敏——联系方式（出生日期/手机/邮箱）与实际成本字段置 null，
+# 姓名及岗位/公司归属保留；admin 全量。
+REDACTED_EMPLOYEE_FIELDS = (
+    "birth_date", "phone", "email",
+    "actual_cost_mode",
+    "actual_salary_before_tax", "actual_mandatory_tax", "actual_mandatory_fixed_fee",
+    "actual_fixed_bonus", "actual_floating_bonus", "actual_labor_cost",
+)
+
+
+def serialize_employee(db: Session, emp: Employee, redact: bool = False) -> dict:
     pn = db.get(PositionNumber, emp.position_number_id) if emp.position_number_id else None
     sl = db.get(PositionNumber, pn.solid_line_manager_id) if pn and pn.solid_line_manager_id else None
     dotted = dotted_ids(db, pn.id) if pn else []
@@ -65,7 +79,7 @@ def serialize_employee(db: Session, emp: Employee) -> dict:
         dm = db.get(PositionNumber, did)
         dotted_nums.append(dm.number if dm else str(did))
     tc = db.get(Company, emp.target_company_id) if emp.target_company_id else None
-    return {
+    data = {
         "id": emp.id,
         "employee_no": emp.employee_no,
         "name": emp.name,
@@ -101,6 +115,24 @@ def serialize_employee(db: Session, emp: Employee) -> dict:
         "created_at": emp.created_at,
         "updated_at": emp.updated_at,
     }
+    if redact:
+        for f in REDACTED_EMPLOYEE_FIELDS:
+            data[f] = None
+    return data
+
+
+def _redact_for(db: Session, user, emp: Employee, data: dict) -> dict:
+    """按操作者可管实体判定是否脱敏（#121 裁决 A）：admin 全量；hr 对非本实体行脱敏。"""
+    allowed = get_operable_company_ids(db, user)
+    if allowed == ALL_COMPANIES:
+        return data
+    pn = db.get(PositionNumber, emp.position_number_id) if emp.position_number_id else None
+    company_id = pn.company_id if pn else None
+    # 未挂岗（外包虚拟建档/已解绑）无实体归属 → 仅 admin 可见全量
+    if company_id is None or company_id not in allowed:
+        for f in REDACTED_EMPLOYEE_FIELDS:
+            data[f] = None
+    return data
 
 
 def _assert_attachable(db: Session, pn: PositionNumber):
@@ -137,7 +169,7 @@ def list_employees(
     total = q.count()
     items = q.order_by(Employee.employee_no).offset((page - 1) * page_size).limit(page_size).all()
     return {"total": total, "page": page, "page_size": page_size,
-            "items": [serialize_employee(db, e) for e in items]}
+            "items": [_redact_for(db, _user, e, serialize_employee(db, e)) for e in items]}
 
 
 @router.post("/employees", status_code=201)
@@ -148,6 +180,12 @@ def create_employee(payload: EmployeeCreate, response: Response,
     emp_no = (payload.employee_no or "").strip() or generate_employee_no(db, payload.employee_type)
     if db.query(Employee).filter(Employee.employee_no == emp_no).first():
         raise HTTPException(400, f"工号已存在: {emp_no}")
+    # 转调旁路一致性（#119-3）：建档即「转调中」无 Transfer 记录，禁止；
+    # 建档即「离职」又挂岗属矛盾组合（离职建档仅允许外包虚拟名单场景）
+    if payload.employment_status == EmploymentStatus.TRANSFERRING:
+        raise HTTPException(400, "「转调中」不可直接建档：请先建档后经 POST /transfers/initiate 发起")
+    if payload.employment_status == EmploymentStatus.TERMINATED and payload.position_number_id is not None:
+        raise HTTPException(400, "建档状态为「离职」时不可同时挂岗（离职档案应解绑）")
     # 挂岗规则（v2.4.2）：外包人员可不挂岗（虚拟建档，由外包公司管理）；其余类型必须挂岗
     pn = None
     if payload.position_number_id is not None:
@@ -184,7 +222,35 @@ def create_employee(payload: EmployeeCreate, response: Response,
 @router.get("/employees/{eid}")
 def get_employee(eid: int, _user=Depends(get_current_user), db: Session = Depends(get_db)):
     emp = get_or_404(db, Employee, eid, "员工不存在")
-    return serialize_employee(db, emp)
+    return _redact_for(db, _user, emp, serialize_employee(db, emp))
+
+
+@router.get("/employees/{eid}/cost-calculation")
+def employee_cost_calculation(eid: int,
+                              salary_before_tax: float | None = None,
+                              fixed_bonus: float | None = None,
+                              floating_bonus: float | None = None,
+                              _user=Depends(get_current_user),
+                              db: Session = Depends(get_db)):
+    """员工实际成本测算（API.md §6.2，issue #111 补实现）。
+
+    - 税区来源（v2.6 R1）= 员工当前所挂岗位所属公司的绑定税区（跟人走）；
+    - salary_before_tax / fixed_bonus / floating_bonus 可传表单未落库值试算；
+    - 未挂岗（外包虚拟建档/已解绑）→ 400；税前缺失 → 400（#115 口径对称，不按 0 静默计算）。
+    """
+    emp = get_or_404(db, Employee, eid, "员工不存在")
+    pn = db.get(PositionNumber, emp.position_number_id) if emp.position_number_id else None
+    if not pn:
+        raise HTTPException(400, "员工未挂岗，无法按公司税区计算实际成本（外包虚拟建档请先挂编 External Employee 岗位）")
+    zone = pn.company.tax_zone if pn.company else None
+    salary = salary_before_tax if salary_before_tax is not None else emp.actual_salary_before_tax
+    if salary is None:
+        raise HTTPException(400, "请先填写税前薪资（实际口径缺失，#115：不按 0 静默计算）")
+    fb = fixed_bonus if fixed_bonus is not None else (emp.actual_fixed_bonus or 0)
+    vb = floating_bonus if floating_bonus is not None else (emp.actual_floating_bonus or 0)
+    result = calc_cost_by_zone(db, zone, salary, fixed_bonus=fb, floating_bonus=vb)
+    result.update({"employee_id": eid, "scope": "actual"})
+    return result
 
 
 @router.patch("/employees/{eid}")
@@ -221,16 +287,24 @@ def update_employee(eid: int, payload: EmployeeUpdate,
                   "actual_fixed_bonus", "actual_floating_bonus", "actual_labor_cost"):
         if field in payload.model_fields_set:
             setattr(emp, field, getattr(payload, field))
-    # 转调目标公司（v2.3）：直接修正需校验公司存在；常规流程走 /transfers/initiate|claim
-    if payload.target_company_id is not None:
-        tc = db.get(Company, payload.target_company_id)
-        if not tc:
-            raise HTTPException(400, f"目标公司不存在 (id={payload.target_company_id})")
-        emp.target_company_id = payload.target_company_id
+    # 转调目标公司（v2.3）：仅可经 /transfers/initiate|claim 流转（#119-1 旁路封堵）——
+    # 直改会造成「挂目标公司但非转调中」的无 Transfer 记录不一致态
+    if "target_company_id" in payload.model_fields_set and payload.target_company_id != emp.target_company_id:
+        raise HTTPException(400, "target_company_id 仅可经 POST /transfers/initiate 发起、认领/退回时自动清空，不可直接修改")
     if payload.employment_status is not None:
+        # 「转调中」状态只能经 initiate 进入；离开该状态仅允许离职（认领/退回走 /transfers/*）
+        if (payload.employment_status == EmploymentStatus.TRANSFERRING
+                and emp.employment_status != EmploymentStatus.TRANSFERRING):
+            raise HTTPException(400, "「转调中」仅可经 POST /transfers/initiate 发起，不可直接修改")
+        if (emp.employment_status == EmploymentStatus.TRANSFERRING
+                and payload.employment_status not in
+                (EmploymentStatus.TRANSFERRING, EmploymentStatus.TERMINATED)):
+            raise HTTPException(400, "转调中员工仅可认领/退回（POST /transfers/{id}/claim|reject）或办理离职")
         if (payload.employment_status == EmploymentStatus.TERMINATED
                 and emp.employment_status != EmploymentStatus.TERMINATED):
             _vacate(db, emp, f"员工 {emp.name} 离职")
+            # 离职自动退回未决转调（#119-2）：避免 initiated 记录滞留目标公司待认领池
+            _reject_pending_transfers(db, emp, actor=user.username)
         emp.employment_status = payload.employment_status
     emp.version = (emp.version or 1) + 1
     db.commit()
@@ -280,7 +354,14 @@ def promote_employee(eid: int, payload: PromoteRequest,
     )
     if not new_pn:
         raise HTTPException(404, "目标岗位不存在")
-    _assert_attachable(db, new_pn)
+    # 空闲目标岗白名单与 claim 对称（#124 复测发现）：Open/Vacant/Offered/Planned 均可升入
+    # （月末升职常先立 planned 编制、生效日转 Filled；ALLOWED_EMPLOYEE 含 planned→filled），
+    # occupied/closed/frozen 仍拒绝
+    if new_pn.status not in (PositionStatus.OPEN, PositionStatus.VACANT,
+                             PositionStatus.OFFERED, PositionStatus.PLANNED):
+        raise HTTPException(400, f"目标岗位状态为 {new_pn.status.value}，非空闲编制（occupied/closed/frozen 不可升入）")
+    if db.query(Employee).filter(Employee.position_number_id == new_pn.id).first():
+        raise HTTPException(400, "目标岗位已被其他员工占用")
     # 挂编联动（#50）：新岗类型须匹配员工合同属性（DB 触发器兜底前先给 400）
     _assert_type_match(new_pn, emp.employee_type)
 
@@ -291,12 +372,28 @@ def promote_employee(eid: int, payload: PromoteRequest,
                                  note=f"员工 {emp.name} {timing_cn}移出（如需关闭编制请手动 Closed）",
                                  employee_id=emp.id, system=True)
         lifecycle.transition(db, new_pn, PositionStatus.FILLED,
-                             note=f"员工 {emp.name} {timing_cn}入岗",
+                             note=f"员工 {emp.name} {timing_cn}入岗" + (f"（{payload.note}）" if payload.note else ""),
                              employee_id=emp.id, system=True)
         new_pn.prev_position_id = old_pn.id
         new_pn.prev_company_id = old_pn.company_id
         emp.position_number_id = new_pn.id
         emp.version = (emp.version or 1) + 1
+        # 升职结构化留痕（#113）：transfers 表 kind='promotion'，支撑 F1.5b 财务月边界归属审计
+        from datetime import datetime as _dt
+        from datetime import timezone as _tz
+        db.add(Transfer(
+            employee_id=emp.id,
+            from_position_id=old_pn.id,
+            target_company_id=new_pn.company_id,
+            to_position_id=new_pn.id,
+            status="claimed",
+            kind="promotion",
+            timing=payload.timing,
+            initiated_by=user.username,
+            claimed_by=user.username,
+            claimed_at=_dt.now(_tz.utc),
+            note=payload.note,
+        ))
     db.commit()
     return {"ok": True, "employee": serialize_employee(db, emp)}
 
@@ -307,3 +404,21 @@ def _vacate(db: Session, emp: Employee, note: str):
     if pn and pn.status == PositionStatus.FILLED:
         lifecycle.transition(db, pn, PositionStatus.VACANT, note=note, employee_id=emp.id, system=True)
     emp.position_number_id = None
+
+
+def _reject_pending_transfers(db: Session, emp: Employee, actor: str):
+    """员工离职时自动退回其未决转调（#119-2），避免 initiated 记录滞留待认领池。"""
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
+    pend = (
+        db.query(Transfer)
+        .filter(Transfer.employee_id == emp.id,
+                Transfer.status == "initiated",
+                Transfer.kind == "transfer")
+        .with_for_update()
+        .all()
+    )
+    for t in pend:
+        t.status = "rejected"
+        t.claimed_by = actor
+        t.claimed_at = _dt.now(_tz.utc)

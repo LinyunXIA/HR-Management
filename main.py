@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy import text
 
 from app.limiter import limiter
@@ -179,11 +180,36 @@ def _ensure_v26_migrations():
 
 _ensure_v26_migrations()
 
+
+# 查询索引（issue #109，DESIGN §4.2）：models.py 已声明供新库 create_all 一次到位；
+# 存量库 create_all 不补索引，此处按名幂等 CREATE INDEX IF NOT EXISTS 兜底
+def _ensure_indexes():
+    stmts = [
+        "CREATE INDEX IF NOT EXISTS ix_position_numbers_status ON position_numbers (status)",
+        "CREATE INDEX IF NOT EXISTS ix_position_numbers_solid_line_manager ON position_numbers (solid_line_manager_id)",
+        "CREATE INDEX IF NOT EXISTS ix_position_events_pn_changed ON position_events (position_number_id, changed_at)",
+        "CREATE INDEX IF NOT EXISTS ix_employment_tax_items_tax_zone_id ON employment_tax_items (tax_zone_id)",
+    ]
+    try:
+        with engine.begin() as conn:
+            for s in stmts:
+                conn.execute(text(s))
+        print("[migrate] 查询索引已就绪（#109：status/solid_line/events 复合/tax_zone）",
+              file=sys.stderr)
+    except Exception as e:  # noqa: BLE001
+        print(f"[migrate] indexes ensure failed: {e}", file=sys.stderr)
+
+
+_ensure_indexes()
+
 with SessionLocal() as db:
     seed_master_data(db)
 
 app = FastAPI(title="轻量级 HR 管理系统", version="1.0.0")
 app.state.limiter = limiter
+# 全局限流中间件（issue #105）：default_limits 仅经 SlowAPIMiddleware 生效；
+# 缺失时仅 @limiter.limit 装饰端点被限流，其余接口无速率保护
+app.add_middleware(SlowAPIMiddleware)
 
 
 def _rate_limit_handler(request: Request, exc: RateLimitExceeded):

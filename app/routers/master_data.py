@@ -9,7 +9,7 @@ from fastapi import Request
 from app.auth import get_current_user, require_admin, require_api_scope
 from app.db import get_db
 from app.helpers import get_or_404
-from app.limiter import limiter
+from app.limiter import RATE_LIMIT_PUBLIC, limiter
 from app.models import (
     Company,
     CompanyShareholder,
@@ -448,7 +448,7 @@ _crud(PositionType, PositionTypeOut, PositionTypeCreate, PositionTypeUpdate,
 
 # ---------------------------------------------------------------- 对外接口：获取所有隶属公司（PRD §7B 外部 API 需 JWT）
 @router.get("/public/companies")
-@limiter.limit("60/minute")
+@limiter.limit(RATE_LIMIT_PUBLIC)
 def public_companies(request: Request, db: Session = Depends(get_db),
                      user: User = Depends(require_api_scope("public.companies"))):
     """对外暴露：隶属公司完整信息（v2.4.3：公司ID / 名称 / 开业日期 / 关闭日期 / 股权结构 / 状态）。
@@ -470,7 +470,7 @@ def public_companies(request: Request, db: Session = Depends(get_db),
 
 # ---------------------------------------------------------------- 对外接口：获取级别字典（v2.6 外部基准对接）
 @router.get("/public/levels")
-@limiter.limit("60/minute")
+@limiter.limit(RATE_LIMIT_PUBLIC)
 def public_levels(request: Request, db: Session = Depends(get_db),
                   _user: User = Depends(require_api_scope("public.levels"))):
     """对外暴露：级别字典（code/label/is_management），供外部系统按我方 code 下发基准。"""
@@ -491,7 +491,7 @@ def _country_or_region_raw(pn: PositionNumber) -> str:
 
 
 @router.get("/public/positions")
-@limiter.limit("60/minute")
+@limiter.limit(RATE_LIMIT_PUBLIC)
 def public_positions(request: Request, year: int,
                      company_ids: str | None = None,
                      user: User = Depends(require_api_scope("public.positions")),

@@ -101,7 +101,7 @@ X-Token: <access_token>               # 兼容内部 Token 头
 | 路径 | `/public/companies` |
 | 认证 | **JWT**（`Authorization: Bearer`）+ **「获取隶属公司列表」API 权限**（v2.4.3） |
 | 限流 | `60/minute` / IP |
-| 返回 | JSON 数组：公司ID / 名称 / 开业日期 / 关闭日期 / 股权结构 / 状态（v1.2 扩展） |
+| 返回 | JSON 数组：公司ID / 名称 / 开业日期 / 关闭日期 / 股权结构 / 绑定税区 / 状态（v1.2 扩展；v1.6 增 `tax_zone_id`/`tax_zone_label`） |
 
 ### 请求
 
@@ -131,6 +131,8 @@ curl -s http://127.0.0.1:7273/api/v1/public/companies \
     "is_active": true,
     "opening_date": null,
     "closing_date": null,
+    "tax_zone_id": 1,
+    "tax_zone_label": "卢森堡（国家级）",
     "shareholders": [
       {
         "id": 12,
@@ -157,6 +159,8 @@ curl -s http://127.0.0.1:7273/api/v1/public/companies \
 | is_active | boolean | 是否启用（与关闭日期联动） |
 | opening_date | string\|null | 开业日期（`YYYY-MM-DD`；年份精度按 `YYYY-01-01` 存） |
 | closing_date | string\|null | 关闭日期（有值视为已关闭） |
+| tax_zone_id | integer\|null | 绑定税区 ID（v1.6 / v2.6 R1：公司↔税区一对一，内部成本口径键；对外仅作引用） |
+| tax_zone_label | string\|null | 绑定税区展示名（如「卢森堡（国家级）」） |
 | shareholders | array | 股权结构（0..N 行，三来源互斥：内部公司 / 外部合作公司 / 自然人） |
 | shareholders[].ownership_pct | number\|null | 持股比例 %（可选填） |
 | status | string | `opened` / `closed` |
@@ -311,4 +315,5 @@ HTTP/1.1 422 Unprocessable Entity
 | 2026-08-24 | v1.2 | 响应扩展为**全字段**：开业/关闭日期、股权结构（三来源股东 + 持股比例）、状态；需「获取隶属公司列表」API 权限（v2.4.3 权限拆分）；非 admin 按可管实体过滤 |
 | 2026-08-24 | v1.3 | **移除遗留端点**：`/auth/register`、`/users`、`/auth/register-first` 从代码与文档删除——外部仅「登录」+ 已授权对外 API，建号统一走内部 `/admin/users` |
 | 2026-08-24 | v1.5 | **第二轮修订（R2）**：原 `POST /benchmarks` + `GET /benchmarks/reports/{year}` 整体废弃（计算权移交第三方）；新增 `GET /public/positions` 在岗岗位数据导出（scope=public.positions，year+可选 company_ids 过滤，CSV 字段对齐、零成本字段）；接口总览同步 |
+| 2026-08-26 | v1.6 | `/public/companies` 响应补 `tax_zone_id` / `tax_zone_label` 字段（additive，v2.6 R1 公司绑税区；issue #127 文档同步） |
 | 2026-08-24 | v1.4 | **新增两条对外 API（v2.6）**：`§2 GET /public/levels` 级别字典（scope=public.levels）；`§3 POST /benchmarks` + `GET /benchmarks/reports/{year}` 年度用工成本预估（scope=benchmarks）；新增接口总览；说明改为含写入型接口。**（v1.5 已按 R2 废弃该链路）** |

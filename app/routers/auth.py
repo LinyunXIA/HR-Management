@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.limiter import limiter
+from app.limiter import RATE_LIMIT_LOGIN, limiter
 
 from app.auth import create_access_token, get_current_user, verify_password
 from app.db import get_db
@@ -61,7 +61,7 @@ def _is_api_user(user: User) -> bool:
 
 
 @router.post("/auth/login", response_model=TokenResponse)
-@limiter.limit("10/minute")
+@limiter.limit(RATE_LIMIT_LOGIN)
 def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)):
     """程序化登录（外部 API 接入）。API 类型用户须持「认证」授权换取 JWT。"""
     user = _authenticate(db, payload.username, payload.password)
@@ -73,7 +73,7 @@ def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)
 
 
 @router.post("/auth/ui-login", response_model=TokenResponse)
-@limiter.limit("10/minute")
+@limiter.limit(RATE_LIMIT_LOGIN)
 def ui_login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)):
     """Web 界面专用登录。仅 UI 类型账号；API 账号不支持网页界面登录（403）。
 

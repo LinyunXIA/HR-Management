@@ -15,8 +15,8 @@ async function api(path, options = {}) {
   const data = await res.json().catch(() => null);
   if (!res.ok) {
     if (res.status === 401) {
-      // 外部 API 未认证或 Token 过期
-      if (path !== '/auth/login' && path !== '/auth/me') {
+      // 外部 API 未认证或 Token 过期；登录端点自身的 401=凭据错误，不弹会话过期
+      if (path !== '/auth/login' && path !== '/auth/ui-login' && path !== '/auth/me') {
         toast('登录已过期，请重新登录', 'error');
         if (window.Auth) Auth.showLogin();
       }

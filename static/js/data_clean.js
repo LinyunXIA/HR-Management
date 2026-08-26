@@ -13,11 +13,16 @@ const DataClean = {
         </div>
         <div class="wf-body">
 
-          <div class="section-title">① 上传 Org-Chart.md</div>
-          <div class="import-drop" id="dc-drop" style="margin-bottom:16px">
-            <div style="font-size:18px;margin-bottom:8px">📄 点击选择或拖入 Org-Chart.md</div>
-            <div class="hint">系统将按 Position.csv 模版格式自动清洗并输出 CSV</div>
+          <div class="section-title">① 上传 Org-Chart3.md</div>
+          <div class="import-drop" id="dc-drop" style="margin-bottom:12px">
+            <div style="font-size:18px;margin-bottom:8px">📄 点击选择或拖入 Org-Chart3.md</div>
+            <div class="hint">系统将按 Position.csv 模版格式自动清洗并输出 CSV（仅支持 Org-Chart3 格式）</div>
             <input type="file" id="dc-file" accept=".md,.txt" style="display:none">
+          </div>
+          <div style="margin-bottom:16px" id="dc-server-wrap">
+            <span class="hint">或选择服务器原始文件（testingdata/原始文件/）：</span>
+            <select id="dc-server-file" style="min-width:220px"><option value="">加载中…</option></select>
+            <button class="btn small" id="dc-server-run">解析所选文件</button>
           </div>
 
           <div id="dc-status" style="margin-bottom:12px"></div>
@@ -52,6 +57,23 @@ const DataClean = {
     };
     fileInput.onchange = () => { if (fileInput.files[0]) this.uploadFile(fileInput.files[0]); };
 
+    // 服务器原始文件入口（#126：files/list + ?source_file= 前端消费）
+    const serverSel = document.getElementById('dc-server-file');
+    try {
+      const files = await get('/data-clean-jobs/files/list');
+      const mds = (files.items || files || []).filter((f) => (f.name || f).endsWith('.md'));
+      serverSel.innerHTML = mds.length
+        ? mds.map((f) => `<option value="${esc(f.name || f)}">${esc(f.name || f)}</option>`).join('')
+        : '<option value="">（服务器无 .md 文件）</option>';
+    } catch (_e) {
+      serverSel.innerHTML = '<option value="">（文件列表不可用）</option>';
+    }
+    document.getElementById('dc-server-run').onclick = () => {
+      const name = serverSel.value;
+      if (!name) { toast('请先选择服务器文件'); return; }
+      this.cleanServerFile(name);
+    };
+
     document.getElementById('dc-copy').onclick = () => {
       navigator.clipboard.writeText(document.getElementById('dc-csv-text').value);
       toast('已复制到剪贴板', 'ok');
@@ -81,6 +103,28 @@ const DataClean = {
       document.getElementById('dc-status').innerHTML =
         '<span style="color:var(--ok)">✅ 解析完成，共 ' + data.total_positions + ' 个岗位</span>' +
         '<span class="hint" style="margin-left:8px">输出格式：Position.csv 模版（17 列）</span>';
+      this.renderReport(data.report);
+      this.renderPreview(data.cleaned);
+      document.getElementById('dc-csv-text').value = data.csv_text;
+      document.getElementById('dc-csv').style.display = '';
+    } catch (e) {
+      document.getElementById('dc-status').innerHTML = '<span style="color:var(--danger)">❌ ' + esc(e.message) + '</span>';
+    }
+  },
+
+  async cleanServerFile(name) {
+    document.getElementById('dc-status').innerHTML = '<span class="hint">⏳ 正在解析服务器文件 ' + esc(name) + '…</span>';
+    document.getElementById('dc-report').innerHTML = '';
+    document.getElementById('dc-preview').innerHTML = '';
+    document.getElementById('dc-csv').style.display = 'none';
+    try {
+      const data = await post(`/data-clean-jobs?source_file=${encodeURIComponent(name)}`);
+      this.parsed = data;
+      this.csvText = data.csv_text;
+      this.jobId = data.id;
+      document.getElementById('dc-status').innerHTML =
+        '<span style="color:var(--ok)">✅ 解析完成，共 ' + data.total_positions + ' 个岗位</span>' +
+        '<span class="hint" style="margin-left:8px">来源：服务器文件 ' + esc(name) + '</span>';
       this.renderReport(data.report);
       this.renderPreview(data.cleaned);
       document.getElementById('dc-csv-text').value = data.csv_text;

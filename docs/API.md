@@ -169,7 +169,7 @@
 | POST | `/positions/{id}/transitions` | 状态流转（201，创建一条事件并变更状态） |
 | GET | `/positions/{id}/transitions` | 该岗位的流转事件列表 |
 | GET | `/transitions?positionId=` | 全局流转事件列表（可按岗位过滤） |
-| GET | `/positions/{id}/cost-calculation?salary_before_tax=` | 按**岗位隶属公司绑定税区**计算成本（v2.6 R1 口径；只读派生资源，支持 `?salary_before_tax=` 传入未落库薪资避免双重 PATCH，#15） |
+| GET | `/positions/{id}/cost-calculation?salary_before_tax=&fixed_bonus=&floating_bonus=&scope=budget\|actual` | 成本测算（v2.6 R1：税区=岗位隶属公司绑定税区；奖金两栏可传表单值试算；薪资缺失 400，#115） |
 | DELETE | `/positions/{id}` | 删除（有在职员工或已有事件时禁止） |
 
 **GET /positions 查询参数**
@@ -288,7 +288,8 @@
 | GET | `/employees` | 列表（含筛选） |
 | POST | `/employees` | 创建（201，必须挂岗 → 岗位自动 Filled） |
 | GET | `/employees/{id}` | 详情（含岗位、直线/虚线经理 + `version`） |
-| PATCH | `/employees/{id}` | 部分更新；`employment_status=离职` 触发解绑 → 岗位 Vacant；**需 `version` 乐观锁，冲突 409** |
+| PATCH | `/employees/{id}` | 部分更新；`employment_status=离职` 触发解绑 → 岗位 Vacant（并自动退回未决转调，#119）；**需 `version` 乐观锁（缺失 422，#112）**；`转调中` 状态与 `target_company_id` 仅可经 /transfers/initiate\|claim\|reject 流转 |
+| GET | `/employees/{id}/cost-calculation?salary_before_tax=&fixed_bonus=&floating_bonus=` | 员工实际成本测算（v2.6 R1：税区=员工所挂岗位公司绑定税区，跟人走；未挂岗/薪资缺失 400；#111 补实现） |
 | POST | `/transfers` | 调岗（201，旧岗→Vacant，新岗→Filled） |
 | GET | `/transfers?employeeId=` | 调岗记录列表（可按员工过滤） |
 | DELETE | `/employees/{id}` | 删除（仅已离职且已解绑） |
@@ -373,7 +374,7 @@
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/imports` | 上传 Position.csv（multipart，字段名 `file`），幂等 upsert（各环境均允许，v2.4.1 移除 #14 prod 拦截） |
+| POST | `/imports` | 上传 Position.csv（multipart，字段名 `file`），幂等 upsert（各环境均允许，v2.4.1 移除 #14 prod 拦截）；**仅 admin**（#120 裁决 A：与 data-clean 导入对齐，PRD §7B.3） |
 
 响应：
 
@@ -529,7 +530,7 @@ Authorization: Bearer <access_token>
 | GET | /transfers/pending | transfers | JWT | 全局 |
 | POST | /transfers/{id}/claim、/transfers/{id}/reject | transfers | JWT（claim 仅目标公司可管 HR） | 全局 |
 | GET | /org-charts（?report={org\|solid\|dotted} + Accept: text/markdown 导出 MD） | orgchart | JWT | 全局 |
-| POST | /imports；GET /imports | import_routes | JWT | 全局 |
+| POST | /imports（**仅 admin**，#120）；GET /imports | import_routes | JWT(admin) 写 / JWT 读 | 全局 |
 | GET | /data-clean-jobs、/data-clean-jobs/{jobId}、/data-clean-jobs/files/list | data_clean | JWT | 全局 |
 | POST | /data-clean-jobs | data_clean | JWT | 全局 |
 | POST | /data-clean-jobs/{jobId}/imports | data_clean | **JWT(admin)**（#95） | 全局 |

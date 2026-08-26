@@ -8,8 +8,10 @@
 - 岗位行：`英文名 - 中文名 【法律分类】(Opening: YYYY)`（无 P 编号；即使带编号也一律忽视）
 - 岗位下方 `权责说明：…` 续行 → 工作职责描述
 
-编号策略：**源文件编号一律忽视，CSV「岗位编号」列留空**，由系统在导入时分配
-（正式岗 P1/P2/…、外包岗 PA1/PA2/…，见 app/helpers.generate_number 与 app/import_csv）。
+编号策略：**源文件编号一律忽视，CSV「岗位编号」列输出临时 T 序号占位**（T1/T2/…，
+供 review 阶段识别岗位/经理；2026-08-26 审计定稿回写，与 to_csv 实现一致），不占正式
+编号池、不跨轮累积；由系统在导入时分配正式编号（P1/P2/…、PA1/PA2/…，见
+app/helpers.generate_number 与 app/import_csv）。
 
 直线经理推断：真实树祖先 —— 岗位的经理 = 树中最近的**上层岗位节点**（跳过公司/类型分组节点）；
 同层兄弟节点互不挂靠；公司节点清空其深度的祖先栈（跨公司不串报线）；
@@ -40,6 +42,10 @@ TYPE_MAP = {
 # 源文件历史 P 编号（识别后剥离忽视）
 LEGACY_NUMBER_RE = re.compile(r"^P(A?\d+)(?:-\d+(?:-\d+)?)?\s*-?\s*")
 
+# 旧格式（Org-Chart.md，v2.3 起不再支持）特征：岗位行带 P{ddd}-{n} 编号前缀（#118）。
+# 前缀兼容树干绘制符（│ ├ └ ─ 等）与缩进/列表符——如 "    │   └─ P001-1 - Family Chairman…"
+LEGACY_POS_LINE_RE = re.compile(r"^[\s│├└┬┴─*+\-]*P\d+\s*-\s*\S")
+
 # 岗位行正则：英文名 - 中文名 【legal】(Opening: YYYY)
 POS_RE = re.compile(r"^(.+?)\s*-\s*(.+?)\s*(?:【(.+?)】)?\s*\(Opening:\s*(\d{4})")
 # (Opening:YYYY) 之后的尾随备注：【...】
@@ -51,6 +57,10 @@ COMPANY_DETAIL_RE = re.compile(r"(.+?)\s*\|\s*(\d{4})")
 
 # 树区起止标记
 TREE_START_MARK = "完整组织架构树"
+
+
+class DataCleanError(ValueError):
+    """清洗输入不合法（旧格式/空树等），由路由转 400 返回给用户（#118）。"""
 
 
 def _line_indent(line: str) -> int:
@@ -481,9 +491,26 @@ def to_csv(cleaned: List[Dict], positions_map: Dict = None) -> str:
 # ─── 主清洗流程 ─────────────────────────────────────────────
 
 def run_clean(orgchart_md: str, rules_md: str) -> Dict:
-    """执行完整清洗流程，返回 {cleaned, csv_text, report, company_map}。"""
+    """执行完整清洗流程，返回 {cleaned, csv_text, report, company_map}。
+
+    仅支持 Org-Chart3 格式（PRD §3.7）：
+    - 解析到 0 个岗位 → 抛 DataCleanError（路由转 400），不再静默返回空报告；
+    - 检出旧格式特征（岗位行带 P{ddd}-{n} 编号）→ 显式拒绝（#118）。
+    """
+    # 旧格式探测：Org-Chart.md 的树标题同为「完整组织架构树」，但岗位行带历史 P 编号
+    legacy_hits = sum(1 for ln in orgchart_md.splitlines() if LEGACY_POS_LINE_RE.match(ln))
+    if legacy_hits:
+        raise DataCleanError(
+            f"检测到旧版 Org-Chart 格式特征（{legacy_hits} 行带历史 P 编号的岗位行）。"
+            f"系统仅支持 Org-Chart3 格式（无编号树 + 权责说明续行，PRD §3.7）；"
+            f"请改用 testingdata/原始文件/Org-Chart3.md")
+
     # 1. 解析 Org-Chart.md（Org-Chart3 格式）
     positions, company_map = parse_orgchart(orgchart_md)
+    if not positions:
+        raise DataCleanError(
+            "未识别到任何岗位（0 个）——请确认文件为 Org-Chart3 格式："
+            "`# 完整组织架构树…` 标题 + 缩进岗位行「英文名 - 中文名 【法律分类】(Opening: YYYY)」")
 
     # 2. 解析 Position.md 规则（解析不完整时显式写入报告，不静默回退）
     rules = parse_rules(rules_md)

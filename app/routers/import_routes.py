@@ -5,7 +5,7 @@ import io
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-from app.auth import get_current_user
+from app.auth import get_current_user, require_admin
 from app.db import get_db
 from app.import_csv import import_csv
 
@@ -13,10 +13,13 @@ router = APIRouter(prefix="/api/v1", tags=["import"])
 
 
 @router.post("/imports", status_code=201)
-async def create_import(file: UploadFile = File(...), _user=Depends(get_current_user),
+async def create_import(file: UploadFile = File(...), _admin=Depends(require_admin),
                         db: Session = Depends(get_db)):
     """创建导入作业：上传 Position.csv 并幂等入库（非破坏性 upsert；v2.4.1 起各环境均允许，
-    破坏性操作仍由 assert_writable 拦截）。"""
+    破坏性操作仍由 assert_writable 拦截）。
+
+    权限（issue #120 裁决 A）：与 data-clean 作业导入对齐，仅 admin——PRD §7B.3
+    「主数据字典/导入：admin 维护，hr 只读」。"""
     content = await file.read()
     try:
         text = content.decode("utf-8-sig")

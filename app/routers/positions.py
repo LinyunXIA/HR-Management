@@ -1,5 +1,6 @@
 """岗位/职位/公司/国家 路由。"""
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import lifecycle
@@ -99,7 +100,9 @@ def list_positions(
     if status:
         q = q.filter(PositionNumber.status == status)
     if role == "manager":
-        q = q.filter(PositionNumber.level.like("M%"))
+        # 大小写不敏感（#128）：与 _assert_management 的 upper() 口径一致，
+        # 级别字典混入小写 code 时下拉过滤与写入校验行为一致
+        q = q.filter(func.upper(PositionNumber.level).like("M%"))
     if search:
         like = f"%{search.strip()}%"
         q = q.join(Position).filter(
@@ -139,9 +142,12 @@ def create_position(payload: PositionNumberCreate, response: Response,
     if payload.solid_line_manager_id:
         mgr = get_or_404(db, PositionNumber, payload.solid_line_manager_id, "直线经理岗位不存在")
         _assert_management(db, mgr, "直线经理")
+        # 汇报接线权限（#114）：与 PATCH 路径同规则——由被汇报目标岗位的操作者维护
+        assert_can_write_company(db, user, mgr.company_id, label="被汇报目标岗位所属公司")
     for mid in dict.fromkeys(payload.dotted_manager_ids):
         mgr = get_or_404(db, PositionNumber, mid, f"虚线经理岗位不存在 (id={mid})")
         _assert_management(db, mgr, "虚线经理")
+        assert_can_write_company(db, user, mgr.company_id, label="被汇报目标岗位所属公司")
 
     # DESIGN §4.1：legal_category 为字符串，校验来自 LegalCategoryDef 字典（issue #2）
     if payload.legal_category:
@@ -355,12 +361,17 @@ def list_transitions(position_id: int | None = None, _user=Depends(get_current_u
 
 @router.get("/positions/{pid}/cost-calculation")
 def get_position_cost(pid: int, salary_before_tax: float | None = None,
+                      fixed_bonus: float | None = None,
+                      floating_bonus: float | None = None,
                       scope: str = "budget", _user=Depends(get_current_user), db: Session = Depends(get_db)):
     """成本测算（v2.3 双口径，只读不落库；v2.6 R1 起税区统一取**公司绑定**）。
 
     - scope=budget（默认）：按岗位所属公司绑定的税区计算预算成本，空岗可用；
     - scope=actual：按当前占用员工所挂岗位所属公司的绑定税区计算实际成本；
-    - 公司未绑税区 → configured=false +「未配置」提示，不猜测估值。
+    - salary_before_tax / fixed_bonus / floating_bonus 可传未落库的表单值直接试算
+      （自动模式下奖金两栏仍可手填，参与用工成本合计）；
+    - 公司未绑税区 → configured=false +「未配置」提示，不猜测估值；
+    - 税前薪资缺失 → 400（#115：两口径对称，不静默按 0 计算）。
     """
     from app.helpers import calc_cost_by_zone
     pn = get_or_404(db, PositionNumber, pid, "岗位不存在")
@@ -374,9 +385,11 @@ def get_position_cost(pid: int, salary_before_tax: float | None = None,
             raise HTTPException(400, "该岗位无在职员工，实际成本不可用（请用 scope=budget 查看预算口径）")
         # 人的归属税区 = 其当前所挂岗位所属公司的绑定税区（跟人走）
         salary = salary_before_tax if salary_before_tax is not None else emp.actual_salary_before_tax
-        result = calc_cost_by_zone(db, zone, salary,
-                                   fixed_bonus=emp.actual_fixed_bonus or 0,
-                                   floating_bonus=emp.actual_floating_bonus or 0)
+        if salary is None:
+            raise HTTPException(400, "请先填写税前薪资（实际口径缺失，#115：不按 0 静默计算）")
+        fb = fixed_bonus if fixed_bonus is not None else (emp.actual_fixed_bonus or 0)
+        vb = floating_bonus if floating_bonus is not None else (emp.actual_floating_bonus or 0)
+        result = calc_cost_by_zone(db, zone, salary, fixed_bonus=fb, floating_bonus=vb)
         result.update({"position_id": pn.id, "scope": "actual", "employee_id": emp.id})
         return result
 
@@ -384,9 +397,9 @@ def get_position_cost(pid: int, salary_before_tax: float | None = None,
     salary = salary_before_tax if salary_before_tax is not None else pn.salary_before_tax
     if salary is None:
         raise HTTPException(400, "请先填写税前薪资（人工）")
-    result = calc_cost_by_zone(db, zone, salary,
-                               fixed_bonus=pn.fixed_bonus or 0,
-                               floating_bonus=pn.floating_bonus or 0)
+    fb = fixed_bonus if fixed_bonus is not None else (pn.fixed_bonus or 0)
+    vb = floating_bonus if floating_bonus is not None else (pn.floating_bonus or 0)
+    result = calc_cost_by_zone(db, zone, salary, fixed_bonus=fb, floating_bonus=vb)
     result.update({"position_id": pn.id, "scope": "budget"})
     return result
 

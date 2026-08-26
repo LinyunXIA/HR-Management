@@ -2,7 +2,7 @@
 
 - 密码：bcrypt 哈希
 - Token：PyJWT，HS256，payload 含 sub/role/exp
-- 依赖：get_current_user（外部 API 强制）/ get_current_user_optional（内部可选）
+- 依赖：get_current_user（全接口强制；可选版已随 #128 清理移除）
 """
 import os
 from datetime import datetime, timedelta, timezone
@@ -104,25 +104,6 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
     username = payload.get("sub")
     if not username:
         raise HTTPException(401, "Token 缺少用户信息")
-    user = db.query(User).filter(User.username == username).first()
-    if not user or not user.is_active:
-        raise HTTPException(401, "用户不存在或已停用")
-    return user
-
-
-def get_current_user_optional(request: Request, db: Session = Depends(get_db)) -> Optional[User]:
-    """内部接口可选认证：有 Token 则校验，无则放行（返回 None）。"""
-    token = _extract_token(request)
-    if not token:
-        return None
-    try:
-        payload = decode_token(token)
-    except HTTPException:
-        # 内部接口：Token 无效时仍抛 401，避免静默放行过期 Token 误用
-        raise
-    username = payload.get("sub")
-    if not username:
-        return None
     user = db.query(User).filter(User.username == username).first()
     if not user or not user.is_active:
         raise HTTPException(401, "用户不存在或已停用")

@@ -5,9 +5,11 @@ const Employees = {
   pageSize: 20,
   result: null,
 
-  async fetchCalc(empId, salary) {
-    const q = salary != null ? `?salary_before_tax=${salary}` : '';
-    const c = await get(`/employees/${empId}/cost-calculation${q}`);
+  async fetchCalc(empId, params) {
+    const q = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => { if (v !== '' && v != null) q.set(k, v); });
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    const c = await get(`/employees/${empId}/cost-calculation${qs}`);
     if (c.configured === false) throw new Error(c.message || '该税区未配置税率，无法自动计算');
     return c;
   },
@@ -17,30 +19,33 @@ const Employees = {
     return patch('/employees/' + empId, { ...patchBody, version: fresh.version });
   },
 
-  applyCostMode(modal, emp) {
-    const mode = modal.querySelector('input[name="emp-costmode"]:checked').value;
-    const salary = modal.querySelector('#emp-salary');
-    const share = modal.querySelector('#emp-share');
-    const labor = modal.querySelector('#emp-labor');
+  // 成本六栏（v2.6 F1.6）：auto=税前可填，其余五栏由引擎计算置灰；
+  // manual=六栏均可手填（#106：修复引用已删除的 #emp-share 导致详情抽屉崩溃）
+  EMP_COST_FIELDS: ['#emp-salary', '#emp-mtax', '#emp-mfee', '#emp-fbonus', '#emp-vbonus', '#emp-labor'],
+
+  applyCostMode(modal) {
+    const isAuto = modal.querySelector('input[name="emp-costmode"]:checked').value === 'auto';
     const hint = modal.querySelector('#emp-costhint');
     const recalcBtn = modal.querySelector('#emp-calccost');
-    if (mode === 'auto') {
-      salary.disabled = false; share.disabled = true; labor.disabled = true;
-      hint.textContent = '自动模式：公司份额 = 税前薪资 × Σ(该员工归属税区全部有效科目税率)，用工成本 = 税前 + 份额；城市级分拆后无国家兜底，未配置税率将提示「未配置」。';
-      recalcBtn.style.display = '';
-    } else {
-      salary.disabled = false; share.disabled = false; labor.disabled = false;
-      hint.textContent = '手动模式：三个字段均可填写。';
-      recalcBtn.style.display = 'none';
-    }
+    this.EMP_COST_FIELDS.forEach((sel, i) => {
+      const el = modal.querySelector(sel);
+      if (el) el.disabled = isAuto && i > 0; // auto：仅税前可编辑
+    });
+    hint.textContent = isAuto
+      ? '自动模式：强制扣税 = 税前 × Σ(公司所绑税区 rate 科目税率%)；定额扣费 = Σ(fixed 科目)；奖金两栏仍可手填并计入用工成本；点「重算」按公司税区计算。未绑定税区将提示「未配置」。'
+      : '手动模式：六栏均可手工填写。';
+    recalcBtn.style.display = isAuto ? '' : 'none';
   },
 
   async render() {
     const qs = new URLSearchParams({ page: this.page, page_size: this.pageSize });
     Object.entries(this.filters).forEach(([k, v]) => { if (v) qs.set(k, v); });
     this.result = await get('/employees?' + qs.toString());
+    let pending = { items: [] };
+    try { pending = await get('/transfers/pending'); } catch (_e) { /* 403/网络异常时静默隐藏 */ }
     const el = document.getElementById('tab-employees');
     el.innerHTML = `
+      ${this.pendingPanel(pending.items || [])}
       <div class="panel">
         <div class="toolbar">
           <select id="ef-company"><option value="">全部公司</option>
@@ -72,6 +77,75 @@ const Employees = {
     document.getElementById('ef-new').onclick = () => this.openCreate();
     document.querySelectorAll('[data-emp]').forEach((b) => b.onclick = () => this.openDetail(+b.dataset.emp));
     document.querySelectorAll('[data-pg]').forEach((b) => b.onclick = () => { this.page = +b.dataset.pg; this.render(); });
+    // 待认领池操作（#108：转调认领链路前端入口）
+    document.querySelectorAll('[data-claim]').forEach((b) => b.onclick = () => this.openClaim(pending.items.find((t) => t.id === +b.dataset.claim)));
+    document.querySelectorAll('[data-reject]').forEach((b) => b.onclick = async () => {
+      const t = pending.items.find((x) => x.id === +b.dataset.reject);
+      if (!t || !confirm(`确认退回 ${t.employee_name} 的转调？员工将留任原岗。`)) return;
+      try {
+        await post(`/transfers/${t.id}/reject`);
+        toast('已退回，员工继续留任原岗', 'ok');
+        this.render(); App.loadStats();
+      } catch (err) { toast(err.message); }
+    });
+  },
+
+  // 转调待认领池（#108）：仅目标公司可管 HR 可见（后端 /transfers/pending 已按实体过滤）
+  pendingPanel(items) {
+    if (!items.length) return '';
+    return `
+      <div class="panel" style="border-left:4px solid #f0ad4e">
+        <div class="section-title">📥 待认领转调（${items.length}）</div>
+        <table>
+          <thead><tr><th>发起时间</th><th>员工</th><th>原岗位</th><th>转入目标公司</th><th>备注</th><th style="width:180px"></th></tr></thead>
+          <tbody>
+            ${items.map((t) => `
+              <tr>
+                <td>${fmtDate(t.created_at)}</td>
+                <td>${esc(t.employee_name || '—')}</td>
+                <td><span class="num">${esc(t.from_position_number || '—')}</span></td>
+                <td>${esc(t.target_company_name || '—')}</td>
+                <td>${esc(t.note || '—')}</td>
+                <td>
+                  <button class="btn small primary" data-claim="${t.id}">✓ 认领分配</button>
+                  <button class="btn small danger" data-reject="${t.id}">✕ 拒绝退回</button>
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  },
+
+  async openClaim(t) {
+    if (!t) return;
+    // 空闲目标岗：Open/Vacant/Offered/Planned 且无占用（PRD F1.5b）
+    const r = await get(`/positions?company_id=${t.target_company_id}&page_size=500`);
+    const available = r.items.filter((p) =>
+      ['open', 'vacant', 'offered', 'planned'].includes(p.status) && !p.incumbent_id);
+    const modal = openModal(`
+      <header><h2>认领转调 · ${esc(t.employee_name || '')}</h2><button class="btn small" onclick="closeModal()">✕</button></header>
+      <div class="body">
+        <div class="hint" style="margin-bottom:12px">认领即单事务生效：原岗位 → Vacant、所选岗位 → Filled、员工挂新岗并记来源（工龄不变）。</div>
+        <div class="field"><label>目标公司</label><input type="text" value="${esc(t.target_company_name || '')}" disabled></div>
+        <div class="field"><label>空闲目标岗位 *</label>
+          <select id="tc-pos">${available.length
+            ? available.map((p) => `<option value="${p.id}">${esc(p.number)} ${esc(p.position_name)} · ${STATUS_LABEL[p.status]}${p.company_name ? ' · ' + esc(p.company_name) : ''}</option>`).join('')
+            : '<option value="">（该公司暂无空闲编制）</option>'}</select>
+        </div>
+      </div>
+      <footer><button class="btn" onclick="closeModal()">取消</button><button class="btn primary" id="tc-save">确认认领</button></footer>`);
+    modal.querySelector('#tc-save').onclick = async () => {
+      if (!val('#tc-pos')) { toast('请选择空闲目标岗位'); return; }
+      try {
+        await post(`/transfers/${t.id}/claim`, { to_position_id: +val('#tc-pos') });
+        closeModal();
+        toast(`已认领：${t.employee_name} 入编新岗，原岗转空缺`, 'ok');
+        this.render(); App.loadStats();
+      } catch (err) {
+        if (err.status === 409) toast('员工转调状态已变化，请刷新后重试', 'error');
+        else toast(err.message);
+      }
+    };
   },
 
   rows() {
@@ -174,7 +248,6 @@ const Employees = {
                        e.actual_fixed_bonus, e.actual_floating_bonus, e.actual_labor_cost]
                       .some((v) => v != null);
     const isAuto = e.actual_cost_mode === 'auto';
-    const dis = isAuto ? 'disabled' : '';
     const num = (v) => (v != null ? v : '');
     const modal = openModal(`
       <header><h2>${esc(e.name)} · ${esc(e.employee_no)}</h2><button class="btn small" onclick="closeModal()">✕</button></header>
@@ -196,12 +269,12 @@ const Employees = {
           <button class="btn" id="emp-calccost" style="${isAuto && hasActual ? '' : 'display:none'}">重算</button>
         </div>
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px" id="emp-costfields">
-          <div class="cost-field"><label>税前（年薪，实际）</label><input type="number" step="0.01" id="emp-salary" value="${num(e.actual_salary_before_tax)}" ${dis}></div>
-          <div class="cost-field"><label>强制扣税（实际）</label><input type="number" step="0.01" id="emp-mtax" value="${num(e.actual_mandatory_tax)}" ${dis}></div>
-          <div class="cost-field"><label>强制定额扣费（实际）</label><input type="number" step="0.01" id="emp-mfee" value="${num(e.actual_mandatory_fixed_fee)}" ${dis}></div>
-          <div class="cost-field"><label>固定奖金（实际）</label><input type="number" step="0.01" id="emp-fbonus" value="${num(e.actual_fixed_bonus)}" ${dis}></div>
-          <div class="cost-field"><label>浮动奖金（实际）</label><input type="number" step="0.01" id="emp-vbonus" value="${num(e.actual_floating_bonus)}" ${dis}></div>
-          <div class="cost-field"><label>用工成本（实际）</label><input type="number" step="0.01" id="emp-labor" value="${num(e.actual_labor_cost)}" ${dis}></div>
+          <div class="cost-field"><label>税前（年薪，实际）</label><input type="number" step="0.01" id="emp-salary" value="${num(e.actual_salary_before_tax)}"></div>
+          <div class="cost-field"><label>强制扣税（实际）</label><input type="number" step="0.01" id="emp-mtax" value="${num(e.actual_mandatory_tax)}"></div>
+          <div class="cost-field"><label>强制定额扣费（实际）</label><input type="number" step="0.01" id="emp-mfee" value="${num(e.actual_mandatory_fixed_fee)}"></div>
+          <div class="cost-field"><label>固定奖金（实际）</label><input type="number" step="0.01" id="emp-fbonus" value="${num(e.actual_fixed_bonus)}"></div>
+          <div class="cost-field"><label>浮动奖金（实际）</label><input type="number" step="0.01" id="emp-vbonus" value="${num(e.actual_floating_bonus)}"></div>
+          <div class="cost-field"><label>用工成本（实际）</label><input type="number" step="0.01" id="emp-labor" value="${num(e.actual_labor_cost)}"></div>
         </div>
         <div class="hint" id="emp-costhint"></div>
         ${e.remark ? `<div class="section-title">备注</div><div style="font-size:13px">${esc(e.remark)}</div>` : ''}
@@ -215,24 +288,28 @@ const Employees = {
           </div>` : ''}
       </div>`);
     // 实际成本模式切换
-    modal.querySelectorAll('input[name="emp-costmode"]').forEach((r) => r.onchange = () => this.applyCostMode(modal, e));
-    this.applyCostMode(modal, e);
+    modal.querySelectorAll('input[name="emp-costmode"]').forEach((r) => r.onchange = () => this.applyCostMode(modal));
+    this.applyCostMode(modal);
     modal.querySelector('#ed-edit').onclick = () => this.openEdit(e);
     modal.querySelector('#emp-calccost').onclick = async () => {
       try {
-        const salary = val('#emp-salary') ? +val('#emp-salary') : null;
-        if (salary == null) { toast('请先填写税前薪资'); return; }
-        const c = await this.fetchCalc(id, salary);
+        if (!val('#emp-salary')) { toast('请先填写税前薪资'); return; }
+        const c = await this.fetchCalc(id, {
+          salary_before_tax: val('#emp-salary'),
+          fixed_bonus: val('#emp-fbonus'),
+          floating_bonus: val('#emp-vbonus'),
+        });
         await this.saveCalc(id, {
-          actual_cost_mode: 'auto', actual_salary_before_tax: salary,
+          actual_cost_mode: 'auto', actual_salary_before_tax: +val('#emp-salary'),
           actual_mandatory_tax: c.mandatory_tax, actual_mandatory_fixed_fee: c.mandatory_fixed_fee,
+          actual_fixed_bonus: val('#emp-fbonus') !== '' ? +val('#emp-fbonus') : null,
+          actual_floating_bonus: val('#emp-vbonus') !== '' ? +val('#emp-vbonus') : null,
           actual_labor_cost: c.labor_cost,
         });
-        modal.querySelector('#emp-salary').value = c.salary_before_tax ?? '';
         modal.querySelector('#emp-mtax').value = c.mandatory_tax ?? '';
         modal.querySelector('#emp-mfee').value = c.mandatory_fixed_fee ?? '';
         modal.querySelector('#emp-labor').value = c.labor_cost ?? '';
-        toast(`已重算并保存：强制扣税 ${fmtMoney(c.mandatory_tax)} · 定额 ${fmtMoney(c.mandatory_fixed_fee)} · 用工成本 ${fmtMoney(c.labor_cost)}`, 'ok');
+        toast(`已重算并保存：强制扣税 ${fmtMoney(c.mandatory_tax)} · 定额 ${fmtMoney(c.mandatory_fixed_fee)} · 用工成本 ${fmtMoney(c.labor_cost)}（含奖金）`, 'ok');
       } catch (err) { toast(err.message); }
     };
     modal.querySelector('#ed-cost-edit').onclick = async () => {
