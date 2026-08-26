@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     Enum as SAEnum,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -116,7 +117,7 @@ class Company(Base):
     is_active = Column(Boolean, nullable=False, default=True)  # True=opened, False=closed（软删除，id 保留）
     opening_date = Column(Date, nullable=True)   # v2.4 开业日期（年份精度按 YYYY-01-01 存；NULL 视为未知在营）
     closing_date = Column(Date, nullable=True)   # v2.4 关闭日期；有值视为关闭
-    tax_zone_id = Column(Integer, ForeignKey("tax_zones.id"), nullable=True)  # v2.6 R1：公司所绑税区
+    tax_zone_id = Column(Integer, ForeignKey("tax_zones.id"), nullable=True, index=True)  # DESIGN §4.2（#109）  # v2.6 R1：公司所绑税区
 
     tax_zone = relationship("TaxZone")
     shareholders = relationship(
@@ -266,7 +267,7 @@ class EmploymentTaxItem(Base):
     __tablename__ = "employment_tax_items"
 
     id = Column(Integer, primary_key=True)
-    tax_zone_id = Column(Integer, ForeignKey("tax_zones.id"), nullable=True)  # v2.3 税区
+    tax_zone_id = Column(Integer, ForeignKey("tax_zones.id"), nullable=True, index=True)  # DESIGN §4.2（#109）  # v2.3 税区
     country_id = Column(Integer, ForeignKey("countries.id"), nullable=True)  # 旧口径保留兼容
     item_name = Column(String(100), nullable=False)
     item_kind = Column(String(10), nullable=False, default="rate")   # v2.6: rate | fixed
@@ -350,6 +351,9 @@ class PositionNumber(Base):
             f"scope <> '{Scope.COUNTRY.name}' OR country_id IS NOT NULL",
             name="ck_positions_country_required_when_country_scope",
         ),
+        # DESIGN §4.2 声明的查询索引（issue #109）
+        Index("ix_position_numbers_status", "status"),
+        Index("ix_position_numbers_solid_line_manager", "solid_line_manager_id"),
     )
 
     id = Column(Integer, primary_key=True)
@@ -426,6 +430,10 @@ class PositionNumberDottedLine(Base):
 class PositionEvent(Base):
     """生命周期事件（时间线）。"""
     __tablename__ = "position_events"
+    __table_args__ = (
+        # DESIGN §4.2 声明的复合索引（issue #109）：详情页时间线按岗位倒序取事件
+        Index("ix_position_events_pn_changed", "position_number_id", "changed_at"),
+    )
 
     id = Column(Integer, primary_key=True)
     position_number_id = Column(

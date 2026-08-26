@@ -586,7 +586,7 @@ CLI：`python -m scripts.import_csv data/Position.csv`（首次 `--reset` 语义
 
 ### S6 编号系统 + 两段式导入（`app/helpers.py:generate_number` + `app/import_csv.py` + `scripts/import_csv.py`）（2026-08-23 已完成，两处按后续用户决策调整）
 - [x] `generate_number`：正式 `P{seq}`、外包 `PA{seq}` 双序列，取同系列 max+1。
-- [x] ~~清洗阶段输出 T 占位~~ **调整为「岗位编号列留空」**（2026-08-23 用户决策：源编号一律忽视、编号列空由系统导入时分配）。
+- [x] ~~清洗阶段输出 T 占位~~ 2026-08-23 曾调整为「编号列留空」，**2026-08-26 审计定稿回归 T 占位**（`to_csv` 输出 `T{seq}` 供 review 识别岗位/经理，导入时一律忽视并由系统分配 P/PA；与 PRD §3.7/F5.2 口径一致，issue #122）。
 - [x] ~~带 ID 认老~~ **调整为幂等键识别**（CSV 无 ID 列；按幂等键 upsert 认老更新、无匹配新建）。
 - [x] 幂等键 = 职位名+公司+国家或地区+开启日（4 列，与 PRD §3.1/§10 决策最终对齐；2026-08-23 审核修正）；文件内重复 → 报错该行不导入。
 - [x] 导入报告返回 `{imported, updated, errors[], warnings[], assigned_numbers[]}`。

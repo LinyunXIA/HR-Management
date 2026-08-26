@@ -4,6 +4,7 @@
 - solid_edges：直线汇报（父→子），依据 solid_line_manager_id。
 - dotted_edges：虚线汇报（岗位 → 虚线经理）。
 - roots：直线经理为空的岗位。
+- anomalies：从任一根不可达的岗位（孤立 / 成环 / 经理引用失效，PRD F3.3 底部异常列表）。
 """
 from sqlalchemy.orm import Session
 
@@ -17,8 +18,10 @@ def build_orgchart(db: Session) -> dict:
     dotted_edges = []
     roots = []
     has_solid_line = set()
+    number_to_id = {}
 
     for pn in pns:
+        number_to_id[pn.number] = pn.id
         node = {
             "id": pn.id,
             "number": pn.number,
@@ -55,9 +58,29 @@ def build_orgchart(db: Session) -> dict:
             if m:
                 dotted_edges.append({"from": pn.number, "to": m.number, "label": label or "虚线汇报"})
 
+    # 异常岗位（#124，PRD F3.3）：从任一根沿直线边可达性遍历，
+    # 不可达者 = 孤立（经理引用失效）或处于汇报环中——底部单独列表提示
+    children: dict[str, list[str]] = {}
+    for e in solid_edges:
+        children.setdefault(e["from"], []).append(e["to"])
+    reachable = set()
+    stack = [r for r in roots if r in number_to_id]
+    while stack:
+        cur = stack.pop()
+        if cur in reachable:
+            continue
+        reachable.add(cur)
+        stack.extend(children.get(cur, []))
+    anomalies = [
+        {"number": n["number"], "display": n["display"], "company": n["company"],
+         "status": n["status"], "reason": "成环或直线经理引用失效，未挂入组织树"}
+        for n in nodes if n["number"] not in reachable and n["number"] not in roots
+    ]
+
     return {
         "nodes": nodes,
         "solid_edges": solid_edges,
         "dotted_edges": dotted_edges,
         "roots": roots,
+        "anomalies": anomalies,
     }

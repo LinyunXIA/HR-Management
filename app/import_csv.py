@@ -36,6 +36,7 @@ EXPECTED_HEADERS = [
     "职位", "职位类型", "岗位编号", "隶属公司", "级别", "国家或地区", "职位开启日", "职位关闭日",
     "工作地点", "工作职责描述", "直线经理", "虚线经理", "法律强制/可选",
     "Org-Chart中的显示", "之前的职位", "之前的公司", "备注",
+    "岗位ID",  # 可选列（#49 迭代导入按正式 ID 认老）；不计入缺列告警
 ]
 
 # 国家名称 → 编号（-4-{编号}，仅作 Country 字典 code 参考，不再参与岗位编号）
@@ -126,6 +127,26 @@ def import_csv(db, rows, *, strict_legal: bool = True):
     """
     report = {"total": 0, "imported": 0, "updated": 0, "updated_by_id": 0,
               "updated_by_key": 0, "errors": [], "warnings": []}
+
+    # ---- 表头比对（#117）：EXPECTED_HEADERS 此前定义未使用，列名笔误会让可空列
+    # 静默取 None 并随 upsert 覆盖库内原值。必填列缺失 → 整批拒绝；可空列缺失/
+    # 未知多余列 → warnings 明细提示。
+    rows = list(rows)
+    actual_headers = set()
+    for r in rows:
+        if r:
+            actual_headers |= {k for k in (r.keys() or []) if k}
+    missing_required = [h for h in ("职位", "隶属公司", "职位开启日") if h not in actual_headers]
+    if missing_required:
+        report["errors"].append(
+            f"CSV 缺少必填列：{'、'.join(missing_required)}（表头漂移会静默清空数据，整批拒绝）")
+        return report
+    missing_optional = [h for h in EXPECTED_HEADERS if h not in actual_headers]
+    extra_cols = [h for h in sorted(actual_headers) if h not in EXPECTED_HEADERS]
+    if missing_optional:
+        report["warnings"].append(f"CSV 缺少可空列（该列将按空值处理，注意迭代导入会覆盖库内原值）：{'、'.join(missing_optional)}")
+    if extra_cols:
+        report["warnings"].append(f"CSV 含未知列（已忽视）：{'、'.join(extra_cols)}")
 
     companies = {c.name: c for c in db.query(Company).all()}
     functions = {p.name: p for p in db.query(Position).all()}
@@ -348,7 +369,15 @@ def import_csv(db, rows, *, strict_legal: bool = True):
 
     # ---- 第 3 趟：解析直线/虚线经理、之前的职位/公司（按职位名）----
     for item in parsed:
-        pn = existing_by_key[item["key"]]
+        pn = existing_by_key.get(item["key"])
+        if pn is None:
+            # 带 ID 认老但识别锚（职位/公司/国家/开启日）与库内派生键不一致——
+            # 违反 PRD F4「识别锚落库后在系统内维护，不在导入阶段改动」；
+            # 此前直接 existing_by_key[key] 会 KeyError → 500（#116）
+            report["errors"].append(
+                f"{item['label']}: 携带岗位ID={item['ref_id']} 但识别锚与库内不一致，"
+                f"该行汇报关系未解析——识别锚字段请在系统内维护而非重导 CSV")
+            continue
         solid, dotted, prev_refs = item["solid_refs"], item["dotted_refs"], item["prev_refs"]
 
         if solid:

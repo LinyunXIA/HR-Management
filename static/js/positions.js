@@ -108,6 +108,81 @@ const Positions = {
       : '';
   },
 
+  /* ---- 岗位预算成本六栏（issue #107，PRD F1.6）----
+     auto/manual 互斥：auto 下强制扣税/定额扣费/用工成本由引擎计算置灰，
+     税前与奖金两栏仍可编辑；manual 六栏均可手填 */
+  COST_FIELDS: [
+    ['salary_before_tax', '税前（年薪）'],
+    ['mandatory_tax', '强制扣税'],
+    ['mandatory_fixed_fee', '强制定额扣费'],
+    ['fixed_bonus', '固定奖金'],
+    ['floating_bonus', '浮动奖金'],
+    ['labor_cost', '用工成本'],
+  ],
+
+  costModeRadios(prefix, isAuto) {
+    return `
+      <label class="cost-mode"><input type="radio" name="${prefix}-costmode" value="manual" ${!isAuto ? 'checked' : ''}> 手动输入</label>
+      <label class="cost-mode"><input type="radio" name="${prefix}-costmode" value="auto" ${isAuto ? 'checked' : ''}> 自动计算（按公司绑定税区）</label>
+      <button type="button" class="btn" id="${prefix}-calccost" style="display:none">重算</button>`;
+  },
+
+  costInputs(prefix, src) {
+    const num = (v) => (v != null ? v : '');
+    return this.COST_FIELDS.map(([f, label]) => `
+      <div class="cost-field"><label>${label}</label>
+        <input type="number" step="0.01" id="${prefix}-${f}" value="${num(src ? src[f] : '')}">
+      </div>`).join('');
+  },
+
+  bindCostMode(modal, prefix) {
+    const sync = () => {
+      const isAuto = modal.querySelector(`input[name="${prefix}-costmode"]:checked`).value === 'auto';
+      ['mandatory_tax', 'mandatory_fixed_fee', 'labor_cost'].forEach((f) => {
+        const el = modal.querySelector(`#${prefix}-${f}`);
+        if (el) el.disabled = isAuto;
+      });
+      const btn = modal.querySelector(`#${prefix}-calccost`);
+      if (btn && btn.dataset.ready === '1') btn.style.display = isAuto ? '' : 'none';
+      const hint = modal.querySelector(`#${prefix}-costhint`);
+      if (hint) {
+        hint.textContent = isAuto
+          ? (btn && btn.dataset.ready === '1'
+            ? '自动模式：填税前与奖金两栏后点「重算」（按隶属公司绑定税区计算）；未绑税区提示「未配置」。'
+            : '自动模式：创建后可在「编辑」中按公司税区一键重算。')
+          : '手动模式：六栏均可手工填写。';
+      }
+    };
+    modal.querySelectorAll(`input[name="${prefix}-costmode"]`).forEach((r) => r.onchange = sync);
+    sync();
+  },
+
+  collectCost(modal, prefix) {
+    const body = { cost_mode: modal.querySelector(`input[name="${prefix}-costmode"]:checked`).value };
+    for (const [f] of this.COST_FIELDS) {
+      body[f] = val(`#${prefix}-${f}`) !== '' ? +val(`#${prefix}-${f}`) : null;
+    }
+    return body;
+  },
+
+  async recalcCost(modal, id, prefix) {
+    if (!val(`#${prefix}-salary_before_tax`)) { toast('请先填写税前薪资'); return; }
+    try {
+      const q = new URLSearchParams({
+        scope: 'budget',
+        salary_before_tax: val(`#${prefix}-salary_before_tax`),
+        fixed_bonus: val(`#${prefix}-fixed_bonus`) || '0',
+        floating_bonus: val(`#${prefix}-floating_bonus`) || '0',
+      });
+      const c = await get(`/positions/${id}/cost-calculation?${q.toString()}`);
+      if (c.configured === false) throw new Error(c.message || '该公司未绑定税区，成本显示「未配置」，不猜测');
+      modal.querySelector(`#${prefix}-mandatory_tax`).value = c.mandatory_tax ?? '';
+      modal.querySelector(`#${prefix}-mandatory_fixed_fee`).value = c.mandatory_fixed_fee ?? '';
+      modal.querySelector(`#${prefix}-labor_cost`).value = c.labor_cost ?? '';
+      toast(`已按公司税区试算：强制扣税 ${fmtMoney(c.mandatory_tax)} · 定额 ${fmtMoney(c.mandatory_fixed_fee)} · 用工成本 ${fmtMoney(c.labor_cost)}（点「保存」落库）`, 'ok');
+    } catch (e) { toast(e.message); }
+  },
+
   async openCreate() {
     this._managers = await this.managerOptions(true);  // 强制刷新，避免缓存导致新管理岗缺失
     const modal = openModal(`
@@ -152,11 +227,18 @@ const Positions = {
           <div class="field full"><label>工作职责描述（可留空）</label><textarea id="pc-desc" rows="2"></textarea></div>
           <div class="field full"><label>Org-Chart 显示名</label><input type="text" id="pc-display"></div>
           <div class="field full"><label>备注（可留空）</label><textarea id="pc-remark" rows="2"></textarea></div>
+          <div class="field full">
+            <label>预算成本六栏（可留空；v2.6 F1.6）</label>
+            <div class="cost-toggle" style="margin:4px 0 8px">${this.costModeRadios('pc', false)}</div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">${this.costInputs('pc', null)}</div>
+            <div class="hint" id="pc-costhint" style="margin-top:6px"></div>
+          </div>
         </div>
       </div>
       <footer><button class="btn" onclick="closeModal()">取消</button><button class="btn primary" id="pc-save">保存</button></footer>`);
 
     this.bindScopeToggle(modal, 'pc');
+    this.bindCostMode(modal, 'pc');
     modal.querySelector('#pc-save').onclick = async () => {
       if (!val('#pc-posname')) { toast('请填写职位'); return; }
       if (!val('#pc-opening')) { toast('请填写开启日（必填，作为在岗判定与幂等键依据）'); return; }
@@ -179,6 +261,7 @@ const Positions = {
         dotted_manager_labels: dottedLabels,
         org_chart_display: val('#pc-display') || null,
         remark: val('#pc-remark') || null,
+        ...this.collectCost(modal, 'pc'),
       };
       try {
         await post('/positions', body);
@@ -213,6 +296,20 @@ const Positions = {
           ${ditem('之前的职位', p.prev_position_number || '—')}
           ${ditem('之前的公司', p.prev_company_name || '—')}
         </div>
+        <div class="section-title">预算成本（岗位口径，不随人走）</div>
+        <div class="detail-grid">
+          ${ditem('输入模式', p.cost_mode === 'auto' ? '自动计算（公司绑定税区）' : '手动输入')}
+          ${this.COST_FIELDS.map(([f, label]) => ditem(label, fmtMoney(p[f]))).join('')}
+        </div>
+        ${p.incumbent_id ? `
+        <div class="section-title">实际成本（${esc(p.incumbent_name || '')} · 跟人走）</div>
+        <div class="detail-grid">
+          ${ditem('输入模式', p.actual_cost_mode === 'auto' ? '自动计算（公司绑定税区）' : '手动输入')}
+          ${[['actual_salary_before_tax', '税前（年薪）'], ['actual_mandatory_tax', '强制扣税'],
+             ['actual_mandatory_fixed_fee', '强制定额扣费'], ['actual_fixed_bonus', '固定奖金'],
+             ['actual_floating_bonus', '浮动奖金'], ['actual_labor_cost', '用工成本']]
+            .map(([f, label]) => ditem(label, fmtMoney(p[f]))).join('')}
+        </div>` : '<div class="hint" style="margin:4px 0 8px">当前无在职员工，仅显示预算口径；入职后此处并置实际成本对照。</div>'}
         ${p.remark ? `<div class="section-title">备注</div><div style="font-size:13px">${esc(p.remark)}</div>` : ''}
 
         <div class="section-title">生命周期流转</div>
@@ -289,11 +386,22 @@ const Positions = {
           <div class="field full"><label>工作职责描述</label><textarea id="pe-desc" rows="2">${esc(p.job_responsibility || '')}</textarea></div>
           <div class="field full"><label>Org-Chart 显示名</label><input type="text" id="pe-display" value="${esc(p.org_chart_display || '')}"></div>
           <div class="field full"><label>备注</label><textarea id="pe-remark" rows="2">${esc(p.remark || '')}</textarea></div>
+          <div class="field full">
+            <label>预算成本六栏（v2.6 F1.6）</label>
+            <div class="cost-toggle" style="margin:4px 0 8px">${this.costModeRadios('pe', p.cost_mode === 'auto')}</div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">${this.costInputs('pe', p)}</div>
+            <div class="hint" id="pe-costhint" style="margin-top:6px"></div>
+          </div>
         </div>
       </div>
       <footer><button class="btn" onclick="closeModal()">取消</button><button class="btn primary" id="pe-save">保存</button></footer>`);
 
     this.bindScopeToggle(modal, 'pe');
+    this.bindCostMode(modal, 'pe');
+    const recalcBtn = modal.querySelector('#pe-calccost');
+    recalcBtn.dataset.ready = '1';
+    if (modal.querySelector('input[name="pe-costmode"]:checked').value === 'auto') recalcBtn.style.display = '';
+    recalcBtn.onclick = () => this.recalcCost(modal, p.id, 'pe');
     modal.querySelector('#pe-save').onclick = async () => {
       const dottedIds = [...modal.querySelector('#pe-dotted').selectedOptions].map((o) => +o.value);
       const dottedLabels = val('#pe-dotted-labels').split('\n').map(s => s.trim()).filter(s => s);
@@ -316,6 +424,7 @@ const Positions = {
         dotted_manager_labels: dottedLabels,
         org_chart_display: val('#pe-display') || null,
         remark: val('#pe-remark') || null,
+        ...this.collectCost(modal, 'pe'),
       };
       try {
         const updated = await patch('/positions/' + p.id, body);

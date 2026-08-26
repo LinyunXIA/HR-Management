@@ -140,8 +140,10 @@ td.num { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weigh
 .org-node.dimmed { opacity: .22; }
 .org-node .collapse-icon { font-size: 10px; fill: #6b7480; }
 .solid-line { stroke: #5a6472; stroke-width: 1.6; fill: none; }
-.dotted-line { stroke: #d98a1f; stroke-width: 1.4; stroke-dasharray: 5 4; fill: none; }
-.dotted-label { font-size: 10px; fill: #d98a1f; }
+.dotted-line { stroke: #d98a1f; stroke-width: 1.4; stroke-dasharray: 5 4; fill: none; pointer-events: stroke; }
+.dotted-label { font-size: 10px; fill: #d98a1f; opacity: 0; transition: opacity .15s; }
+/* 虚线汇报标签：悬浮该边时显示（PRD F3.2 悬浮标注，#124） */
+g.dotted-edge:hover .dotted-label { opacity: 1; }
 
 .org-tooltip {
   position: fixed; z-index: 300; background: #1f2733; color: #fff; border-radius: 8px;

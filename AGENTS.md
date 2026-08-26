@@ -68,10 +68,10 @@ APP_ENV=prod .venv/bin/python -m scripts.import_csv testingdata/原始文件/Pos
 
 ## 5. 后端结构（app/）
 
-- `main.py:1`：入口；`Base.metadata.create_all` + `seed_master_data`；注册 6 个 router；`/` 返回 `static/index.html`；挂载 `/static`
+- `main.py:1`：入口；`Base.metadata.create_all` + `seed_master_data` + 幂等迁移/触发器/索引；注册 9 个 router（auth/users/master_data/data_clean/positions/employees/orgchart/import_routes/transfers）；`/` 返回 `static/index.html`；挂载 `/static`
 - `app/db.py:1`：三环境引擎（`DATABASE_URL_{env}` + `APP_ENV` 分流 + SQLite 文件名强制 `hr_db_{env}.db` + 每连接 `PRAGMA foreign_keys=ON/WAL/busy_timeout` + 读写护栏）；单文件 `.env` 合并版
 - `app/auth.py`：JWT 签发/校验（`Authorization: Bearer`）、bcrypt；`app/limiter.py` 全局限流（`120/min`，登录 `10/min`）
-- `app/models.py:1`：14 张表（含 `users`）+ `position_numbers/employees.version` 乐观锁
+- `app/models.py:1`：20 张表（含 users/user_apis、external_companies/company_shareholders、position_types、transfers 等 v2.3-v2.5 新增）+ `position_numbers/employees.version` 乐观锁
 - `app/helpers.py:1`：`validate_number_format` / `generate_number` / `check_cycle` / `set_dotted_lines` / `serialize_position`
 - `app/lifecycle.py:1`：状态机 + 事件记录
 - `app/orgchart.py`：`build_orgchart(db)` → `{nodes, solid_edges, dotted_edges, roots}`（含虚拟根“家族自然人”）
@@ -120,7 +120,9 @@ APP_ENV=prod .venv/bin/python -m scripts.import_csv testingdata/原始文件/Pos
 - **Git**：未明确要求时不自动 commit/push；commit 前检查 `git status` / `diff`
 - **配置变更**：修改 `opencode.json` / `.opencode/**` 后需重启 opencode 生效
 
-## 10. 当前运行状态（2026-08-24 更新）
+## 10. 当前运行状态（2026-08-26 更新）
+
+- **2026-08-26 全量审计修复已落地（issue #105~#128，索引见 #129）**：全局限流中间件（SlowAPIMiddleware）、员工详情六栏成本修复、岗位成本 UI、转调认领池 UI、4 查询索引、countries 种子、PATCH version 必填、promote 写 transfers、创建路径接线权限、POST /imports 仅 admin（裁决 A）、员工跨司脱敏（裁决 A）、成本测算对称 400 + 奖金试算参数、导入锚不一致防护与表头校验、清洗默认 Org-Chart3 + 旧格式拦截、组织图四项交互、前端报告明细等；回归 152/152 全绿。
 
 - **v2.6 已落地（第二轮修订定稿）**：对外 `GET /public/positions` 在岗岗位数据导出（第三方计算用工成本，原基准推送/报告链路整体废弃）；成本六栏 + 税额科目 rate/fixed 两类；**Company 绑税区一对一，全部成本场景统一公司税区口径**（resolve_tax_zone 退役）；scope=public.positions + GET /admin/scopes；`tests/test_public_positions.py` 24 项
 - **v2.5 存储切换已落地：PostgreSQL → SQLite 同机三文件**（`data/hr_db_{dev,test,prod}.db`，WAL + 每连接 `PRAGMA foreign_keys=ON`）；psycopg2 已移出运行时依赖；主数据字典已从 PG 迁入（`scripts/migrate_pg_master_data.py`，幂等可重跑）

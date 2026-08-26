@@ -10,6 +10,7 @@ import sys
 from sqlalchemy.orm import Session
 
 from app.models import (
+    Country,
     LegalCategoryDef,
     Level,
     PositionType,
@@ -81,6 +82,19 @@ POSITION_TYPES = [
     "Consultant",          # Family Volunteer Unpaid → Consultant
     "Employee",            # In-house Full-time → Employee
     "External Employee",   # Outsourced External → External Employee
+]
+
+# 国家/地区：按 PRD §3.2 九项（issue #110；code 为字典编码参考 4-1..4-9）
+COUNTRIES = [
+    ("比利时", "4-1"),
+    ("丹麦", "4-2"),
+    ("瑞典", "4-3"),
+    ("荷兰", "4-4"),
+    ("卢森堡", "4-5"),
+    ("英国", "4-6"),
+    ("美国", "4-7"),
+    ("中国香港", "4-8"),
+    ("中国上海", "4-9"),
 ]
 
 
@@ -191,6 +205,11 @@ def seed_master_data(db: Session):
         for i, name in enumerate(POSITION_TYPES):
             if name not in existing:
                 db.add(PositionType(name=name, sort_order=len(existing) + i))
+    # 国家/地区九项（issue #110，PRD F0「按 §3.2 九国初始化」；幂等补齐缺失项）
+    existing_countries = {r[0] for r in db.query(Country.name).all()}
+    for name, code in COUNTRIES:
+        if name not in existing_countries:
+            db.add(Country(name=name, code=code))
     # 管理员种子（JWT，PRD §7B）
     _seed_admin(db)
     db.commit()

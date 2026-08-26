@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user, require_admin
-from app.data_clean import run_clean
+from app.data_clean import DataCleanError, run_clean
 from app.db import get_db
 from app.import_csv import import_csv
 
@@ -57,9 +57,9 @@ async def create_data_clean_job(
     source_file: str | None = None,
     _user=Depends(get_current_user),
 ):
-    """创建清洗作业：上传 Org-Chart.md，或用 ?source_file= 指定服务器原始文件（仅限 testingdata/原始文件/ 下的 .md）。
+    """创建清洗作业：上传 Org-Chart3.md，或用 ?source_file= 指定服务器原始文件（仅限 testingdata/原始文件/ 下的 .md）。
 
-    未指定时默认使用服务器 Org-Chart.md。
+    未指定时默认使用服务器 Org-Chart3.md（#118：旧版 Org-Chart.md 仅存档不再解析）。
     """
     rules_path = RAW_DIR / "Position.md"
     if not rules_path.exists():
@@ -69,7 +69,8 @@ async def create_data_clean_job(
     if orgchart is not None:
         org_text = (await orgchart.read()).decode("utf-8")
     else:
-        filename = "Org-Chart.md"
+        # 默认源文件 = Org-Chart3.md（#118：原默认 Org-Chart.md 为 v2.3 起仅存档的旧格式）
+        filename = "Org-Chart3.md"
         if source_file:
             # 防路径穿越：仅取文件名，且必须是 RAW_DIR 下已存在的 .md
             filename = Path(source_file).name
@@ -81,7 +82,11 @@ async def create_data_clean_job(
             raise HTTPException(400, f"原始文件不存在: {filename}（可用: {available}）")
         org_text = org_path.read_text(encoding="utf-8")
 
-    result = run_clean(org_text, rules_text)
+    try:
+        result = run_clean(org_text, rules_text)
+    except DataCleanError as e:
+        # 旧格式/空树显式 400（#118），不再静默返回空报告
+        raise HTTPException(400, str(e))
     job_id = uuid.uuid4().hex[:8]
     job = {
         "id": job_id,

@@ -154,7 +154,7 @@ class PositionNumberUpdate(BaseModel):
     fixed_bonus: float | None = None
     floating_bonus: float | None = None
     labor_cost: float | None = None
-    version: int | None = None  # 乐观锁版本号（PRD §7C），携带时校验
+    version: int  # 乐观锁版本号（PRD §7C「必须携带」，#112 严格化：缺失 422）
 
 
 class TransitionRequest(BaseModel):
@@ -206,7 +206,7 @@ class EmployeeUpdate(BaseModel):
     actual_floating_bonus: float | None = None
     actual_labor_cost: float | None = None
     remark: str | None = None
-    version: int | None = None  # 乐观锁版本号（PRD §7C）
+    version: int  # 乐观锁版本号（PRD §7C「必须携带」，#112 严格化：缺失 422）
 
 
 class TransferRequest(BaseModel):

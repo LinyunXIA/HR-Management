@@ -44,10 +44,34 @@ const OrgChart = {
           <button class="btn small" data-exp="dotted">虚线汇报线</button>
         </div>
         <svg class="org-svg" id="org-svg"></svg>
+        <div id="og-anomalies"></div>
       </div>`;
     this.buildIndex();
     this.bind();
     this.draw();
+    this.renderAnomalies();
+  },
+
+  // 孤立/成环异常岗位底部列表（#124，PRD F3.3；数据由后端 build_orgchart.anomalies 提供）
+  renderAnomalies() {
+    const box = document.getElementById('og-anomalies');
+    if (!box) return;
+    const an = this.data.anomalies || [];
+    box.innerHTML = an.length ? `
+      <div class="panel" style="border-left:4px solid var(--danger);margin-top:8px">
+        <div class="section-title">⚠️ 异常岗位（孤立 / 成环，${an.length} 个）</div>
+        <table style="max-width:760px">
+          <thead><tr><th>岗位编号</th><th>显示名</th><th>隶属公司</th><th>状态</th><th>原因</th></tr></thead>
+          <tbody>${an.map((a) => `
+            <tr>
+              <td class="num">${esc(a.number)}</td>
+              <td>${esc(a.display || '—')}</td>
+              <td>${esc(a.company || '—')}</td>
+              <td>${statusBadge(a.status)}</td>
+              <td class="hint">${esc(a.reason)}</td>
+            </tr>`).join('')}</tbody>
+        </table>
+      </div>` : '';
   },
 
   buildIndex() {
@@ -184,16 +208,20 @@ const OrgChart = {
       seen.add(key);
       const p1 = this.nodePos(e.from), p2 = this.nodePos(e.to);
       const y1 = p1.y + 38, y2 = p2.y + 38;
+      // 每条虚线独立 <g>：「虚线汇报」标签默认隐藏，悬浮该边时显示（PRD F3.2 悬浮标注，#124）
+      const eg = document.createElementNS(NS, 'g');
+      eg.setAttribute('class', 'dotted-edge');
       const path = document.createElementNS(NS, 'path');
       path.setAttribute('class', 'dotted-line');
       path.setAttribute('d', `M${p1.x},${y1} C${p1.x},${y1 + 70} ${p2.x},${y2 + 70} ${p2.x},${y2}`);
-      g.appendChild(path);
+      eg.appendChild(path);
       const lbl = document.createElementNS(NS, 'text');
       lbl.setAttribute('class', 'dotted-label');
       lbl.setAttribute('x', (p1.x + p2.x) / 2);
       lbl.setAttribute('y', Math.max(y1, y2) + 60);
-      lbl.textContent = '虚线汇报';
-      g.appendChild(lbl);
+      lbl.textContent = e.label || '虚线汇报';
+      eg.appendChild(lbl);
+      g.appendChild(eg);
     });
     svg.appendChild(g);
   },
@@ -245,13 +273,21 @@ const OrgChart = {
         if ((n.children || []).length) {
           const icon = document.createElementNS(NS, 'text');
           icon.setAttribute('class', 'collapse-icon'); icon.setAttribute('x', w - 18); icon.setAttribute('y', 18);
+          icon.setAttribute('style', 'cursor:pointer');
           icon.textContent = n.collapsed ? '▸' : '▾';
+          // 折叠热区独立拦截（#124）：卡片点击=跳岗位详情，图标点击=展开/折叠
+          icon.addEventListener('click', (e) => { e.stopPropagation(); this.toggle(n.number); });
           group.appendChild(icon);
         }
         group.addEventListener('mouseenter', (e) => this.showTip(e, n));
         group.addEventListener('mousemove', (e) => this.moveTip(e));
         group.addEventListener('mouseleave', () => this.hideTip());
-        group.addEventListener('click', () => this.toggle(n.number));
+        // 点击节点 → 跳转岗位详情（PRD F3.3，#124）；折叠改由 ▾ 图标承担
+        group.addEventListener('click', () => {
+          this.hideTip();
+          App.show('positions');
+          Positions.openDetail(n.id);
+        });
       } else {
         const t = document.createElementNS(NS, 'text');
         t.setAttribute('class', 'label'); t.setAttribute('x', w / 2); t.setAttribute('y', 21);
@@ -318,9 +354,15 @@ const OrgChart = {
     svg.addEventListener('wheel', (e) => {
       e.preventDefault();
       if (!this.vb) return;
+      // 以光标为中心缩放（PRD F3.3 / #124）：保持光标下的图坐标点在缩放前后位置不变
+      const rect = svg.getBoundingClientRect();
+      const mx = this.vb.x + ((e.clientX - rect.left) / (rect.width || 1)) * this.vb.w;
+      const my = this.vb.y + ((e.clientY - rect.top) / (rect.height || 1)) * this.vb.h;
       const factor = e.deltaY < 0 ? 1.2 : 1 / 1.2;
       const nw = Math.max(200, this.vb.w / factor), nh = Math.max(120, this.vb.h / factor);
-      this.vb = { x: this.vb.x + (this.vb.w - nw) / 2, y: this.vb.y + (this.vb.h - nh) / 2, w: nw, h: nh };
+      const kx = (mx - this.vb.x) / this.vb.w;
+      const ky = (my - this.vb.y) / this.vb.h;
+      this.vb = { x: mx - kx * nw, y: my - ky * nh, w: nw, h: nh };
       this.applyViewBox();
     }, { passive: false });
 
